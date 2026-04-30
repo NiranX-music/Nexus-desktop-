@@ -1,5 +1,5 @@
-appId: com.harshpandey.iris
-productName: IRIS AI
+appId: com.harshpandey.nexus
+productName: Nexus AI
 directories:
   buildResources: build
 files:
@@ -11,9 +11,10 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json,credentials.json}'
 asarUnpack:
   - resources/**
+  - node_modules/**/*.node
 
 win:
-  executableName: iris-ai
+  executableName: nexus-ai
   icon: build/icon.ico
   target:
     - target: nsis
@@ -58,4 +59,4 @@ npmRebuild: false
 publish:
   provider: github
   owner: 201Harsh
-  repo: IRIS-AI
+  repo: Nexus-AI

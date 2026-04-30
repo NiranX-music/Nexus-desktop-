@@ -21,28 +21,47 @@ import {
   RiTerminalWindowLine,
   RiRefreshLine,
   RiDownloadCloud2Line,
-  RiRocketLine
+  RiRocketLine,
+  RiExternalLinkLine
 } from 'react-icons/ri'
+import {
+  DEFAULT_NVIDIA_MODEL_DEFAULTS,
+  getModelsForCategory,
+  getNvidiaModelById,
+  getStoredNvidiaModelDefaults,
+  NVIDIA_API_KEY_STORAGE_KEY,
+  NVIDIA_BUILD_MODELS,
+  NVIDIA_DEFAULTS_STORAGE_KEY,
+  NVIDIA_MODEL_CATEGORIES,
+  NvidiaModelDefaults
+} from '@renderer/config/nvidia-models'
 
 interface SettingsProps {
   isSystemActive: boolean
 }
 
-type TabType = 'updates' | 'general' | 'keys' | 'security'
+type TabType = 'updates' | 'general' | 'keys' | 'models' | 'security'
 
 const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const [activeTab, setActiveTab] = useState<TabType>('updates')
 
   const [voice, setVoice] = useState<'MALE' | 'FEMALE'>(
-    (localStorage.getItem('iris_voice_profile') as 'MALE' | 'FEMALE') || 'MALE'
+    (localStorage.getItem('nexus_voice_profile') as 'MALE' | 'FEMALE') || 'MALE'
   )
   const [personality, setPersonality] = useState('')
-  const [userName, setUserName] = useState(localStorage.getItem('iris_user_name') || '')
+  const [userName, setUserName] = useState(localStorage.getItem('nexus_user_name') || '')
 
-  const [geminiKey, setGeminiKey] = useState(localStorage.getItem('iris_custom_api_key') || '')
-  const [groqKey, setGroqKey] = useState(localStorage.getItem('iris_groq_api_key') || '')
-  const [hfKey, setHfKey] = useState(localStorage.getItem('iris_hf_api_key') || '')
-  const [tailvyKey, setTailvyKey] = useState(localStorage.getItem('iris_tailvy_api_key') || '')
+  const [geminiKey, setGeminiKey] = useState(localStorage.getItem('nexus_custom_api_key') || '')
+  const [groqKey, setGroqKey] = useState(localStorage.getItem('nexus_groq_api_key') || '')
+  const [hfKey, setHfKey] = useState(localStorage.getItem('nexus_hf_api_key') || '')
+  const [tailvyKey, setTailvyKey] = useState(localStorage.getItem('nexus_tailvy_api_key') || '')
+  const [nvidiaKey, setNvidiaKey] = useState(localStorage.getItem(NVIDIA_API_KEY_STORAGE_KEY) || '')
+  const [nvidiaDefaults, setNvidiaDefaults] = useState<NvidiaModelDefaults>(
+    DEFAULT_NVIDIA_MODEL_DEFAULTS
+  )
+  const [nvidiaSyncStatus, setNvidiaSyncStatus] = useState(
+    `${NVIDIA_BUILD_MODELS.length} bundled Build models`
+  )
 
   const [isSecurityUnlocked, setIsSecurityUnlocked] = useState(false)
   const [authPin, setAuthPin] = useState('')
@@ -64,7 +83,16 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const [downloadProgress, setDownloadProgress] = useState(0)
 
   useEffect(() => {
+    setNvidiaDefaults(getStoredNvidiaModelDefaults())
+
     if (window.electron?.ipcRenderer) {
+      window.electron.ipcRenderer.invoke('secure-get-keys').then((keys) => {
+        if (keys?.nvidiaKey && !localStorage.getItem(NVIDIA_API_KEY_STORAGE_KEY)) {
+          setNvidiaKey(keys.nvidiaKey)
+          localStorage.setItem(NVIDIA_API_KEY_STORAGE_KEY, keys.nvidiaKey)
+        }
+      })
+
       window.electron.ipcRenderer.invoke('get-personality').then((res) => {
         if (res) setPersonality(res)
       })
@@ -109,7 +137,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const handleVoiceChange = (v: 'MALE' | 'FEMALE') => {
     if (isSystemActive) return
     setVoice(v)
-    localStorage.setItem('iris_voice_profile', v)
+    localStorage.setItem('nexus_voice_profile', v)
   }
 
   const handlePersonalityChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -129,24 +157,50 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   }
 
   const saveUserName = () => {
-    localStorage.setItem('iris_user_name', userName)
+    localStorage.setItem('nexus_user_name', userName)
     alert('User Designation Saved.')
   }
 
   const saveApiKeys = async () => {
-    localStorage.setItem('iris_custom_api_key', geminiKey)
-    localStorage.setItem('iris_groq_api_key', groqKey)
-    localStorage.setItem('iris_hf_api_key', hfKey)
-    localStorage.setItem('iris_tailvy_api_key', tailvyKey)
+    localStorage.setItem('nexus_custom_api_key', geminiKey)
+    localStorage.setItem('nexus_groq_api_key', groqKey)
+    localStorage.setItem('nexus_hf_api_key', hfKey)
+    localStorage.setItem('nexus_tailvy_api_key', tailvyKey)
+    localStorage.setItem(NVIDIA_API_KEY_STORAGE_KEY, nvidiaKey)
 
     if (window.electron?.ipcRenderer) {
       try {
-        await window.electron.ipcRenderer.invoke('secure-save-keys', { groqKey, geminiKey })
+        await window.electron.ipcRenderer.invoke('secure-save-keys', {
+          groqKey,
+          geminiKey,
+          nvidiaKey
+        })
       } catch (e) {}
     }
     alert(
       'All Neural Uplinks (API Keys) secured locally and in OS Vault. Restart AI modules to apply.'
     )
+  }
+
+  const saveNvidiaDefaults = () => {
+    localStorage.setItem(NVIDIA_DEFAULTS_STORAGE_KEY, JSON.stringify(nvidiaDefaults))
+    alert('NVIDIA Build model defaults saved.')
+  }
+
+  const syncNvidiaModels = async () => {
+    if (!window.electron?.ipcRenderer) return
+    setNvidiaSyncStatus('Syncing live NVIDIA /v1/models...')
+    const result = await window.electron.ipcRenderer.invoke('nvidia:list-models', {
+      apiKey: nvidiaKey
+    })
+
+    if (result?.success) {
+      setNvidiaSyncStatus(
+        `Live endpoint returned ${result.models.length} models. Bundled catalog remains categorized.`
+      )
+    } else {
+      setNvidiaSyncStatus(result?.error || 'Unable to sync NVIDIA models.')
+    }
   }
 
   const currentWordCount = personality
@@ -224,7 +278,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const titleClass = 'text-sm font-semibold text-white flex items-center gap-2'
 
   return (
-    <div className="flex-1 p-6 md:p-10 lg:p-16 flex flex-col items-center bg-black min-h-screen text-zinc-100 overflow-y-auto scrollbar-small">
+    <div className="min-h-full p-6 md:p-10 lg:p-16 flex flex-col items-center bg-black text-zinc-100">
       <motion.div
         className="w-full max-w-4xl flex flex-col gap-8"
         initial={{ opacity: 0 }}
@@ -267,6 +321,12 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
               <RiPlugLine size={16} /> API KEYS
             </button>
             <button
+              onClick={() => setActiveTab('models')}
+              className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-3 text-xs font-bold tracking-widest rounded-lg transition-all duration-300 ${activeTab === 'models' ? 'bg-white text-black shadow-md' : 'text-zinc-500 hover:text-white hover:bg-white/5'}`}
+            >
+              <RiBrainLine size={16} /> MODELS
+            </button>
+            <button
               onClick={() => setActiveTab('security')}
               className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-3 text-xs font-bold tracking-widest rounded-lg transition-all duration-300 ${activeTab === 'security' ? 'bg-white text-black shadow-md' : 'text-zinc-500 hover:text-white hover:bg-white/5'}`}
             >
@@ -275,7 +335,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
           </div>
         </div>
 
-        <div className="relative min-h-125 pb-12 mt-2">
+        <div className="relative pb-12 mt-2">
           <AnimatePresence mode="wait">
             {activeTab === 'updates' && (
               <motion.div
@@ -284,7 +344,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
-                className="grid grid-cols-1 md:grid-cols-2 gap-6 absolute w-full"
+                className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full"
               >
                 <div className={`${cardClass} md:col-span-1 border-emerald-500/20`}>
                   <div className="flex justify-between items-center border-b border-white/10 pb-4">
@@ -379,7 +439,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
-                className="grid grid-cols-1 md:grid-cols-2 gap-6 absolute w-full"
+                className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full"
               >
                 <div className={`${cardClass} md:col-span-2`}>
                   <div className="flex justify-between items-center">
@@ -403,7 +463,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                   <textarea
                     value={personality}
                     onChange={handlePersonalityChange}
-                    placeholder="Define who IRIS is. Example: 'You are a sassy, highly technical assistant...'"
+                    placeholder="Define who Nexus is. Example: 'You are a sassy, highly technical assistant...'"
                     className="bg-[#050505] border border-white/10 rounded-lg p-4 text-sm text-zinc-200 h-32 resize-none focus:border-white/30 outline-none transition-all scrollbar-small"
                   />
                 </div>
@@ -438,7 +498,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                     </span>
                     {isSystemActive && (
                       <span className="text-[10px] text-red-400 font-mono tracking-widest flex items-center gap-1 bg-red-500/10 px-2 py-1 rounded border border-red-500/20">
-                        <RiLock2Line /> LOCKED AS IRIS IS CONNECTED
+                        <RiLock2Line /> LOCKED AS Nexus IS CONNECTED
                       </span>
                     )}
                   </div>
@@ -478,7 +538,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
-                className="grid grid-cols-1 gap-6 absolute w-full"
+                className="grid grid-cols-1 gap-6 w-full"
               >
                 <div className={`${cardClass} gap-6`}>
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-4">
@@ -504,6 +564,21 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                           value={geminiKey}
                           onChange={(e) => setGeminiKey(e.target.value)}
                           placeholder="AIzaSy_..."
+                          className="bg-transparent border-none outline-none text-sm font-mono text-zinc-100 w-full placeholder:text-zinc-700"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                      <label className="text-[10px] text-zinc-400 font-mono tracking-widest uppercase flex items-center gap-2">
+                        <RiBrainLine size={14} /> NVIDIA Build NIM
+                      </label>
+                      <div className={inputContainerClass}>
+                        <input
+                          type="password"
+                          value={nvidiaKey}
+                          onChange={(e) => setNvidiaKey(e.target.value)}
+                          placeholder="nvapi_... or $NVIDIA_API_KEY"
                           className="bg-transparent border-none outline-none text-sm font-mono text-zinc-100 w-full placeholder:text-zinc-700"
                         />
                       </div>
@@ -555,11 +630,80 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                     </div>
                   </div>
 
+                  <div className="bg-[#050505] border border-emerald-500/15 p-5 rounded-xl mt-2 flex flex-col gap-4">
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-white/5 pb-4">
+                      <div>
+                        <span className={titleClass}>
+                          <RiBrainLine className="text-emerald-400" size={18} /> NVIDIA API Key
+                          Guide
+                        </span>
+                        <p className="text-[10px] text-zinc-500 font-mono mt-1 tracking-widest uppercase">
+                          For the AI Chat tab and NVIDIA Build model routing.
+                        </p>
+                      </div>
+                      <a
+                        href="https://build.nvidia.com/settings/api-keys"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-[10px] font-bold tracking-widest text-emerald-300 transition-all hover:bg-emerald-500/20"
+                      >
+                        OPEN NVIDIA KEYS <RiExternalLinkLine size={14} />
+                      </a>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                      {[
+                        {
+                          step: '01',
+                          title: 'Sign In',
+                          text: 'Open build.nvidia.com and sign in to NVIDIA Developer.'
+                        },
+                        {
+                          step: '02',
+                          title: 'Create Key',
+                          text: 'Go to API Keys and generate a new NVIDIA Build key.'
+                        },
+                        {
+                          step: '03',
+                          title: 'Paste Here',
+                          text: 'Paste the key into NVIDIA Build NIM above.'
+                        },
+                        {
+                          step: '04',
+                          title: 'Save & Chat',
+                          text: 'Click Save All Keys, then open the AI Chat tab.'
+                        }
+                      ].map((item) => (
+                        <div
+                          key={item.step}
+                          className="rounded-xl border border-white/5 bg-black/40 p-4"
+                        >
+                          <span className="text-[10px] font-mono text-emerald-400">
+                            {item.step}
+                          </span>
+                          <h4 className="mt-2 text-xs font-black tracking-widest text-white uppercase">
+                            {item.title}
+                          </h4>
+                          <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">
+                            {item.text}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="rounded-xl border border-white/5 bg-black/50 p-4 text-[10px] font-mono text-zinc-400">
+                      Base URL used by Nexus:{' '}
+                      <span className="text-emerald-300">
+                        https://integrate.api.nvidia.com/v1
+                      </span>
+                    </div>
+                  </div>
+
                   <div className="bg-[#050505] border border-white/5 p-4 rounded-xl mt-2 flex items-start gap-3">
                     <RiShieldKeyholeLine className="text-zinc-500 shrink-0 mt-0.5" size={16} />
                     <p className="text-[10px] text-zinc-400 font-mono leading-relaxed">
                       [SECURITY NOTICE]: All API keys are encrypted and stored strictly in your
-                      local OS. IRIS does not transmit these keys to any centralized server. You
+                      local OS. Nexus does not transmit these keys to any centralized server. You
                       maintain full ownership and billing control over your provider endpoints.
                     </p>
                   </div>
@@ -567,7 +711,116 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
               </motion.div>
             )}
 
-            {/* --- TAB 4: SECURITY --- */}
+            {/* --- TAB 4: NVIDIA MODELS --- */}
+            {activeTab === 'models' && (
+              <motion.div
+                key="models"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.2 }}
+                className="grid grid-cols-1 gap-6 w-full"
+              >
+                <div className={`${cardClass} gap-6`}>
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-4">
+                    <div>
+                      <span className={titleClass}>
+                        <RiBrainLine className="text-emerald-400" size={18} /> NVIDIA Build Model
+                        Defaults
+                      </span>
+                      <p className="text-[10px] text-zinc-500 font-mono mt-2 tracking-widest uppercase">
+                        Chat uses OpenAI-compatible NVIDIA NIM. Voice assistant reads these defaults
+                        at startup.
+                      </p>
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-3">
+                      <button
+                        onClick={syncNvidiaModels}
+                        className="bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 px-5 py-2.5 rounded-lg text-xs font-bold tracking-widest hover:bg-emerald-500/20 transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <RiRefreshLine size={16} /> SYNC LIVE MODELS
+                      </button>
+                      <button
+                        onClick={saveNvidiaDefaults}
+                        className="bg-white text-black px-5 py-2.5 rounded-lg text-xs font-bold tracking-widest hover:bg-zinc-200 transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <RiSave3Line size={16} /> SAVE DEFAULTS
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-white/5 bg-[#050505] p-4 text-[10px] font-mono text-zinc-400 leading-relaxed">
+                    {nvidiaSyncStatus}
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                    {NVIDIA_MODEL_CATEGORIES.map((category) => {
+                      const options = getModelsForCategory(category.id)
+                      const selected = getNvidiaModelById(nvidiaDefaults[category.id])
+
+                      return (
+                        <div
+                          key={category.id}
+                          className="bg-[#050505] border border-white/10 rounded-2xl p-5 flex flex-col gap-3"
+                        >
+                          <div className="flex items-start justify-between gap-4">
+                            <div>
+                              <label className="text-[10px] text-white font-bold font-mono tracking-widest uppercase">
+                                {category.label}
+                              </label>
+                              <p className="text-[10px] text-zinc-500 mt-1 leading-relaxed">
+                                {category.hint}
+                              </p>
+                            </div>
+                            <span className="text-[9px] text-emerald-400/70 border border-emerald-500/20 rounded-full px-2 py-1 font-mono">
+                              {options.length}
+                            </span>
+                          </div>
+
+                          <select
+                            value={nvidiaDefaults[category.id]}
+                            onChange={(event) =>
+                              setNvidiaDefaults((current) => ({
+                                ...current,
+                                [category.id]: event.target.value
+                              }))
+                            }
+                            className="w-full bg-black border border-white/10 rounded-lg px-3 py-3 text-xs font-mono text-zinc-100 outline-none focus:border-emerald-500/50"
+                          >
+                            {options.map((model) => (
+                              <option key={model.id} value={model.id}>
+                                {model.id}
+                              </option>
+                            ))}
+                          </select>
+
+                          <div className="min-h-20 rounded-xl border border-white/5 bg-black/40 p-3">
+                            <p className="text-[11px] text-zinc-300 font-semibold">
+                              {selected?.provider || 'NVIDIA'} / {selected?.name || 'model'}
+                            </p>
+                            <p className="text-[10px] text-zinc-500 mt-1 leading-relaxed">
+                              {selected?.description || 'Model selected from live NVIDIA endpoint.'}
+                            </p>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  <div className="bg-[#050505] border border-white/5 p-4 rounded-xl flex items-start gap-3">
+                    <RiShieldKeyholeLine className="text-zinc-500 shrink-0 mt-0.5" size={16} />
+                    <p className="text-[10px] text-zinc-400 font-mono leading-relaxed">
+                      The bundled catalog includes current NVIDIA Build LLM, coding, reasoning,
+                      multimodal, speech, translation, image, and retrieval models. The live sync
+                      button queries NVIDIA's /v1/models endpoint with your key, because the Build
+                      catalog changes over time.
+                    </p>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {/* --- TAB 5: SECURITY --- */}
             {activeTab === 'security' && (
               <motion.div
                 key="security"
@@ -575,7 +828,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
-                className="w-full rounded-3xl overflow-hidden shadow-2xl border border-white/5 absolute"
+                className="w-full rounded-3xl overflow-hidden shadow-2xl border border-white/5"
               >
                 <AnimatePresence>
                   {!isSecurityUnlocked && (

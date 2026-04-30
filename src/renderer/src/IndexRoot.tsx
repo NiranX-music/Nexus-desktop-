@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import MiniOverlay from './components/MiniOverlay'
-import { irisService } from './services/Iris-voice-ai'
+import { nexusService } from './services/nexus-voice-ai'
 import { getScreenSourceId } from './hooks/CaptureDesktop'
-import IRIS from './UI/IRIS'
+import Nexus from './UI/nexus'
 import TerminalOverlay from './components/TerminalOverlay'
 import LeafletMapWidget from './Widgets/MapView'
 import ImageWidget from './Widgets/ImageWidget'
@@ -41,7 +41,7 @@ const IndexRoot = () => {
 
   useEffect(() => {
     const watchdog = setInterval(() => {
-      if (isSystemActive && !irisService.isConnected) {
+      if (isSystemActive && !nexusService.isConnected) {
         setIsSystemActive(false)
         setIsMicMuted(true)
         stopVision()
@@ -53,10 +53,10 @@ const IndexRoot = () => {
   const toggleSystem = async () => {
     if (!isSystemActive) {
       try {
-        await irisService.connect()
+        await nexusService.connect()
         setIsSystemActive(true)
         setIsMicMuted(false)
-        irisService.setMute(false)
+        nexusService.setMute(false)
       } catch (err: any) {
         if (err.message === 'NO_API_KEY') {
           alert(
@@ -68,10 +68,10 @@ const IndexRoot = () => {
         setIsSystemActive(false)
       }
     } else {
-      irisService.disconnect()
+      nexusService.disconnect()
       setIsSystemActive(false)
       setIsMicMuted(true)
-      irisService.setMute(true)
+      nexusService.setMute(true)
       stopVision()
     }
   }
@@ -79,7 +79,7 @@ const IndexRoot = () => {
   const toggleMic = () => {
     const s = !isMicMuted
     setIsMicMuted(s)
-    irisService.setMute(s)
+    nexusService.setMute(s)
   }
 
   const startVision = async (mode: 'camera' | 'screen') => {
@@ -153,7 +153,7 @@ const IndexRoot = () => {
 
     aiIntervalRef.current = setInterval(() => {
       const vid = processingVideoRef.current
-      if (vid && vid.readyState === 4 && irisService.socket?.readyState === WebSocket.OPEN) {
+      if (vid && vid.readyState === 4 && nexusService.socket?.readyState === WebSocket.OPEN) {
         const canvas = document.createElement('canvas')
         canvas.width = 800
         canvas.height = 450
@@ -161,7 +161,7 @@ const IndexRoot = () => {
         if (ctx) {
           ctx.drawImage(vid, 0, 0, canvas.width, canvas.height)
           const base64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1]
-          irisService.sendVideoFrame(base64)
+          nexusService.sendVideoFrame(base64)
         }
       }
     }, 2000)
@@ -185,10 +185,10 @@ const IndexRoot = () => {
   }
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-black overflow-hidden relative border border-emerald-500/20 rounded-xl">
+    <div className="nexus-desktop-frame flex flex-col h-screen w-screen overflow-hidden relative border border-emerald-400/25 rounded-xl">
       <TitleBar />
       <div className="flex-1 relative">
-        <IRIS
+        <Nexus
           isSystemActive={isSystemActive}
           toggleSystem={toggleSystem}
           isMicMuted={isMicMuted}

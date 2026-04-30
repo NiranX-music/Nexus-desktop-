@@ -26,7 +26,9 @@ const TitleBar = () => {
   const close = () => window.electron.ipcRenderer.send('window-close')
 
   return (
-    <div className="w-full h-10 flex items-center justify-between px-4 bg-zinc-900 border-b border-zinc-800 drag-region select-none z-1000 relative">
+    <div className="w-full h-10 flex items-center justify-between px-4 bg-[#050807]/95 border-b border-emerald-400/15 drag-region select-none z-1000 relative overflow-hidden shadow-[0_14px_40px_rgba(0,0,0,0.45)]">
+      <div className="absolute inset-x-0 top-0 h-px bg-linear-to-r from-transparent via-cyan-300/40 to-transparent" />
+      <div className="absolute left-8 top-1/2 h-8 w-34 -translate-y-1/2 rounded-full bg-emerald-400/10 blur-2xl" />
       {isMac && (
         <div className="flex items-center gap-2 no-drag z-50">
           <button
@@ -53,9 +55,9 @@ const TitleBar = () => {
       )}
 
       <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-2 opacity-60 pointer-events-none">
-        <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_10px_#10b981]" />
-        <div className="text-[11px] font-bold text-zinc-300 tracking-[0.3em]">
-          IRIS OS // {isMac ? 'MAC' : 'SYSTEM'}
+        <div className="w-2 h-2 rounded-full bg-cyan-300 animate-pulse shadow-[0_0_14px_#67e8f9]" />
+        <div className="text-[11px] font-black text-zinc-200 tracking-[0.34em]">
+          Nexus OS // COMMAND DECK // {isMac ? 'MAC' : 'SYSTEM'}
         </div>
       </div>
 

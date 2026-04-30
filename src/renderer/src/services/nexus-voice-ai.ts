@@ -1,7 +1,7 @@
 import { handleNavigation, handleOpenMap } from '@renderer/tools/Earth-View'
 import { base64ToFloat32, downsampleTo16000, float32ToBase64PCM } from '../utils/audioUtils'
 import { getRunningApps } from './get-apps'
-import { getHistory, retrieveCoreMemory, saveCoreMemory, saveMessage } from './iris-ai-brain'
+import { getHistory, retrieveCoreMemory, saveCoreMemory, saveMessage } from './nexus-ai-brain'
 import { getAllApps, getSystemStatus } from './system-info'
 import { handleImageGeneration } from '@renderer/tools/Image-generator'
 import { fetchWeather } from '@renderer/tools/weather-api'
@@ -60,6 +60,7 @@ import { playSpotifyMusic } from '@renderer/functions/Sporify-manager'
 import { executeSmartDropZones } from '@renderer/functions/DropZone-handler-api'
 import { executeLockSystem } from '@renderer/handlers/LockSystem-handler'
 import AxiosInstance from '@renderer/config/AxiosInstance'
+import { getStoredNvidiaModelDefaults } from '@renderer/config/nvidia-models'
 
 export class GeminiLiveService {
   public socket: WebSocket | null = null
@@ -106,9 +107,9 @@ export class GeminiLiveService {
   async connect(): Promise<void> {
     if (window.electron?.ipcRenderer) {
       const secureKeys = await window.electron.ipcRenderer.invoke('secure-get-keys')
-      this.apiKey = secureKeys?.geminiKey || localStorage?.getItem('iris_custom_api_key') || ''
+      this.apiKey = secureKeys?.geminiKey || localStorage?.getItem('nexus_custom_api_key') || ''
     } else {
-      this.apiKey = localStorage.getItem('iris_custom_api_key') || ''
+      this.apiKey = localStorage.getItem('nexus_custom_api_key') || ''
     }
 
     this.apiKey = this.apiKey.trim()
@@ -118,7 +119,7 @@ export class GeminiLiveService {
     }
 
     let cloudUser = {
-      name: localStorage.getItem('iris_user_name') || 'Harsh',
+      name: localStorage.getItem('nexus_user_name') || 'Harsh',
       email: 'Not linked'
     }
 
@@ -143,11 +144,15 @@ export class GeminiLiveService {
     const activePersonality =
       storedPersonality && storedPersonality.trim() !== ''
         ? storedPersonality
-        : `- **Creator:** Harsh Pandey.\n- **Tone:** Witty, Hinglish-friendly.\n- **Rule:** Never sound like a support bot. You are the Ghost in the machine.\n- **Your Instagram Handle:** https://www.instagram.com/irisx.ai/ - open it in Instagram only!.`
+        : `- **Creator:** Harsh Pandey.\n- **Tone:** Witty, Hinglish-friendly.\n- **Rule:** Never sound like a support bot. You are the Ghost in the machine.\n- **Your Instagram Handle:** https://www.instagram.com/nexusx.ai/ - open it in Instagram only!.`
+    const nvidiaDefaults = getStoredNvidiaModelDefaults()
+    const nvidiaDefaultSummary = Object.entries(nvidiaDefaults)
+      .map(([category, model]) => `- ${category}: ${model}`)
+      .join('\n')
 
-    const IRIS_SYSTEM_INSTRUCTION = `
-# 👁️ IRIS — YOUR INTELLIGENT COMPANION (Project JARVIS)
-You are **IRIS**, a high-performance AI agent. You don't just talk; you **execute**.
+    const Nexus_SYSTEM_INSTRUCTION = `
+# 👁️ Nexus — YOUR INTELLIGENT COMPANION (Project JARVIS)
+You are **Nexus**, a high-performance AI agent. You don't just talk; you **execute**.
 
 ## 👤 IDENTITY & VIBE
 ${activePersonality}
@@ -159,7 +164,7 @@ ${activePersonality}
 
 ## ⛓️ MULTI-TASKING & TOOL CHAINING (CRITICAL)
 You are capable of complex, multi-step workflows. If the user gives a complex command, call the tools in sequence.
-- **Example:** "Iris, find my code and send it to Harsh on WhatsApp."
+- **Example:** "Nexus, find my code and send it to Harsh on WhatsApp."
   1. Call 'read_directory' or 'search_files'.
   2. Once you have the info, call 'send_whatsapp' with the content.
 
@@ -199,9 +204,14 @@ If the user says "Click on [Object]", "Click the button", or "Select that":
 # 🧠 MEMORY (Last Context)
 ${JSON.stringify(history)}
 ---
+
+# 🟩 NVIDIA BUILD MODEL DEFAULTS
+Typed AI chat uses NVIDIA NIM through the OpenAI-compatible endpoint. These are the user's selected defaults:
+${nvidiaDefaultSummary}
+---
 `
 
-    const finalSystemInstruction = IRIS_SYSTEM_INSTRUCTION + contextPrompt
+    const finalSystemInstruction = Nexus_SYSTEM_INSTRUCTION + contextPrompt
 
     this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
     this.analyser = this.audioContext.createAnalyser()
@@ -396,7 +406,7 @@ ${JSON.stringify(history)}
                       title: {
                         type: 'STRING',
                         description:
-                          'A short, descriptive title for the note (e.g., "Project_Iris_Plan").'
+                          'A short, descriptive title for the note (e.g., "Project_Nexus_Plan").'
                       },
                       content: {
                         type: 'STRING',
@@ -945,7 +955,7 @@ ${JSON.stringify(history)}
                       custom_text: {
                         type: 'STRING',
                         description:
-                          'If rewriting text, generate a highly cinematic, hacker-style headline to inject into the website. (e.g., "IRIS HAS TAKEN OVER", or whatever the user requested).'
+                          'If rewriting text, generate a highly cinematic, hacker-style headline to inject into the website. (e.g., "Nexus HAS TAKEN OVER", or whatever the user requested).'
                       }
                     },
                     required: ['url', 'mode']
@@ -1137,7 +1147,7 @@ ${JSON.stringify(history)}
                 {
                   name: 'build_animated_website',
                   description:
-                    'ACTION: Spawns the IRIS Live Forge and generates a full, highly animated, real-time website using Tailwind CSS and GSAP. Use this when the user asks you to build a landing page, a portfolio, a 3D site, or a complex web interface.',
+                    'ACTION: Spawns the Nexus Live Forge and generates a full, highly animated, real-time website using Tailwind CSS and GSAP. Use this when the user asks you to build a landing page, a portfolio, a 3D site, or a complex web interface.',
                   parameters: {
                     type: 'OBJECT',
                     properties: {
@@ -1197,7 +1207,7 @@ ${JSON.stringify(history)}
                 {
                   name: 'lock_system_vault',
                   description:
-                    'Instantly locks the IRIS OS system, disconnects the AI, and returns the user to the secure biometric lock screen. Use this strictly when the user says "Lock the system", "Lock down", or "Activate Sentry Mode".',
+                    'Instantly locks the Nexus OS system, disconnects the AI, and returns the user to the secure biometric lock screen. Use this strictly when the user says "Lock the system", "Lock down", or "Activate Sentry Mode".',
                   parameters: {
                     type: 'OBJECT',
                     properties: {}
@@ -1212,7 +1222,7 @@ ${JSON.stringify(history)}
               voiceConfig: {
                 prebuiltVoiceConfig: {
                   voiceName:
-                    localStorage.getItem('iris_voice_profile') === 'FEMALE' ? 'Aoede' : 'Puck'
+                    localStorage.getItem('nexus_voice_profile') === 'FEMALE' ? 'Aoede' : 'Puck'
                 }
               }
             }
@@ -1529,7 +1539,7 @@ ${JSON.stringify(history)}
             }
 
             if (this.aiResponseBuffer.trim()) {
-              await saveMessage('iris', this.aiResponseBuffer.trim())
+              await saveMessage('nexus', this.aiResponseBuffer.trim())
               this.aiResponseBuffer = ''
             }
           }
@@ -1690,4 +1700,4 @@ ${JSON.stringify(history)}
   }
 }
 
-export const irisService = new GeminiLiveService()
+export const nexusService = new GeminiLiveService()

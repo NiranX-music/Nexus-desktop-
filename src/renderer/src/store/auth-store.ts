@@ -27,6 +27,8 @@ export const useAuthStore = create<AuthState>()(
 
     logout: () =>
       set((state) => {
+        localStorage.removeItem('nexus_cloud_token')
+        localStorage.removeItem('nexus_email_session')
         state.accessToken = null
         state.isAuthInitialized = true
       })

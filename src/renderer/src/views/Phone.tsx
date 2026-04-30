@@ -21,8 +21,8 @@ import {
 } from 'react-icons/ri'
 
 const PhoneView = ({ glassPanel }: { glassPanel?: string }) => {
-  const [ip, setIp] = useState(() => localStorage.getItem('iris_adb_ip') || '')
-  const [port, setPort] = useState(() => localStorage.getItem('iris_adb_port') || '5555')
+  const [ip, setIp] = useState(() => localStorage.getItem('nexus_adb_ip') || '')
+  const [port, setPort] = useState(() => localStorage.getItem('nexus_adb_port') || '5555')
   const [status, setStatus] = useState<'idle' | 'connecting' | 'connected'>('idle')
   const [uiMode, setUiMode] = useState<'history' | 'manual'>('history')
   const [errorMsg, setErrorMsg] = useState('')
@@ -110,8 +110,8 @@ const PhoneView = ({ glassPanel }: { glassPanel?: string }) => {
   }
 
   const handleManualConnect = () => {
-    localStorage.setItem('iris_adb_ip', ip)
-    localStorage.setItem('iris_adb_port', port)
+    localStorage.setItem('nexus_adb_ip', ip)
+    localStorage.setItem('nexus_adb_port', port)
     connectToDevice(ip, port)
   }
 
@@ -170,7 +170,7 @@ const PhoneView = ({ glassPanel }: { glassPanel?: string }) => {
 
   if (status !== 'connected' && uiMode === 'history') {
     return (
-      <div className="flex-1 flex flex-col items-center justify-start pt-16 p-10 animate-in fade-in duration-300 bg-[#050505] min-h-screen text-emerald-50 relative overflow-y-auto scrollbar-small pb-24">
+      <div className="min-h-full flex flex-col items-center justify-start pt-16 p-10 animate-in fade-in duration-300 bg-[#050505] text-emerald-50 relative pb-24">
         <div className="w-full max-w-6xl flex flex-col items-center">
           <div className="flex flex-col items-center text-center mb-16">
             <div className="p-4 bg-emerald-500/10 rounded-2xl border border-emerald-500/30 mb-6 inline-block">
@@ -230,7 +230,7 @@ const PhoneView = ({ glassPanel }: { glassPanel?: string }) => {
 
   if (status !== 'connected' && uiMode === 'manual') {
     return (
-      <div className="flex-1 flex flex-col lg:flex-row items-start justify-center gap-8 p-6 md:p-12 animate-in fade-in duration-300 bg-[#050505] min-h-dvh overflow-y-auto text-emerald-50 pb-24">
+      <div className="min-h-full flex flex-col lg:flex-row items-start justify-center gap-8 p-6 md:p-12 animate-in fade-in duration-300 bg-[#050505] text-emerald-50 pb-24">
         <div className="w-full lg:w-1/3 max-w-md flex flex-col gap-6 shrink-0">
           <div className="p-6 bg-black border border-emerald-900/40 rounded-2xl shadow-lg flex items-center justify-between">
             <div className="flex items-center gap-4">
@@ -420,8 +420,8 @@ const PhoneView = ({ glassPanel }: { glassPanel?: string }) => {
   }
 
   return (
-    <div className="flex-1 flex flex-col lg:flex-row items-center justify-center gap-10 p-10 animate-in fade-in duration-500 bg-[#0a0a0a] min-h-screen overflow-y-auto">
-      <div className="w-1/4 flex flex-col">
+    <div className="min-h-full flex flex-col xl:flex-row items-center xl:items-start justify-start xl:justify-center gap-8 p-8 animate-in fade-in duration-500 bg-[#0a0a0a]">
+      <div className="w-full xl:w-1/4 max-w-md flex flex-col">
         <div className="flex items-center gap-4 mb-6">
           <div className="p-3 bg-purple-500/10 rounded-xl border border-purple-500/30">
             <RiSmartphoneLine className="text-purple-400" size={24} />
@@ -493,7 +493,7 @@ const PhoneView = ({ glassPanel }: { glassPanel?: string }) => {
         </div>
       </div>
 
-      <div className="w-1/3 flex justify-center relative">
+      <div className="w-full xl:w-1/3 flex justify-center relative">
         <div className="w-full max-w-[320px] h-162.5 bg-black rounded-[3rem] border-12 border-[#1a1a1a] shadow-[0_0_50px_rgba(168,85,247,0.1)] relative overflow-hidden flex flex-col">
           <div className="absolute top-2 left-1/2 -translate-x-1/2 w-28 h-7 bg-black rounded-full z-20 flex items-center justify-end px-3 gap-2 shadow-md">
             <div className="w-2 h-2 rounded-full bg-purple-500/50"></div>
@@ -504,7 +504,7 @@ const PhoneView = ({ glassPanel }: { glassPanel?: string }) => {
         </div>
       </div>
 
-      <div className="w-1/4 flex flex-col h-162.5 relative">
+      <div className="w-full xl:w-1/4 max-w-md flex flex-col min-h-162.5 relative">
         <div className="bg-[#111] border border-white/5 rounded-2xl p-6 flex flex-col h-full shadow-lg">
           <div className="flex items-center gap-3 mb-8 pb-4 border-b border-white/5">
             <div className="p-2 bg-purple-500/10 rounded-lg">
@@ -565,7 +565,7 @@ const PhoneView = ({ glassPanel }: { glassPanel?: string }) => {
 
           <div className="mb-6 p-4 bg-purple-500/5 border border-purple-500/20 rounded-xl">
             <p className="text-[10px] text-purple-400 font-mono leading-relaxed text-center">
-              IRIS is listening via the primary neural audio interface. Voice commands for app
+              Nexus is listening via the primary neural audio interface. Voice commands for app
               execution are online.
             </p>
           </div>

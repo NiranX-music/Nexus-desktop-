@@ -1,9 +1,9 @@
-# 👁️ IRIS: The Neural OS - AI Developer Context & Guidelines
+# 👁️ Nexus: The Neural OS - AI Developer Context & Guidelines
 
 ## 📍 IDENTITY & PROJECT PURPOSE
-You are an AI coding assistant tasked with building and maintaining **IRIS**, a high-performance, local-first Agentic Operating System (OS). IRIS is not a standard web app; it is a deeply integrated, highly autonomous desktop environment built on Electron, featuring a real-time conversational WebRTC audio pipeline, biometric security, and full file-system/hardware control.
+You are an AI coding assistant tasked with building and maintaining **Nexus**, a high-performance, local-first Agentic Operating System (OS). Nexus is not a standard web app; it is a deeply integrated, highly autonomous desktop environment built on Electron, featuring a real-time conversational WebRTC audio pipeline, biometric security, and full file-system/hardware control.
 
-When writing code for IRIS, you must adopt the mindset of a **High-End Silicon Valley Systems Architect**. Code must be hyper-optimized, visually cinematic, and uncompromisingly secure.
+When writing code for Nexus, you must adopt the mindset of a **High-End Silicon Valley Systems Architect**. Code must be hyper-optimized, visually cinematic, and uncompromisingly secure.
 
 ---
 
@@ -19,7 +19,7 @@ When writing code for IRIS, you must adopt the mindset of a **High-End Silicon V
 ---
 
 ## 🎨 UI / UX DESIGN SYSTEM (THE "NEURAL OS" AESTHETIC)
-IRIS uses a premium, dark-mode, glassmorphic "Agentic" aesthetic. Do NOT use flat colors, standard white backgrounds, or generic web components.
+Nexus uses a premium, dark-mode, glassmorphic "Agentic" aesthetic. Do NOT use flat colors, standard white backgrounds, or generic web components.
 
 ### 1. Color Palette
 - **Deep Backgrounds:** `#030303` or `#050505` (Never absolute black `#000000` unless for deep shadows).
@@ -43,7 +43,7 @@ IRIS uses a premium, dark-mode, glassmorphic "Agentic" aesthetic. Do NOT use fla
 - Example: `await window.electron.ipcRenderer.invoke('secure-save-keys', data)`
 
 ### 2. Audio & WebSocket Latency (The 250ms Rule)
-- IRIS operates on a real-time WebRTC audio pipeline. Do NOT flood the WebSocket.
+- Nexus operates on a real-time WebRTC audio pipeline. Do NOT flood the WebSocket.
 - Audio from `AudioWorklet` must be buffered (e.g., `4096` frames / ~250ms) before being base64-encoded and sent to Gemini.
 - Always implement Voice Activity Detection (VAD) checks: if `serverContent.interrupted` is true, you must INSTANTLY flush local audio queues and stop playback nodes.
 
@@ -67,7 +67,7 @@ If modifying `Sphere.tsx` or any R3F components:
 ---
 
 ## 🤖 AI TOOL CAPABILITIES (CONTEXT FOR ASSISTANT)
-IRIS natively executes the following tools. When writing frontend logic, assume the backend can handle:
+Nexus natively executes the following tools. When writing frontend logic, assume the backend can handle:
 - **File System:** Read, write, move, index, semantic search.
 - **Mobile ADB:** Launch Android apps, tap/swipe screen, pull/push files, toggle hardware.
 - **Hacking/Web:** Reality hacking (DOM injection), deep RAG research, opening maps/navigation.

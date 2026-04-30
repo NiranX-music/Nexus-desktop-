@@ -21,7 +21,7 @@ import { HiComputerDesktop } from 'react-icons/hi2'
 import * as faceapi from 'face-api.js'
 import { VisionMode } from '@renderer/IndexRoot'
 
-interface IrisProps {
+interface NexusProps {
   isSystemActive: boolean
   toggleSystem: () => void
   isMicMuted: boolean
@@ -34,7 +34,7 @@ interface IrisProps {
 }
 
 interface DashboardViewProps {
-  props: IrisProps
+  props: NexusProps
   stats: any
   chatHistory: any[]
   onVisionClick: () => void
@@ -283,7 +283,13 @@ export default function DashboardView({
   ]
 
   return (
-    <div className="flex-1 p-4 bg-white/2 grid grid-cols-12 gap-4 h-full overflow-hidden relative animate-in fade-in zoom-in duration-300 w-full">
+    <div className="flex-1 p-4 bg-[radial-gradient(circle_at_50%_20%,rgba(16,185,129,0.10),transparent_32rem)] grid grid-cols-12 gap-4 h-full overflow-hidden relative animate-in fade-in zoom-in duration-300 w-full">
+      <div className="pointer-events-none absolute inset-x-8 top-4 z-0 flex items-center justify-between rounded-full border border-white/5 bg-white/[0.025] px-5 py-2 text-[9px] font-black tracking-[0.28em] text-zinc-500">
+        <span>NEXUS KERNEL STREAM</span>
+        <span className={isSystemActive ? 'text-emerald-300' : 'text-orange-200/70'}>
+          {isSystemActive ? 'AUTONOMY ACTIVE' : 'STANDBY MODE'}
+        </span>
+      </div>
       <div className="hidden lg:flex col-span-3 flex-col gap-4 h-full z-40">
         <div
           className={`${glassPanel} h-70 shrink-0 flex flex-col p-1 overflow-hidden relative group`}
@@ -470,6 +476,8 @@ export default function DashboardView({
       </div>
 
       <div className="col-span-12 lg:col-span-6 relative flex flex-col items-center justify-center">
+        <div className="pointer-events-none absolute inset-10 rounded-full border border-emerald-300/10 bg-[conic-gradient(from_210deg,transparent,rgba(16,185,129,0.12),transparent,rgba(249,115,22,0.10),transparent)] blur-[0.2px]" />
+        <div className="pointer-events-none absolute h-[62vh] w-[62vh] rounded-full border border-cyan-300/10 shadow-[0_0_120px_rgba(16,185,129,0.10)]" />
         <div
           className={`lg:hidden absolute top-4 right-4 w-32 h-24 ${glassPanel} z-50 overflow-hidden ${isVideoOn ? 'block' : 'hidden'}`}
         >

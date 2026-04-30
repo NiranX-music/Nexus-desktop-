@@ -52,15 +52,36 @@ const ProtectedRoute = ({ children }: { children: JSX.Element }) => {
   useEffect(() => {
     const verifyAccess = async () => {
       try {
-        if (!accessToken && !localStorage.getItem('iris_cloud_token')) {
+        const emailSession = localStorage.getItem('nexus_email_session')
+        const cloudToken = localStorage.getItem('nexus_cloud_token')
+
+        if (emailSession && electronAPI) {
+          const session = await electronAPI.invoke('email-auth:verify-session', emailSession)
+          if (!session?.ok) {
+            localStorage.removeItem('nexus_email_session')
+            throw new Error('Local email session expired')
+          }
+
+          if (accessToken !== emailSession) {
+            useAuthStore.getState().setAccessToken(emailSession)
+          }
+
+          if (!isSessionUnlocked && location.pathname !== '/lock') {
+            navigate('/lock', { replace: true })
+            return
+          }
+
+          setStatus('authorized')
+          return
+        }
+
+        if (!accessToken && !cloudToken) {
           navigate('/login', { replace: true })
           return
         }
 
         const userRes = await AxiosInstance.get('/users/me')
         if (userRes.status !== 200) throw new Error('Cloud Auth Failed')
-          
-
 
         if (!isSessionUnlocked && location.pathname !== '/lock') {
           navigate('/lock', { replace: true })
@@ -90,7 +111,9 @@ const ProtectedRoute = ({ children }: { children: JSX.Element }) => {
 
 const PublicRoute = ({ children }: { children: JSX.Element }) => {
   const accessToken =
-    useAuthStore((state) => state.accessToken) || localStorage.getItem('iris_cloud_token')
+    useAuthStore((state) => state.accessToken) ||
+    localStorage.getItem('nexus_cloud_token') ||
+    localStorage.getItem('nexus_email_session')
   return accessToken ? <Navigate to="/" replace /> : children
 }
 
@@ -101,13 +124,13 @@ const AppRouter = () => {
     if (electronAPI) {
       electronAPI.on('oauth-callback', (_event: any, url: string) => {
         try {
-          const urlObj = new URL(url.replace('iris://', 'http://localhost/'))
+          const urlObj = new URL(url.replace('nexus://', 'http://localhost/'))
 
           const refreshToken = urlObj.searchParams.get('refreshToken')
           const accessToken = urlObj.searchParams.get('accessToken')
 
           if (refreshToken && accessToken) {
-            localStorage.setItem('iris_cloud_token', refreshToken)
+            localStorage.setItem('nexus_cloud_token', refreshToken)
             useAuthStore.getState().setAccessToken(accessToken)
 
             navigate('/')

@@ -16,7 +16,7 @@ import fs from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 
-import registerIpcHandlers from './logic/iris-memory-save'
+import registerIpcHandlers from './logic/nexus-memory-save'
 import registerSystemHandlers from './logic/get-system-info'
 import registerFileSearch from './logic/file-search'
 import registerFileOps from './logic/file-ops'
@@ -35,12 +35,13 @@ import registerGmailHandlers from './logic/gmail-manager'
 import registerLocationHandlers from './logic/live-location'
 import registerAdbHandlers from './logic/adb-manager'
 import registerRealityHacker from './logic/reality-hacker'
-import registerIrisCoder from './services/iris-coder'
+import registerNexusCoder from './services/nexus-coder'
 import registerTelekinesis from './logic/telekinesis'
 import registerPermanentMemory from './logic/permanent-memory'
 import registerWormhole from './services/wormhole'
 import registerOracle from './services/RAG-oracle'
 import registerDeepResearch from './services/deep-research'
+import registerNvidiaAI from './services/nvidia-ai'
 import registerWidgetMaker from './auto/widget-manager'
 import registerWebsiteBuilder from './auto/website-builder'
 import registerWorkflowManager from './workflow/workflow-manager'
@@ -49,16 +50,17 @@ import registerScreenPeeler from './handlers/ScreenPeeler-handler'
 import registerPhantomKeyboard from './handlers/PhantomControl-handler'
 import registerSecurityVault from './security/Security'
 import registerLockSystem from './security/lock-system'
+import registerEmailAuth from './security/email-auth'
 import { autoUpdater } from 'electron-updater'
 
 app.commandLine.appendSwitch('use-fake-ui-for-media-stream')
 
 if (process.defaultApp) {
   if (process.argv.length >= 2) {
-    app.setAsDefaultProtocolClient('iris', process.execPath, [path.resolve(process.argv[1])])
+    app.setAsDefaultProtocolClient('nexus', process.execPath, [path.resolve(process.argv[1])])
   }
 } else {
-  app.setAsDefaultProtocolClient('iris')
+  app.setAsDefaultProtocolClient('nexus')
 }
 
 const gotTheLock = app.requestSingleInstanceLock()
@@ -69,7 +71,7 @@ if (!gotTheLock) {
 let mainWindow: BrowserWindow | null = null
 let isOverlayMode = false
 
-const secureConfigPath = join(app.getPath('userData'), 'iris_secure_vault.json')
+const secureConfigPath = join(app.getPath('userData'), 'nexus_secure_vault.json')
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -118,7 +120,7 @@ app.on('second-instance', (event, commandLine) => {
   if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore()
     mainWindow.focus()
-    const url = commandLine.find((arg) => arg.startsWith('iris://'))
+    const url = commandLine.find((arg) => arg.startsWith('nexus://'))
     if (url) {
       mainWindow.webContents.send('oauth-callback', url)
     }
@@ -156,9 +158,12 @@ function toggleOverlayMode() {
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.electron')
 
-  autoUpdater.autoDownload = true
-  autoUpdater.autoInstallOnAppQuit = true
-  autoUpdater.checkForUpdatesAndNotify()
+  const autoUpdatesEnabled = process.env.NEXUS_ENABLE_AUTO_UPDATE === 'true'
+  autoUpdater.autoDownload = autoUpdatesEnabled
+  autoUpdater.autoInstallOnAppQuit = autoUpdatesEnabled
+  if (autoUpdatesEnabled) {
+    autoUpdater.checkForUpdatesAndNotify()
+  }
 
   autoUpdater.on('update-available', (info) => {
     dialog.showMessageBox({
@@ -228,21 +233,24 @@ app.whenReady().then(() => {
     }
   }
 
-  ipcMain.handle('secure-save-keys', async (_, { groqKey, geminiKey }) => {
+  ipcMain.handle('secure-save-keys', async (_, { groqKey = '', geminiKey = '', nvidiaKey = '' }) => {
     try {
-      let groqEncrypted, geminiEncrypted
+      let groqEncrypted, geminiEncrypted, nvidiaEncrypted
 
       if (safeStorage.isEncryptionAvailable()) {
         groqEncrypted = safeStorage.encryptString(groqKey).toString('base64')
         geminiEncrypted = safeStorage.encryptString(geminiKey).toString('base64')
+        nvidiaEncrypted = safeStorage.encryptString(nvidiaKey).toString('base64')
       } else {
         groqEncrypted = Buffer.from(groqKey).toString('base64')
         geminiEncrypted = Buffer.from(geminiKey).toString('base64')
+        nvidiaEncrypted = Buffer.from(nvidiaKey).toString('base64')
       }
 
       const secureData = {
         groq: groqEncrypted,
-        gemini: geminiEncrypted
+        gemini: geminiEncrypted,
+        nvidia: nvidiaEncrypted
       }
 
       fs.writeFileSync(secureConfigPath, JSON.stringify(secureData))
@@ -256,17 +264,21 @@ app.whenReady().then(() => {
     if (!fs.existsSync(secureConfigPath)) return null
     try {
       const data = JSON.parse(fs.readFileSync(secureConfigPath, 'utf8'))
-      let groqKey, geminiKey
+      let groqKey, geminiKey, nvidiaKey
 
       if (safeStorage.isEncryptionAvailable()) {
-        groqKey = safeStorage.decryptString(Buffer.from(data.groq, 'base64'))
-        geminiKey = safeStorage.decryptString(Buffer.from(data.gemini, 'base64'))
+        groqKey = data.groq ? safeStorage.decryptString(Buffer.from(data.groq, 'base64')) : ''
+        geminiKey = data.gemini ? safeStorage.decryptString(Buffer.from(data.gemini, 'base64')) : ''
+        nvidiaKey = data.nvidia
+          ? safeStorage.decryptString(Buffer.from(data.nvidia, 'base64'))
+          : ''
       } else {
-        groqKey = Buffer.from(data.groq, 'base64').toString('utf8')
-        geminiKey = Buffer.from(data.gemini, 'base64').toString('utf8')
+        groqKey = data.groq ? Buffer.from(data.groq, 'base64').toString('utf8') : ''
+        geminiKey = data.gemini ? Buffer.from(data.gemini, 'base64').toString('utf8') : ''
+        nvidiaKey = data.nvidia ? Buffer.from(data.nvidia, 'base64').toString('utf8') : ''
       }
 
-      return { groqKey, geminiKey }
+      return { groqKey, geminiKey, nvidiaKey }
     } catch (err) {
       return null
     }
@@ -294,13 +306,14 @@ app.whenReady().then(() => {
 
   app.on('open-url', (event, url) => {
     event.preventDefault()
-    if (mainWindow && url.startsWith('iris://')) {
+    if (mainWindow && url.startsWith('nexus://')) {
       mainWindow.webContents.send('oauth-callback', url)
     }
   })
 
   registerLockSystem()
   registerSecurityVault()
+  registerEmailAuth()
   registerPhantomKeyboard()
   registerScreenPeeler()
   registerDropZoneControl(ipcMain)
@@ -308,11 +321,12 @@ app.whenReady().then(() => {
   registerWebsiteBuilder()
   registerWidgetMaker()
   registerDeepResearch({ ipcMain })
+  registerNvidiaAI({ ipcMain })
   registerOracle({ ipcMain })
   registerWormhole({ ipcMain })
   registerPermanentMemory({ ipcMain, app })
   registerTelekinesis({ ipcMain })
-  registerIrisCoder({ ipcMain, app })
+  registerNexusCoder({ ipcMain, app })
   registerRealityHacker(ipcMain)
   registerAdbHandlers(ipcMain)
   registerLocationHandlers(ipcMain)

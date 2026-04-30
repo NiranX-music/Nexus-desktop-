@@ -11,10 +11,11 @@ import {
   RiCameraLine,
   RiComputerLine,
   RiCloseLine,
-  RiImageLine
+  RiImageLine,
+  RiChatSmile3Line
 } from 'react-icons/ri'
 import { getSystemStatus } from '@renderer/services/system-info'
-import { getHistory } from '@renderer/services/iris-ai-brain'
+import { getHistory } from '@renderer/services/nexus-ai-brain'
 import ViewSkeleton from '@renderer/components/ViewSkelrton'
 
 import DashboardView from '../views/Dashboard'
@@ -26,8 +27,9 @@ const WorkFlowEditorView = lazy(() => import('../views/WorkFlowEditor'))
 const NotesView = lazy(() => import('../views/Notes'))
 const SettingsView = lazy(() => import('../views/Settings'))
 const GalleryView = lazy(() => import('../views/Gallery'))
+const AiChatView = lazy(() => import('../views/AiChat'))
 
-interface IrisProps {
+interface NexusProps {
   isSystemActive: boolean
   toggleSystem: () => void
   isMicMuted: boolean
@@ -41,7 +43,7 @@ interface IrisProps {
 
 const glassPanel = 'bg-zinc-950/40 backdrop-blur-xl border border-white/5 rounded-2xl shadow-xl'
 
-const IRIS = (props: IrisProps) => {
+const Nexus = (props: NexusProps) => {
   const [activeTab, setActiveTab] = useState('DASHBOARD')
   const [stats, setStats] = useState<any>(null)
   const [time, setTime] = useState<Date>(new Date())
@@ -75,21 +77,32 @@ const IRIS = (props: IrisProps) => {
   }
 
   return (
-    <div className="h-screen w-full bg-black text-zinc-100 font-sans overflow-hidden select-none flex flex-col relative pb-5">
-      <div className="h-14 w-full flex items-center justify-between px-6 bg-zinc-950/80 border-b border-white/5 z-50 backdrop-blur-md">
+    <div className="h-screen w-full text-zinc-100 font-sans overflow-hidden select-none flex flex-col relative">
+      <div className="pointer-events-none absolute inset-0 z-0">
+        <div className="absolute -left-32 top-10 h-82 w-82 rounded-full bg-emerald-500/10 blur-3xl" />
+        <div className="absolute right-0 top-0 h-96 w-96 rounded-full bg-orange-500/8 blur-3xl" />
+        <div className="nexus-radar-grid absolute inset-0 opacity-35" />
+      </div>
+
+      <div className="relative z-50 mx-4 mt-3 h-16 shrink-0 flex items-center justify-between gap-4 rounded-2xl border border-emerald-400/15 bg-black/45 px-4 shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-2xl">
         <div className="hidden lg:flex items-center gap-3">
-          <RiShieldFlashLine className="text-emerald-500 text-xl animate-pulse" />
+          <div className="grid h-11 w-11 place-items-center rounded-2xl border border-emerald-400/25 bg-emerald-400/10 shadow-[0_0_28px_rgba(16,185,129,0.22)]">
+            <RiShieldFlashLine className="text-emerald-300 text-xl animate-pulse" />
+          </div>
           <div className="flex flex-col leading-none">
-            <span className="font-black tracking-[0.2em] text-sm text-zinc-100">IRIS AI</span>
-            <span className="text-[11px] font-mono text-emerald-500/60 tracking-widest">
-              NEURAL INTERFACE
+            <span className="font-black tracking-[0.22em] text-sm text-zinc-100 uppercase">
+              Nexus AI
+            </span>
+            <span className="text-[10px] font-mono text-cyan-300/65 tracking-[0.24em]">
+              AUTONOMOUS COMMAND RIBBON
             </span>
           </div>
         </div>
 
-        <div className="hidden md:flex gap-2 bg-black/40 p-1 rounded-lg border border-white/5">
+        <div className="hidden md:flex gap-1.5 bg-white/[0.03] p-1.5 rounded-2xl border border-white/8 shadow-inner shadow-black/40">
           {[
             { id: 'DASHBOARD', icon: <RiLayoutGridLine /> },
+            { id: 'AI CHAT', icon: <RiChatSmile3Line /> },
             { id: 'Macros', icon: <RiBrainLine /> },
             { id: 'Apps', icon: <RiFolderOpenLine /> },
             { id: 'NOTES', icon: <RiFolderOpenLine /> },
@@ -100,10 +113,10 @@ const IRIS = (props: IrisProps) => {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`cursor-pointer px-5 py-1.5 text-[10px] font-bold tracking-widest rounded-md transition-all duration-300 flex items-center gap-2 ${
+              className={`cursor-pointer px-4 py-2 text-[10px] font-black tracking-widest rounded-xl transition-all duration-300 flex items-center gap-2 ${
                 activeTab === tab.id
-                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 shadow-[0_0_15px_rgba(16,185,129,0.1)]'
-                  : 'text-zinc-500 hover:text-zinc-300 hover:bg-white/5'
+                  ? 'bg-emerald-400/18 text-emerald-200 border border-emerald-300/25 shadow-[0_0_24px_rgba(16,185,129,0.16)]'
+                  : 'text-zinc-500 hover:text-zinc-200 hover:bg-white/7'
               }`}
             >
               {tab.icon} {tab.id}
@@ -111,20 +124,20 @@ const IRIS = (props: IrisProps) => {
           ))}
         </div>
 
-        <div className="flex items-center gap-6 text-[11px] font-mono font-bold opacity-60">
-          <div className="flex items-center gap-2 text-emerald-500">
+        <div className="flex items-center gap-3 text-[11px] font-mono font-bold">
+          <div className="flex items-center gap-2 rounded-full border border-emerald-400/15 bg-emerald-400/8 px-3 py-1.5 text-emerald-300">
             <RiWifiLine /> <span>LINKED</span>
           </div>
-          <div className="hidden sm:flex items-center gap-2">
+          <div className="hidden sm:flex items-center gap-2 rounded-full border border-cyan-300/12 bg-cyan-300/6 px-3 py-1.5 text-cyan-100/70">
             <RiBatteryChargeLine /> <span>100%</span>
           </div>
-          <div className="bg-zinc-800 px-2 py-1 rounded text-zinc-300">
+          <div className="rounded-full border border-orange-300/15 bg-orange-300/8 px-3 py-1.5 text-orange-100/75">
             {time.toLocaleTimeString()}
           </div>
         </div>
       </div>
 
-      <div className="flex-1 overflow-hidden relative bg-[radial-gradient(circle_at_center,var(--tw-gradient-stops))] from-zinc-900/50 via-black to-black">
+      <div className="relative z-10 m-4 mt-3 flex-1 min-h-0 overflow-hidden rounded-[28px] border border-white/8 bg-[radial-gradient(circle_at_center,var(--tw-gradient-stops))] from-zinc-900/60 via-black to-[#020403] shadow-[inset_0_1px_rgba(255,255,255,0.04)]">
         <div className={`absolute inset-0 ${activeTab === 'DASHBOARD' ? 'block' : 'hidden'}`}>
           <DashboardView
             props={props}
@@ -134,16 +147,23 @@ const IRIS = (props: IrisProps) => {
           />
         </div>
 
-        <div className={`absolute inset-0 ${activeTab === 'PHONE' ? 'block' : 'hidden'}`}>
+        <div
+          className={`absolute inset-0 overflow-y-auto scrollbar-small ${activeTab === 'PHONE' ? 'block' : 'hidden'}`}
+        >
           <PhoneView glassPanel={glassPanel} />
         </div>
 
         <Suspense fallback={<ViewSkeleton />}>
-          {activeTab === 'Macros' && <WorkFlowEditorView />}
-          {activeTab === 'Apps' && <AppsView />}
-          {activeTab === 'NOTES' && <NotesView glassPanel={glassPanel} />}
-          {activeTab === 'SETTINGS' && <SettingsView isSystemActive={props.isSystemActive} />}
-          {activeTab === 'GALLERY' && <GalleryView />}
+          {activeTab !== 'DASHBOARD' && activeTab !== 'PHONE' && (
+            <div className="absolute inset-0 overflow-y-auto scrollbar-small">
+              {activeTab === 'Macros' && <WorkFlowEditorView />}
+              {activeTab === 'AI CHAT' && <AiChatView />}
+              {activeTab === 'Apps' && <AppsView />}
+              {activeTab === 'NOTES' && <NotesView glassPanel={glassPanel} />}
+              {activeTab === 'SETTINGS' && <SettingsView isSystemActive={props.isSystemActive} />}
+              {activeTab === 'GALLERY' && <GalleryView />}
+            </div>
+          )}
         </Suspense>
       </div>
 
@@ -206,4 +226,4 @@ const IRIS = (props: IrisProps) => {
   )
 }
 
-export default IRIS
+export default Nexus

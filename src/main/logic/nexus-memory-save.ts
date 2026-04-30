@@ -4,7 +4,7 @@ import { IpcMain, App } from 'electron'
 
 export default function registerIpcHandlers({ ipcMain, app }: { ipcMain: IpcMain; app: App }) {
   const CHAT_DIR = path.resolve(app.getPath('userData'), 'Chat')
-  const FILE_PATH = path.join(CHAT_DIR, 'iris_memory.json')
+  const FILE_PATH = path.join(CHAT_DIR, 'nexus_memory.json')
 
   ipcMain.removeHandler('add-message')
   ipcMain.removeHandler('get-history')
@@ -41,7 +41,7 @@ export default function registerIpcHandlers({ ipcMain, app }: { ipcMain: IpcMain
         const data = fs.readFileSync(FILE_PATH, 'utf-8')
         const raw = JSON.parse(data)
         return raw.map((m: any) => ({
-          role: m.role === 'iris' ? 'model' : m.role,
+          role: m.role === 'nexus' ? 'model' : m.role,
           parts: [{ text: m.content }]
         }))
       }

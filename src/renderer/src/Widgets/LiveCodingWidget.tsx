@@ -12,13 +12,13 @@ export default function LiveCodingWidget() {
 
   useEffect(() => {
     if (monaco) {
-      monaco.editor.defineTheme('iris-dark', {
+      monaco.editor.defineTheme('nexus-dark', {
         base: 'vs-dark',
         inherit: true,
         rules: [{ token: 'comment', foreground: '10b981', fontStyle: 'italic' }],
         colors: { 'editor.background': '#00000000' }
       })
-      monaco.editor.setTheme('iris-dark')
+      monaco.editor.setTheme('nexus-dark')
     }
   }, [monaco])
 
@@ -29,7 +29,7 @@ export default function LiveCodingWidget() {
       setIsVisible(true)
       setIsGenerating(true)
 
-      const geminiKey = localStorage.getItem('iris_custom_api_key') || ''
+      const geminiKey = localStorage.getItem('nexus_custom_api_key') || ''
 
       if (!geminiKey.trim()) {
         setCode(
@@ -39,7 +39,7 @@ export default function LiveCodingWidget() {
         return
       }
 
-      setCode('// Initializing IRIS Neural Forge...\n')
+      setCode('// Initializing Nexus Neural Forge...\n')
 
       const result = await window.electron.ipcRenderer.invoke('start-live-coding', {
         prompt,
@@ -106,7 +106,7 @@ export default function LiveCodingWidget() {
           <Editor
             height="100%"
             language={filename.endsWith('.py') ? 'python' : 'typescript'}
-            theme="iris-dark"
+            theme="nexus-dark"
             value={code}
             options={{
               readOnly: true,
