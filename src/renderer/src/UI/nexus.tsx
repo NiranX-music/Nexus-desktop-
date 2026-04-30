@@ -41,7 +41,18 @@ interface NexusProps {
   activeStream: MediaStream | null
 }
 
-const glassPanel = 'bg-zinc-950/40 backdrop-blur-xl border border-white/5 rounded-2xl shadow-xl'
+const glassPanel = 'nexus-glass-card'
+
+const navTabs = [
+  { id: 'DASHBOARD', label: 'Command', detail: 'Core overview', icon: <RiLayoutGridLine /> },
+  { id: 'AI CHAT', label: 'AI Chat', detail: 'NVIDIA Build', icon: <RiChatSmile3Line /> },
+  { id: 'Macros', label: 'Macros', detail: 'Automation flow', icon: <RiBrainLine /> },
+  { id: 'Apps', label: 'Apps', detail: 'Local tools', icon: <RiFolderOpenLine /> },
+  { id: 'NOTES', label: 'Notes', detail: 'Vault memory', icon: <RiFolderOpenLine /> },
+  { id: 'GALLERY', label: 'Gallery', detail: 'Vision archive', icon: <RiImageLine /> },
+  { id: 'PHONE', label: 'Phone', detail: 'Device uplink', icon: <RiPhoneLine /> },
+  { id: 'SETTINGS', label: 'Settings', detail: 'System config', icon: <RiSettings4Line /> }
+]
 
 const Nexus = (props: NexusProps) => {
   const [activeTab, setActiveTab] = useState('DASHBOARD')
@@ -76,99 +87,163 @@ const Nexus = (props: NexusProps) => {
     }
   }
 
+  const activeNav = navTabs.find((tab) => tab.id === activeTab) ?? navTabs[0]
+
   return (
-    <div className="h-screen w-full text-zinc-100 font-sans overflow-hidden select-none flex flex-col relative">
-      <div className="pointer-events-none absolute inset-0 z-0">
-        <div className="absolute -left-32 top-10 h-82 w-82 rounded-full bg-emerald-500/10 blur-3xl" />
-        <div className="absolute right-0 top-0 h-96 w-96 rounded-full bg-orange-500/8 blur-3xl" />
-        <div className="nexus-radar-grid absolute inset-0 opacity-35" />
-      </div>
+    <div className="nexus-app-shell h-screen w-full overflow-hidden select-none text-zinc-100">
+      <div className="nexus-liquid-orb nexus-liquid-orb-one" />
+      <div className="nexus-liquid-orb nexus-liquid-orb-two" />
+      <div className="nexus-radar-grid absolute inset-0 opacity-45" />
+      <div className="nexus-scanline" />
 
-      <div className="relative z-50 mx-4 mt-3 h-16 shrink-0 flex items-center justify-between gap-4 rounded-2xl border border-emerald-400/15 bg-black/45 px-4 shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-2xl">
-        <div className="hidden lg:flex items-center gap-3">
-          <div className="grid h-11 w-11 place-items-center rounded-2xl border border-emerald-400/25 bg-emerald-400/10 shadow-[0_0_28px_rgba(16,185,129,0.22)]">
-            <RiShieldFlashLine className="text-emerald-300 text-xl animate-pulse" />
-          </div>
-          <div className="flex flex-col leading-none">
-            <span className="font-black tracking-[0.22em] text-sm text-zinc-100 uppercase">
-              Nexus AI
-            </span>
-            <span className="text-[10px] font-mono text-cyan-300/65 tracking-[0.24em]">
-              AUTONOMOUS COMMAND RIBBON
-            </span>
-          </div>
-        </div>
-
-        <div className="hidden md:flex gap-1.5 bg-white/[0.03] p-1.5 rounded-2xl border border-white/8 shadow-inner shadow-black/40">
-          {[
-            { id: 'DASHBOARD', icon: <RiLayoutGridLine /> },
-            { id: 'AI CHAT', icon: <RiChatSmile3Line /> },
-            { id: 'Macros', icon: <RiBrainLine /> },
-            { id: 'Apps', icon: <RiFolderOpenLine /> },
-            { id: 'NOTES', icon: <RiFolderOpenLine /> },
-            { id: 'GALLERY', icon: <RiImageLine /> },
-            { id: 'PHONE', icon: <RiPhoneLine /> },
-            { id: 'SETTINGS', icon: <RiSettings4Line /> }
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`cursor-pointer px-4 py-2 text-[10px] font-black tracking-widest rounded-xl transition-all duration-300 flex items-center gap-2 ${
-                activeTab === tab.id
-                  ? 'bg-emerald-400/18 text-emerald-200 border border-emerald-300/25 shadow-[0_0_24px_rgba(16,185,129,0.16)]'
-                  : 'text-zinc-500 hover:text-zinc-200 hover:bg-white/7'
-              }`}
-            >
-              {tab.icon} {tab.id}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-3 text-[11px] font-mono font-bold">
-          <div className="flex items-center gap-2 rounded-full border border-emerald-400/15 bg-emerald-400/8 px-3 py-1.5 text-emerald-300">
-            <RiWifiLine /> <span>LINKED</span>
-          </div>
-          <div className="hidden sm:flex items-center gap-2 rounded-full border border-cyan-300/12 bg-cyan-300/6 px-3 py-1.5 text-cyan-100/70">
-            <RiBatteryChargeLine /> <span>100%</span>
-          </div>
-          <div className="rounded-full border border-orange-300/15 bg-orange-300/8 px-3 py-1.5 text-orange-100/75">
-            {time.toLocaleTimeString()}
-          </div>
-        </div>
-      </div>
-
-      <div className="relative z-10 m-4 mt-3 flex-1 min-h-0 overflow-hidden rounded-[28px] border border-white/8 bg-[radial-gradient(circle_at_center,var(--tw-gradient-stops))] from-zinc-900/60 via-black to-[#020403] shadow-[inset_0_1px_rgba(255,255,255,0.04)]">
-        <div className={`absolute inset-0 ${activeTab === 'DASHBOARD' ? 'block' : 'hidden'}`}>
-          <DashboardView
-            props={props}
-            stats={stats}
-            chatHistory={chatHistory}
-            onVisionClick={handleVisionClick}
-          />
-        </div>
-
-        <div
-          className={`absolute inset-0 overflow-y-auto scrollbar-small ${activeTab === 'PHONE' ? 'block' : 'hidden'}`}
-        >
-          <PhoneView glassPanel={glassPanel} />
-        </div>
-
-        <Suspense fallback={<ViewSkeleton />}>
-          {activeTab !== 'DASHBOARD' && activeTab !== 'PHONE' && (
-            <div className="absolute inset-0 overflow-y-auto scrollbar-small">
-              {activeTab === 'Macros' && <WorkFlowEditorView />}
-              {activeTab === 'AI CHAT' && <AiChatView />}
-              {activeTab === 'Apps' && <AppsView />}
-              {activeTab === 'NOTES' && <NotesView glassPanel={glassPanel} />}
-              {activeTab === 'SETTINGS' && <SettingsView isSystemActive={props.isSystemActive} />}
-              {activeTab === 'GALLERY' && <GalleryView />}
+      <div className="relative z-10 flex h-full gap-4 p-4">
+        <aside className="nexus-side-dock hidden w-[282px] shrink-0 flex-col overflow-hidden xl:flex">
+          <div className="relative border-b border-white/10 p-5">
+            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/60 to-transparent" />
+            <div className="flex items-center gap-4">
+              <div className="nexus-brand-core">
+                <RiShieldFlashLine />
+              </div>
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.38em] text-emerald-300">
+                  Nexus Tech
+                </p>
+                <h1 className="mt-1 text-2xl font-black uppercase tracking-[0.08em] text-white">
+                  Nexus AI
+                </h1>
+              </div>
             </div>
-          )}
-        </Suspense>
+            <div className="mt-5 rounded-2xl border border-emerald-300/15 bg-emerald-300/5 p-4">
+              <p className="text-[10px] font-black uppercase tracking-[0.24em] text-zinc-500">
+                Current Deck
+              </p>
+              <p className="mt-2 text-lg font-black text-white">{activeNav.label}</p>
+              <p className="mt-1 text-xs font-semibold text-emerald-100/55">{activeNav.detail}</p>
+            </div>
+          </div>
+
+          <nav className="flex-1 overflow-y-auto p-3 scrollbar-small">
+            <div className="space-y-2">
+              {navTabs.map((tab, index) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`nexus-nav-tile group ${activeTab === tab.id ? 'is-active' : ''}`}
+                >
+                  <span className="text-[10px] font-black text-zinc-600">
+                    {String(index + 1).padStart(2, '0')}
+                  </span>
+                  <span className="grid h-10 w-10 place-items-center rounded-2xl border border-white/10 bg-black/30 text-lg">
+                    {tab.icon}
+                  </span>
+                  <span className="min-w-0 flex-1 text-left">
+                    <span className="block text-[12px] font-black uppercase tracking-[0.16em]">
+                      {tab.label}
+                    </span>
+                    <span className="mt-0.5 block truncate text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500">
+                      {tab.detail}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </nav>
+
+          <div className="border-t border-white/10 p-4">
+            <div className="grid grid-cols-2 gap-2 text-[10px] font-black uppercase tracking-[0.16em]">
+              <div className="rounded-2xl border border-emerald-300/15 bg-emerald-300/5 p-3 text-emerald-300">
+                <RiWifiLine className="mb-2 text-lg" />
+                Linked
+              </div>
+              <div className="rounded-2xl border border-cyan-300/15 bg-cyan-300/5 p-3 text-cyan-200">
+                <RiBatteryChargeLine className="mb-2 text-lg" />
+                100%
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <main className="flex min-w-0 flex-1 flex-col gap-4">
+          <header className="nexus-command-bar">
+            <div className="min-w-0">
+              <p className="text-[10px] font-black uppercase tracking-[0.34em] text-emerald-300">
+                Autonomous Desktop Agent
+              </p>
+              <div className="mt-1 flex flex-wrap items-end gap-3">
+                <h2 className="text-3xl font-black uppercase tracking-tight text-white md:text-4xl">
+                  {activeNav.label}
+                </h2>
+                <span className="mb-1 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-zinc-400">
+                  {activeNav.detail}
+                </span>
+              </div>
+            </div>
+
+            <div className="hidden items-center gap-2 lg:flex">
+              <span className="nexus-status-pill text-emerald-300">
+                <RiWifiLine /> Linked
+              </span>
+              <span className="nexus-status-pill text-cyan-200">
+                <RiBatteryChargeLine /> 100%
+              </span>
+              <span className="nexus-status-pill text-orange-100">
+                {time.toLocaleTimeString()}
+              </span>
+            </div>
+
+            <div className="flex gap-1 overflow-x-auto scrollbar-small xl:hidden">
+              {navTabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`grid h-11 w-11 shrink-0 place-items-center rounded-2xl border text-lg transition ${
+                    activeTab === tab.id
+                      ? 'border-emerald-300/50 bg-emerald-300/20 text-emerald-100'
+                      : 'border-white/10 bg-black/30 text-zinc-500'
+                  }`}
+                >
+                  {tab.icon}
+                </button>
+              ))}
+            </div>
+          </header>
+
+          <section className="nexus-content-stage relative min-h-0 flex-1 overflow-hidden">
+            <div className={`absolute inset-0 ${activeTab === 'DASHBOARD' ? 'block' : 'hidden'}`}>
+              <DashboardView
+                props={props}
+                stats={stats}
+                chatHistory={chatHistory}
+                onVisionClick={handleVisionClick}
+              />
+            </div>
+
+            <div
+              className={`absolute inset-0 overflow-y-auto scrollbar-small ${activeTab === 'PHONE' ? 'block' : 'hidden'}`}
+            >
+              <PhoneView glassPanel={glassPanel} />
+            </div>
+
+            <Suspense fallback={<ViewSkeleton />}>
+              {activeTab !== 'DASHBOARD' && activeTab !== 'PHONE' && (
+                <div className="absolute inset-0 overflow-y-auto scrollbar-small">
+                  {activeTab === 'Macros' && <WorkFlowEditorView />}
+                  {activeTab === 'AI CHAT' && <AiChatView />}
+                  {activeTab === 'Apps' && <AppsView />}
+                  {activeTab === 'NOTES' && <NotesView glassPanel={glassPanel} />}
+                  {activeTab === 'SETTINGS' && (
+                    <SettingsView isSystemActive={props.isSystemActive} />
+                  )}
+                  {activeTab === 'GALLERY' && <GalleryView />}
+                </div>
+              )}
+            </Suspense>
+          </section>
+        </main>
       </div>
 
       {showSourceModal && (
-        <div className="absolute inset-0 z-100 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+        <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
           <div className={`${glassPanel} w-96 p-1 border-emerald-500/30 flex flex-col shadow-2xl`}>
             <div className="flex items-center justify-between p-4 border-b border-white/5 bg-white/5">
               <span className="text-xs font-bold tracking-widest text-emerald-400">

@@ -40,7 +40,7 @@ interface DashboardViewProps {
   onVisionClick: () => void
 }
 
-const glassPanel = 'bg-zinc-950/40 backdrop-blur-xl border border-white/5 rounded-2xl shadow-xl'
+const glassPanel = 'nexus-glass-card'
 
 export default function DashboardView({
   props,
@@ -283,9 +283,9 @@ export default function DashboardView({
   ]
 
   return (
-    <div className="flex-1 p-4 bg-[radial-gradient(circle_at_50%_20%,rgba(16,185,129,0.10),transparent_32rem)] grid grid-cols-12 gap-4 h-full overflow-hidden relative animate-in fade-in zoom-in duration-300 w-full">
-      <div className="pointer-events-none absolute inset-x-8 top-4 z-0 flex items-center justify-between rounded-full border border-white/5 bg-white/[0.025] px-5 py-2 text-[9px] font-black tracking-[0.28em] text-zinc-500">
-        <span>NEXUS KERNEL STREAM</span>
+    <div className="nexus-dashboard-arena flex-1 p-4 grid grid-cols-12 gap-4 h-full overflow-hidden relative animate-in fade-in zoom-in duration-300 w-full">
+      <div className="pointer-events-none absolute inset-x-8 top-4 z-0 flex items-center justify-between rounded-full border border-emerald-300/15 bg-black/35 px-5 py-2 text-[9px] font-black tracking-[0.28em] text-zinc-500 backdrop-blur-xl">
+        <span>COMMAND KERNEL STREAM</span>
         <span className={isSystemActive ? 'text-emerald-300' : 'text-orange-200/70'}>
           {isSystemActive ? 'AUTONOMY ACTIVE' : 'STANDBY MODE'}
         </span>
