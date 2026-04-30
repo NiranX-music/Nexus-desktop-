@@ -6,7 +6,7 @@
   "author": {
     "name": "Nexus tech"
   },
-  "homepage": "https://nexusaiw.vercel.app",
+  "homepage": "https://nexus-desktop-app.vercel.app",
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",

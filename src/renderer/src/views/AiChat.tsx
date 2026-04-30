@@ -27,7 +27,7 @@ interface ChatMessage {
 }
 
 const defaultWelcome =
-  'Nexus NVIDIA chat online. Pick a model, type a prompt, and I will route it through NVIDIA Build using the OpenAI-compatible endpoint.'
+  'Nexus Cloud AI is online. Pick a model and type a prompt; I will use the hosted Nexus NVIDIA route by default, or your own local NVIDIA key if you add one in Settings.'
 
 const systemPrompt = `You are Nexus, a precise AI chat assistant inside a Windows desktop app. Be helpful, concise, technical when useful, and keep a confident but warm tone.`
 

@@ -60,4 +60,4 @@ npmRebuild: false
 publish:
   provider: github
   owner: NiranX-music
-  repo: nexus-desktop
+  repo: Nexus-desktop-

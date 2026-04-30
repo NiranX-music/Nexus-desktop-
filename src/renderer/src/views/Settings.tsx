@@ -571,14 +571,14 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
 
                     <div className="flex flex-col gap-2">
                       <label className="text-[10px] text-zinc-400 font-mono tracking-widest uppercase flex items-center gap-2">
-                        <RiBrainLine size={14} /> NVIDIA Build NIM
+                      <RiBrainLine size={14} /> NVIDIA Build NIM Override
                       </label>
                       <div className={inputContainerClass}>
                         <input
                           type="password"
                           value={nvidiaKey}
                           onChange={(e) => setNvidiaKey(e.target.value)}
-                          placeholder="nvapi_... or $NVIDIA_API_KEY"
+                          placeholder="Optional: nvapi_... override"
                           className="bg-transparent border-none outline-none text-sm font-mono text-zinc-100 w-full placeholder:text-zinc-700"
                         />
                       </div>
@@ -638,7 +638,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                           Guide
                         </span>
                         <p className="text-[10px] text-zinc-500 font-mono mt-1 tracking-widest uppercase">
-                          For the AI Chat tab and NVIDIA Build model routing.
+                          Optional override. Nexus Cloud works without a user key.
                         </p>
                       </div>
                       <a
@@ -655,18 +655,18 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                       {[
                         {
                           step: '01',
-                          title: 'Sign In',
-                          text: 'Open build.nvidia.com and sign in to NVIDIA Developer.'
+                          title: 'Default Mode',
+                          text: 'Leave this blank to use the hosted Nexus Cloud NVIDIA route.'
                         },
                         {
                           step: '02',
-                          title: 'Create Key',
-                          text: 'Go to API Keys and generate a new NVIDIA Build key.'
+                          title: 'Optional Key',
+                          text: 'Advanced users can generate a personal NVIDIA Build key.'
                         },
                         {
                           step: '03',
-                          title: 'Paste Here',
-                          text: 'Paste the key into NVIDIA Build NIM above.'
+                          title: 'Paste Override',
+                          text: 'Paste it above only if you want local billing/control.'
                         },
                         {
                           step: '04',
@@ -692,7 +692,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                     </div>
 
                     <div className="rounded-xl border border-white/5 bg-black/50 p-4 text-[10px] font-mono text-zinc-400">
-                      Base URL used by Nexus:{' '}
+                      Direct NVIDIA base URL used only when a local override key exists:{' '}
                       <span className="text-emerald-300">
                         https://integrate.api.nvidia.com/v1
                       </span>
@@ -702,9 +702,10 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                   <div className="bg-[#050505] border border-white/5 p-4 rounded-xl mt-2 flex items-start gap-3">
                     <RiShieldKeyholeLine className="text-zinc-500 shrink-0 mt-0.5" size={16} />
                     <p className="text-[10px] text-zinc-400 font-mono leading-relaxed">
-                      [SECURITY NOTICE]: All API keys are encrypted and stored strictly in your
-                      local OS. Nexus does not transmit these keys to any centralized server. You
-                      maintain full ownership and billing control over your provider endpoints.
+                      [SECURITY NOTICE]: Optional local API keys are encrypted and stored strictly
+                      in your local OS. If no NVIDIA key is saved, AI Chat uses the Nexus Cloud
+                      proxy, so prompts are sent to the hosted Nexus API route and billed through
+                      the configured server-side NVIDIA key.
                     </p>
                   </div>
                 </div>
@@ -812,8 +813,8 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                     <p className="text-[10px] text-zinc-400 font-mono leading-relaxed">
                       The bundled catalog includes current NVIDIA Build LLM, coding, reasoning,
                       multimodal, speech, translation, image, and retrieval models. The live sync
-                      button queries NVIDIA's /v1/models endpoint with your key, because the Build
-                      catalog changes over time.
+                      button queries the Nexus Cloud models route when no local key is saved, or
+                      NVIDIA's /v1/models endpoint directly when you provide an override key.
                     </p>
                   </div>
                 </div>
