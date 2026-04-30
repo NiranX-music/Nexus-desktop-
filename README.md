@@ -406,5 +406,4 @@ MIT License — see LICENSE file.
 
 > _System Online._
 
-# Made with ❤️ by [Harsh Pandey](https://instagram.com/201Harshs)
-
+# Made with love from NiranX, Resolute Team

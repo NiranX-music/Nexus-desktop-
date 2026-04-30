@@ -3,7 +3,9 @@
   "version": "1.2.4",
   "description": "Nexus is not another chatbot you type at. It is an intelligent Voice-First Operating Layer that gives you complete, hands-free authority over your digital environment. It lives on your desktop, watches your workflow, and executes your intent instantly.",
   "main": "./out/main/index.js",
-  "author": "Harsh Pandey",
+  "author": {
+    "name": "Nexus tech"
+  },
   "homepage": "https://nexusaiw.vercel.app",
   "scripts": {
     "format": "prettier --write .",

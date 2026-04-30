@@ -1,5 +1,6 @@
 appId: com.harshpandey.nexus
 productName: Nexus AI
+copyright: Copyright © 2026 Nexus tech
 directories:
   buildResources: build
 files:
@@ -50,7 +51,7 @@ linux:
     - AppImage
     - snap
     - deb
-  maintainer: Harsh Pandey
+  maintainer: Nexus tech
   category: Utility
 appImage:
   artifactName: ${name}-${version}.${ext}
