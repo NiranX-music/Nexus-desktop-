@@ -283,8 +283,8 @@ export default function DashboardView({
   ]
 
   return (
-    <div className="nexus-dashboard-arena flex-1 p-4 grid grid-cols-12 gap-4 h-full overflow-hidden relative animate-in fade-in zoom-in duration-300 w-full">
-      <div className="pointer-events-none absolute inset-x-8 top-4 z-0 flex items-center justify-between rounded-full border border-emerald-300/15 bg-black/35 px-5 py-2 text-[9px] font-black tracking-[0.28em] text-zinc-500 backdrop-blur-xl">
+    <div className="nexus-dashboard-arena flex-1 p-3 grid grid-cols-12 gap-3 min-h-[620px] h-full overflow-hidden relative animate-in fade-in zoom-in duration-300 w-full">
+      <div className="pointer-events-none absolute inset-x-6 top-3 z-0 flex items-center justify-between rounded-lg border border-emerald-300/15 bg-black/35 px-5 py-2 text-[9px] font-black tracking-[0.28em] text-zinc-500 backdrop-blur-xl">
         <span>COMMAND KERNEL STREAM</span>
         <span className={isSystemActive ? 'text-emerald-300' : 'text-orange-200/70'}>
           {isSystemActive ? 'AUTONOMY ACTIVE' : 'STANDBY MODE'}
@@ -292,7 +292,7 @@ export default function DashboardView({
       </div>
       <div className="hidden lg:flex col-span-3 flex-col gap-4 h-full z-40">
         <div
-          className={`${glassPanel} h-70 shrink-0 flex flex-col p-1 overflow-hidden relative group`}
+          className={`${glassPanel} h-[clamp(12rem,30vh,17.5rem)] shrink-0 flex flex-col p-1 overflow-hidden relative group`}
         >
           <div className="absolute top-3 left-3 z-30 flex items-center gap-2">
             <span
@@ -345,7 +345,7 @@ export default function DashboardView({
         </div>
 
         <div
-          className={`${glassPanel} h-32 shrink-0 p-4 flex flex-col justify-between relative overflow-hidden`}
+          className={`${glassPanel} h-[7.5rem] shrink-0 p-4 flex flex-col justify-between relative overflow-hidden`}
         >
           <div
             className={`absolute inset-0 bg-linear-to-r from-emerald-500/5 to-transparent transition-opacity duration-1000 ${isSystemActive ? 'opacity-100' : 'opacity-0'}`}
@@ -496,7 +496,7 @@ export default function DashboardView({
           <Sphere />
         </div>
 
-        <div className="absolute bottom-10 z-50">
+        <div className="absolute bottom-5 z-50">
           <div
             className={`${glassPanel} px-6 py-3 rounded-full flex items-center gap-6 border border-emerald-500/20 shadow-[0_0_30px_rgba(0,0,0,0.5)]`}
           >

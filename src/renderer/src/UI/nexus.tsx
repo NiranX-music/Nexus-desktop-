@@ -90,13 +90,13 @@ const Nexus = (props: NexusProps) => {
   const activeNav = navTabs.find((tab) => tab.id === activeTab) ?? navTabs[0]
 
   return (
-    <div className="nexus-app-shell h-screen w-full overflow-hidden select-none text-zinc-100">
+    <div className="nexus-app-shell h-full w-full overflow-hidden select-none text-zinc-100">
       <div className="nexus-liquid-orb nexus-liquid-orb-one" />
       <div className="nexus-liquid-orb nexus-liquid-orb-two" />
       <div className="nexus-radar-grid absolute inset-0 opacity-45" />
       <div className="nexus-scanline" />
 
-      <div className="relative z-10 flex h-full gap-4 p-4">
+      <div className="relative z-10 flex h-full min-h-0 gap-3 p-3">
         <aside className="nexus-side-dock hidden w-[282px] shrink-0 flex-col overflow-hidden xl:flex">
           <div className="relative border-b border-white/10 p-5">
             <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/60 to-transparent" />
@@ -163,7 +163,7 @@ const Nexus = (props: NexusProps) => {
           </div>
         </aside>
 
-        <main className="flex min-w-0 flex-1 flex-col gap-4">
+        <main className="flex min-w-0 min-h-0 flex-1 flex-col gap-3">
           <header className="nexus-command-bar">
             <div className="min-w-0">
               <p className="text-[10px] font-black uppercase tracking-[0.34em] text-emerald-300">
@@ -209,7 +209,9 @@ const Nexus = (props: NexusProps) => {
           </header>
 
           <section className="nexus-content-stage relative min-h-0 flex-1 overflow-hidden">
-            <div className={`absolute inset-0 ${activeTab === 'DASHBOARD' ? 'block' : 'hidden'}`}>
+            <div
+              className={`absolute inset-0 overflow-y-auto scrollbar-small ${activeTab === 'DASHBOARD' ? 'block' : 'hidden'}`}
+            >
               <DashboardView
                 props={props}
                 stats={stats}

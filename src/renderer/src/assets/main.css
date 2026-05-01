@@ -105,7 +105,7 @@ body {
 
 .nexus-side-dock {
   border: 1px solid rgba(16, 185, 129, 0.18);
-  border-radius: 34px;
+  border-radius: 14px;
   background:
     linear-gradient(180deg, rgba(3, 12, 10, 0.9), rgba(2, 5, 5, 0.72)),
     radial-gradient(circle at top left, rgba(16, 185, 129, 0.18), transparent 24rem);
@@ -121,7 +121,7 @@ body {
   height: 3.5rem;
   place-items: center;
   border: 1px solid rgba(52, 211, 153, 0.38);
-  border-radius: 1.25rem;
+  border-radius: 0.65rem;
   color: #6ee7b7;
   background:
     radial-gradient(circle at 50% 18%, rgba(16, 185, 129, 0.42), transparent 58%),
@@ -138,7 +138,7 @@ body {
   align-items: center;
   gap: 0.75rem;
   border: 1px solid transparent;
-  border-radius: 1.25rem;
+  border-radius: 0.65rem;
   padding: 0.72rem;
   color: rgba(212, 212, 216, 0.62);
   background: rgba(255, 255, 255, 0.025);
@@ -168,14 +168,14 @@ body {
 }
 
 .nexus-command-bar {
-  min-height: 6.3rem;
+  min-height: 5.7rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 30px;
-  padding: 1.1rem 1.25rem;
+  border-radius: 14px;
+  padding: 0.95rem 1.15rem;
   background:
     linear-gradient(135deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.025)),
     radial-gradient(circle at 0 0, rgba(16, 185, 129, 0.14), transparent 22rem);
@@ -189,7 +189,7 @@ body {
   align-items: center;
   gap: 0.45rem;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 999px;
+  border-radius: 0.6rem;
   background: rgba(0, 0, 0, 0.32);
   padding: 0.62rem 0.82rem;
   font-size: 0.68rem;
@@ -200,7 +200,7 @@ body {
 
 .nexus-content-stage {
   border: 1px solid rgba(16, 185, 129, 0.2);
-  border-radius: 36px;
+  border-radius: 14px;
   background:
     linear-gradient(135deg, rgba(0, 0, 0, 0.32), rgba(1, 8, 7, 0.82)),
     radial-gradient(circle at 50% 0, rgba(16, 185, 129, 0.12), transparent 34rem);
@@ -226,7 +226,7 @@ body {
   top: 1.1rem;
   border-left: 1px solid rgba(52, 211, 153, 0.55);
   border-top: 1px solid rgba(52, 211, 153, 0.55);
-  border-top-left-radius: 24px;
+  border-top-left-radius: 10px;
 }
 
 .nexus-content-stage::after {
@@ -234,14 +234,14 @@ body {
   bottom: 1.1rem;
   border-right: 1px solid rgba(249, 115, 22, 0.48);
   border-bottom: 1px solid rgba(249, 115, 22, 0.48);
-  border-bottom-right-radius: 24px;
+  border-bottom-right-radius: 10px;
 }
 
 .nexus-glass-card {
   position: relative;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 1.5rem;
+  border-radius: 0.75rem;
   background:
     linear-gradient(145deg, rgba(7, 18, 15, 0.82), rgba(3, 6, 6, 0.62)),
     radial-gradient(circle at top left, rgba(16, 185, 129, 0.12), transparent 18rem);
@@ -260,10 +260,66 @@ body {
   animation: nexusSheen 8s ease-in-out infinite;
 }
 
+.nexus-app-shell .rounded-3xl,
+.nexus-app-shell .rounded-2xl {
+  border-radius: 0.75rem !important;
+}
+
+.nexus-app-shell .rounded-xl {
+  border-radius: 0.65rem !important;
+}
+
+.nexus-app-shell .rounded-lg {
+  border-radius: 0.55rem !important;
+}
+
+.nexus-app-shell .rounded-md {
+  border-radius: 0.4rem !important;
+}
+
+.nexus-app-shell .rounded-br-none {
+  border-bottom-right-radius: 0 !important;
+}
+
+.nexus-app-shell .rounded-bl-none {
+  border-bottom-left-radius: 0 !important;
+}
+
+.nexus-app-shell .rounded-br-sm {
+  border-bottom-right-radius: 0.2rem !important;
+}
+
+.nexus-app-shell .rounded-bl-sm {
+  border-bottom-left-radius: 0.2rem !important;
+}
+
 .nexus-dashboard-arena {
   background:
     radial-gradient(circle at 50% 16%, rgba(16, 185, 129, 0.12), transparent 32rem),
     radial-gradient(circle at 82% 70%, rgba(249, 115, 22, 0.1), transparent 26rem);
+}
+
+@media (max-height: 820px) {
+  .nexus-command-bar {
+    min-height: 5.1rem;
+    padding-block: 0.75rem;
+  }
+
+  .nexus-side-dock > div:first-child {
+    padding: 1rem;
+  }
+
+  .nexus-side-dock nav {
+    padding-block: 0.55rem;
+  }
+
+  .nexus-nav-tile {
+    padding: 0.58rem;
+  }
+
+  .nexus-dashboard-arena {
+    min-height: 600px;
+  }
 }
 
 @keyframes nexusFloat {

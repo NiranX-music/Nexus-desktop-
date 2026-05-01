@@ -185,9 +185,9 @@ const IndexRoot = () => {
   }
 
   return (
-    <div className="nexus-desktop-frame flex flex-col h-screen w-screen overflow-hidden relative border border-emerald-400/25 rounded-xl">
+    <div className="nexus-desktop-frame flex flex-col h-screen w-screen overflow-hidden relative border border-emerald-400/25 rounded-md">
       <TitleBar />
-      <div className="flex-1 relative">
+      <div className="min-h-0 flex-1 relative">
         <Nexus
           isSystemActive={isSystemActive}
           toggleSystem={toggleSystem}
