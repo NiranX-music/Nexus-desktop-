@@ -282,17 +282,23 @@ export default function DashboardView({
     }
   ]
 
+  const agentStages = [
+    { label: 'Voice Layer', value: isMicMuted ? 'Muted' : 'Listening', tone: 'text-emerald-300' },
+    { label: 'NVIDIA Build', value: 'Ready', tone: 'text-cyan-300' },
+    { label: 'Local Actions', value: isSystemActive ? 'Armed' : 'Standby', tone: 'text-orange-200' }
+  ]
+
   return (
-    <div className="nexus-dashboard-arena flex-1 p-3 grid grid-cols-12 gap-3 min-h-[620px] h-full overflow-hidden relative animate-in fade-in zoom-in duration-300 w-full">
-      <div className="pointer-events-none absolute inset-x-6 top-3 z-0 flex items-center justify-between rounded-lg border border-emerald-300/15 bg-black/35 px-5 py-2 text-[9px] font-black tracking-[0.28em] text-zinc-500 backdrop-blur-xl">
+    <div className="nexus-dashboard-arena flex-1 p-2 grid grid-cols-12 gap-2 min-h-0 h-full overflow-hidden relative animate-in fade-in zoom-in duration-300 w-full">
+      <div className="pointer-events-none absolute inset-x-4 top-2 z-0 flex items-center justify-between rounded-lg border border-emerald-300/15 bg-black/35 px-4 py-1.5 text-[8px] font-black tracking-[0.26em] text-zinc-500 backdrop-blur-xl">
         <span>COMMAND KERNEL STREAM</span>
         <span className={isSystemActive ? 'text-emerald-300' : 'text-orange-200/70'}>
           {isSystemActive ? 'AUTONOMY ACTIVE' : 'STANDBY MODE'}
         </span>
       </div>
-      <div className="hidden lg:flex col-span-3 flex-col gap-4 h-full z-40">
+      <div className="hidden lg:flex col-span-3 flex-col gap-2 h-full min-h-0 z-40">
         <div
-          className={`${glassPanel} h-[clamp(12rem,30vh,17.5rem)] shrink-0 flex flex-col p-1 overflow-hidden relative group`}
+          className={`${glassPanel} h-[clamp(9rem,24vh,13rem)] shrink-0 flex flex-col p-1 overflow-hidden relative group`}
         >
           <div className="absolute top-3 left-3 z-30 flex items-center gap-2">
             <span
@@ -345,7 +351,7 @@ export default function DashboardView({
         </div>
 
         <div
-          className={`${glassPanel} h-[7.5rem] shrink-0 p-4 flex flex-col justify-between relative overflow-hidden`}
+          className={`${glassPanel} h-[6rem] shrink-0 p-3 flex flex-col justify-between relative overflow-hidden`}
         >
           <div
             className={`absolute inset-0 bg-linear-to-r from-emerald-500/5 to-transparent transition-opacity duration-1000 ${isSystemActive ? 'opacity-100' : 'opacity-0'}`}
@@ -396,7 +402,7 @@ export default function DashboardView({
             </div>
           </div>
 
-          <div className="w-full flex flex-col gap-1 mt-3 relative z-10">
+          <div className="w-full flex flex-col gap-1 mt-2 relative z-10">
             <div className="flex items-center gap-2">
               <span className="text-[7px] font-mono text-zinc-500 w-3">TX</span>
               <div className="flex-1 h-1 bg-black/60 rounded-full overflow-hidden">
@@ -418,17 +424,17 @@ export default function DashboardView({
           </div>
         </div>
 
-        <div className={`${glassPanel} flex-1 p-4 flex flex-col gap-3`}>
+        <div className={`${glassPanel} min-h-0 flex-1 p-3 flex flex-col gap-2`}>
           <div className="flex items-center justify-between border-b border-white/10 pb-2">
             <span className="text-[10px] font-bold tracking-widest text-zinc-400">
               <RiLayoutGridLine className="inline mr-1" /> CORE METRICS
             </span>
           </div>
-          <div className="grid grid-cols-2 gap-3 h-full pb-1">
+          <div className="grid grid-cols-2 gap-2 h-full min-h-0 pb-1">
             {systemMetrics.map((m, i) => (
               <div
                 key={i}
-                className={`cursor-pointer relative rounded-xl p-3 flex flex-col justify-between border border-white/5 overflow-hidden group hover:border-white/10 transition-all duration-300 bg-linear-to-br ${m.bgGradient}`}
+                className={`cursor-pointer relative rounded-xl p-2.5 flex flex-col justify-between border border-white/5 overflow-hidden group hover:border-white/10 transition-all duration-300 bg-linear-to-br ${m.bgGradient}`}
               >
                 <div
                   className={`absolute inset-0 ${m.pattern} opacity-30 group-hover:opacity-60 transition-opacity duration-500 pointer-events-none`}
@@ -475,11 +481,87 @@ export default function DashboardView({
         </div>
       </div>
 
-      <div className="col-span-12 lg:col-span-6 relative flex flex-col items-center justify-center">
-        <div className="pointer-events-none absolute inset-10 rounded-full border border-emerald-300/10 bg-[conic-gradient(from_210deg,transparent,rgba(16,185,129,0.12),transparent,rgba(249,115,22,0.10),transparent)] blur-[0.2px]" />
-        <div className="pointer-events-none absolute h-[62vh] w-[62vh] rounded-full border border-cyan-300/10 shadow-[0_0_120px_rgba(16,185,129,0.10)]" />
+      <div className="col-span-12 lg:col-span-6 relative z-30 flex min-h-0 flex-col gap-2">
+        <div className="grid grid-cols-3 gap-2">
+          <div className={`${glassPanel} p-3`}>
+            <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">
+              Agent State
+            </p>
+            <p className="mt-1 text-sm font-black uppercase text-emerald-200">
+              {isSystemActive ? 'Online' : 'Standby'}
+            </p>
+          </div>
+          <div className={`${glassPanel} p-3`}>
+            <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">
+              Vision
+            </p>
+            <p className="mt-1 text-sm font-black uppercase text-cyan-200">
+              {isVideoOn ? visionMode : 'Offline'}
+            </p>
+          </div>
+          <div className={`${glassPanel} p-3`}>
+            <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">
+              Voice
+            </p>
+            <p className="mt-1 text-sm font-black uppercase text-orange-100">
+              {isMicMuted ? 'Muted' : 'Open'}
+            </p>
+          </div>
+        </div>
+
+        <div className={`${glassPanel} flex min-h-0 flex-1 flex-col p-3`}>
+          <div className="flex items-center justify-between border-b border-white/10 pb-2">
+            <span className="text-[10px] font-black uppercase tracking-[0.22em] text-emerald-300">
+              Agent Core
+            </span>
+            <span className="text-[8px] font-mono uppercase tracking-[0.18em] text-zinc-500">
+              Compact Command Matrix
+            </span>
+          </div>
+
+          <div className="grid min-h-0 flex-1 grid-cols-5 gap-2 pt-3">
+            <div className="relative col-span-3 flex min-h-0 items-center justify-center overflow-hidden border border-emerald-300/15 bg-black/35">
+              <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(16,185,129,0.08)_1px,transparent_1px),linear-gradient(rgba(16,185,129,0.08)_1px,transparent_1px)] bg-[size:22px_22px]" />
+              <div className="absolute inset-x-0 top-0 h-12 bg-linear-to-b from-emerald-300/10 to-transparent" />
+              <div className="absolute bottom-3 left-3 z-10 border border-emerald-300/20 bg-black/70 px-2 py-1 text-[8px] font-black uppercase tracking-[0.18em] text-emerald-200">
+                Neural Kernel
+              </div>
+              <div
+                className={`relative z-10 aspect-square h-[36vh] min-h-[11rem] max-h-[21rem] transition-all duration-700 ${isSystemActive ? 'opacity-100 scale-100' : 'opacity-80 scale-95 grayscale'}`}
+              >
+                <Sphere />
+              </div>
+            </div>
+
+            <div className="col-span-2 flex min-h-0 flex-col gap-2">
+              {agentStages.map((stage) => (
+                <div
+                  key={stage.label}
+                  className="border border-white/10 bg-white/[0.03] p-3"
+                >
+                  <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">
+                    {stage.label}
+                  </p>
+                  <p className={`mt-2 text-lg font-black uppercase ${stage.tone}`}>
+                    {stage.value}
+                  </p>
+                </div>
+              ))}
+              <div className="min-h-0 flex-1 border border-white/10 bg-black/30 p-3">
+                <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">
+                  Command Intent
+                </p>
+                <p className="mt-2 text-xs leading-relaxed text-zinc-300">
+                  Local-first control layer with chat, voice, optics, macros, notes, and device
+                  uplink in one Nexus console.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div
-          className={`lg:hidden absolute top-4 right-4 w-32 h-24 ${glassPanel} z-50 overflow-hidden ${isVideoOn ? 'block' : 'hidden'}`}
+          className={`lg:hidden absolute top-24 right-4 w-32 h-24 ${glassPanel} z-50 overflow-hidden ${isVideoOn ? 'block' : 'hidden'}`}
         >
           <video
             ref={setMobileVideoRef}
@@ -490,42 +572,38 @@ export default function DashboardView({
           />
         </div>
 
-        <div
-          className={`w-[60vh] h-[60vh] max-w-full transition-all duration-1000 ${isSystemActive ? 'opacity-100 scale-100' : 'opacity-85 scale-90 grayscale'}`}
-        >
-          <Sphere />
-        </div>
-
-        <div className="absolute bottom-5 z-50">
-          <div
-            className={`${glassPanel} px-6 py-3 rounded-full flex items-center gap-6 border border-emerald-500/20 shadow-[0_0_30px_rgba(0,0,0,0.5)]`}
-          >
+        <div className={`${glassPanel} z-50 flex items-center justify-between gap-2 p-2`}>
+          <span className="px-2 text-[9px] font-black uppercase tracking-[0.2em] text-zinc-500">
+            Manual Controls
+          </span>
+          <div className="flex items-center gap-2">
             <button
               onClick={onVisionClick}
-              className={`cursor-pointer p-3 rounded-full transition-all ${isVideoOn ? 'bg-red-500/20 text-red-400' : 'hover:bg-white/10 text-zinc-400'}`}
+              className={`cursor-pointer border px-3 py-2 text-xs font-black uppercase tracking-[0.12em] transition-all ${isVideoOn ? 'border-red-500/30 bg-red-500/20 text-red-300' : 'border-white/10 bg-white/[0.03] text-zinc-400 hover:border-emerald-300/40 hover:text-emerald-200'}`}
             >
-              {isVideoOn ? <RiSwapBoxLine size={20} /> : <RiCameraLine size={20} />}
+              {isVideoOn ? <RiSwapBoxLine className="inline" size={16} /> : <RiCameraLine className="inline" size={16} />}{' '}
+              Vision
             </button>
-            <button onClick={toggleSystem} className="relative group mx-2">
-              <div
-                className={`cursor-pointer p-4 rounded-full border-2 transition-all duration-500 ${isSystemActive ? 'bg-emerald-500 border-emerald-400 text-black shadow-[0_0_20px_#10b981]' : 'bg-red-500/10 border-red-500/50 text-red-500'}`}
-              >
-                <RiPhoneFill size={24} className={isSystemActive ? 'animate-pulse' : ''} />
-              </div>
+            <button
+              onClick={toggleSystem}
+              className={`cursor-pointer border px-4 py-2 text-xs font-black uppercase tracking-[0.12em] transition-all ${isSystemActive ? 'border-emerald-300 bg-emerald-400 text-black shadow-[0_0_18px_rgba(16,185,129,0.35)]' : 'border-red-500/40 bg-red-500/10 text-red-300'}`}
+            >
+              <RiPhoneFill className="inline" size={16} /> Core
             </button>
             <button
               onClick={toggleMic}
-              className={`cursor-pointer p-3 rounded-full transition-all ${isMicMuted ? 'bg-red-500/20 text-red-400' : 'bg-emerald-500/10 text-emerald-400'}`}
+              className={`cursor-pointer border px-3 py-2 text-xs font-black uppercase tracking-[0.12em] transition-all ${isMicMuted ? 'border-red-500/30 bg-red-500/20 text-red-300' : 'border-emerald-300/30 bg-emerald-300/10 text-emerald-200'}`}
             >
-              {isMicMuted ? <RiMicOffLine size={20} /> : <RiMicLine size={20} />}
+              {isMicMuted ? <RiMicOffLine className="inline" size={16} /> : <RiMicLine className="inline" size={16} />}{' '}
+              Voice
             </button>
           </div>
         </div>
       </div>
 
       <div className="hidden lg:flex col-span-3 flex-col overflow-hidden h-full z-40">
-        <div className={`${glassPanel} h-full p-4 flex flex-col`}>
-          <div className="flex items-center justify-between border-b border-white/10 pb-3 mb-2">
+        <div className={`${glassPanel} h-full p-3 flex flex-col`}>
+          <div className="flex items-center justify-between border-b border-white/10 pb-2 mb-2">
             <span className="text-[10px] font-bold tracking-widest text-zinc-400">
               <RiTerminalBoxLine className="inline mr-1" /> TRANSCRIPT
             </span>

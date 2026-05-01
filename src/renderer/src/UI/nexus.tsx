@@ -96,34 +96,34 @@ const Nexus = (props: NexusProps) => {
       <div className="nexus-radar-grid absolute inset-0 opacity-45" />
       <div className="nexus-scanline" />
 
-      <div className="relative z-10 flex h-full min-h-0 gap-3 p-3">
-        <aside className="nexus-side-dock hidden w-[282px] shrink-0 flex-col overflow-hidden xl:flex">
-          <div className="relative border-b border-white/10 p-5">
+      <div className="relative z-10 flex h-full min-h-0 gap-2 p-2">
+        <aside className="nexus-side-dock hidden w-[238px] shrink-0 flex-col overflow-hidden xl:flex">
+          <div className="relative border-b border-white/10 p-3">
             <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/60 to-transparent" />
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-3">
               <div className="nexus-brand-core">
                 <RiShieldFlashLine />
               </div>
               <div>
-                <p className="text-[10px] font-black uppercase tracking-[0.38em] text-emerald-300">
+                <p className="text-[9px] font-black uppercase tracking-[0.34em] text-emerald-300">
                   Nexus Tech
                 </p>
-                <h1 className="mt-1 text-2xl font-black uppercase tracking-[0.08em] text-white">
+                <h1 className="mt-1 text-xl font-black uppercase tracking-[0.08em] text-white">
                   Nexus AI
                 </h1>
               </div>
             </div>
-            <div className="mt-5 rounded-2xl border border-emerald-300/15 bg-emerald-300/5 p-4">
-              <p className="text-[10px] font-black uppercase tracking-[0.24em] text-zinc-500">
+            <div className="mt-3 rounded-2xl border border-emerald-300/15 bg-emerald-300/5 p-3">
+              <p className="text-[9px] font-black uppercase tracking-[0.22em] text-zinc-500">
                 Current Deck
               </p>
-              <p className="mt-2 text-lg font-black text-white">{activeNav.label}</p>
+              <p className="mt-1.5 text-base font-black text-white">{activeNav.label}</p>
               <p className="mt-1 text-xs font-semibold text-emerald-100/55">{activeNav.detail}</p>
             </div>
           </div>
 
-          <nav className="flex-1 overflow-y-auto p-3 scrollbar-small">
-            <div className="space-y-2">
+          <nav className="flex-1 overflow-y-auto p-2 scrollbar-small">
+            <div className="space-y-1.5">
               {navTabs.map((tab, index) => (
                 <button
                   key={tab.id}
@@ -133,14 +133,14 @@ const Nexus = (props: NexusProps) => {
                   <span className="text-[10px] font-black text-zinc-600">
                     {String(index + 1).padStart(2, '0')}
                   </span>
-                  <span className="grid h-10 w-10 place-items-center rounded-2xl border border-white/10 bg-black/30 text-lg">
+                  <span className="grid h-8 w-8 place-items-center rounded-2xl border border-white/10 bg-black/30 text-base">
                     {tab.icon}
                   </span>
                   <span className="min-w-0 flex-1 text-left">
-                    <span className="block text-[12px] font-black uppercase tracking-[0.16em]">
+                    <span className="block text-[11px] font-black uppercase tracking-[0.15em]">
                       {tab.label}
                     </span>
-                    <span className="mt-0.5 block truncate text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500">
+                    <span className="mt-0.5 block truncate text-[9px] font-semibold uppercase tracking-[0.12em] text-zinc-500">
                       {tab.detail}
                     </span>
                   </span>
@@ -149,7 +149,7 @@ const Nexus = (props: NexusProps) => {
             </div>
           </nav>
 
-          <div className="border-t border-white/10 p-4">
+          <div className="border-t border-white/10 p-3">
             <div className="grid grid-cols-2 gap-2 text-[10px] font-black uppercase tracking-[0.16em]">
               <div className="rounded-2xl border border-emerald-300/15 bg-emerald-300/5 p-3 text-emerald-300">
                 <RiWifiLine className="mb-2 text-lg" />
@@ -163,14 +163,14 @@ const Nexus = (props: NexusProps) => {
           </div>
         </aside>
 
-        <main className="flex min-w-0 min-h-0 flex-1 flex-col gap-3">
+        <main className="flex min-w-0 min-h-0 flex-1 flex-col gap-2">
           <header className="nexus-command-bar">
             <div className="min-w-0">
               <p className="text-[10px] font-black uppercase tracking-[0.34em] text-emerald-300">
                 Autonomous Desktop Agent
               </p>
               <div className="mt-1 flex flex-wrap items-end gap-3">
-                <h2 className="text-3xl font-black uppercase tracking-tight text-white md:text-4xl">
+                <h2 className="text-2xl font-black uppercase tracking-tight text-white md:text-3xl">
                   {activeNav.label}
                 </h2>
                 <span className="mb-1 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-zinc-400">

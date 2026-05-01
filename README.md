@@ -11,9 +11,6 @@
   <a href="https://github.com/NiranX-music/Nexus-desktop-/network/members">
     <img src="https://img.shields.io/github/forks/NiranX-music/Nexus-desktop-?style=for-the-badge&color=10b981&logo=git&logoColor=white" alt="GitHub forks">
   </a>
-  <a href="https://github.com/NiranX-music/Nexus-desktop-/graphs/contributors">
-    <img src="https://img.shields.io/github/contributors/NiranX-music/Nexus-desktop-?style=for-the-badge&color=10b981&logo=users&logoColor=white" alt="Contributors">
-  </a>
   <a href="https://github.com/NiranX-music/Nexus-desktop-/releases">
     <img src="https://img.shields.io/github/downloads/NiranX-music/Nexus-desktop-/total?style=for-the-badge&color=10b981&logo=download&logoColor=white" alt="Downloads">
   </a>
@@ -32,6 +29,7 @@
 - [🏗️ Architecture](#️-architecture)
 - [💻 Tech Stack](#-tech-stack)
 - [🔐 Security](#-security)
+- [⬇️ Downloads & Releases](#️-downloads--releases)
 - [🚀 Installation & Setup](#-installation--setup)
 - [📁 Project Structure](#-project-structure)
 - [🧠 Development Philosophy](#-development-philosophy)
@@ -39,6 +37,7 @@
 - [🧩 Extending Nexus](#-extending-nexus)
 - [🧠 Roadmap](#-roadmap)
 - [⚠️ Disclaimer](#️-disclaimer)
+- [🏢 About Nexus Tech](#-about-nexus-tech)
 - [👨‍💻 Developer](#developer)
 - [📜 License](#-license)
 
@@ -229,6 +228,19 @@ Nexus is forged using a high-performance stack combining web technologies with d
 
 ---
 
+# ⬇️ Downloads & Releases
+
+Nexus desktop releases are published from the official GitHub Releases page.
+
+- **Latest installer:** [Download Nexus AI for Windows](https://github.com/NiranX-music/Nexus-desktop-/releases/latest)
+- **Current build:** `nexus-ai-1.2.4-setup.exe`
+- **Release channel:** Stable Windows installer with GitHub updater metadata.
+- **Website:** [nexus-desktop-app.vercel.app](https://nexus-desktop-app.vercel.app)
+
+Each release should include the Windows setup executable, update metadata, and release notes that explain what changed for users.
+
+---
+
 # 🚀 Installation & Setup
 
 ### 1. Clone Repo
@@ -392,6 +404,18 @@ You can:
 
 Nexus has deep system-level execution capabilities.  
 Use responsibly. The maintainers are not liable for misuse.
+
+---
+
+# 🏢 About Nexus Tech
+
+Nexus AI is maintained by **Nexus tech** as a local-first autonomous desktop agent for builders, creators, and power users who want voice, AI, automation, and desktop control in one command layer.
+
+- **Company:** Nexus tech
+- **Developer:** NiranX
+- **Team:** Resolute Team
+- **Homepage:** [nexus-desktop-app.vercel.app](https://nexus-desktop-app.vercel.app)
+- **Repository:** [NiranX-music/Nexus-desktop-](https://github.com/NiranX-music/Nexus-desktop-)
 
 ---
 

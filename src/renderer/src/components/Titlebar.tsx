@@ -26,9 +26,9 @@ const TitleBar = () => {
   const close = () => window.electron.ipcRenderer.send('window-close')
 
   return (
-    <div className="w-full h-10 flex items-center justify-between px-4 bg-[#050807]/95 border-b border-emerald-400/15 drag-region select-none z-1000 relative overflow-hidden shadow-[0_14px_40px_rgba(0,0,0,0.45)]">
-      <div className="absolute inset-x-0 top-0 h-px bg-linear-to-r from-transparent via-cyan-300/40 to-transparent" />
-      <div className="absolute left-8 top-1/2 h-8 w-34 -translate-y-1/2 rounded-full bg-emerald-400/10 blur-2xl" />
+    <div className="w-full h-8 flex items-center justify-between px-3 bg-[#030706]/95 border-b border-emerald-300/15 drag-region select-none z-1000 relative overflow-hidden shadow-[0_10px_28px_rgba(0,0,0,0.35)]">
+      <div className="absolute inset-x-0 top-0 h-px bg-linear-to-r from-transparent via-emerald-300/45 to-transparent" />
+      <div className="absolute left-8 top-1/2 h-5 w-28 -translate-y-1/2 rounded-full bg-emerald-300/10 blur-xl" />
       {isMac && (
         <div className="flex items-center gap-2 no-drag z-50">
           <button
@@ -55,23 +55,23 @@ const TitleBar = () => {
       )}
 
       <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-2 opacity-60 pointer-events-none">
-        <div className="w-2 h-2 rounded-full bg-cyan-300 animate-pulse shadow-[0_0_14px_#67e8f9]" />
-        <div className="text-[11px] font-black text-zinc-200 tracking-[0.34em]">
-          Nexus OS // COMMAND DECK // {isMac ? 'MAC' : 'SYSTEM'}
+        <div className="h-1.5 w-1.5 bg-emerald-300 animate-pulse shadow-[0_0_10px_#6ee7b7]" />
+        <div className="text-[9px] font-black text-zinc-300 tracking-[0.32em]">
+          NEXUS CONTROL // {isMac ? 'MAC' : 'SYSTEM'}
         </div>
       </div>
 
       {!isMac && (
-        <div className="flex h-full no-drag ml-auto -mr-4 z-50">
+        <div className="flex h-full no-drag ml-auto -mr-3 z-50">
           <button
             onClick={minimize}
-            className="w-12 h-full flex items-center justify-center text-zinc-400 hover:bg-white/10 hover:text-white transition-colors"
+            className="w-10 h-full flex items-center justify-center text-zinc-500 hover:bg-white/10 hover:text-white transition-colors"
           >
             <RiSubtractLine size={16} />
           </button>
           <button
             onClick={toggleMaximize}
-            className="w-12 h-full flex items-center justify-center text-zinc-400 hover:bg-white/10 hover:text-white transition-colors"
+            className="w-10 h-full flex items-center justify-center text-zinc-500 hover:bg-white/10 hover:text-white transition-colors"
           >
             {isMaximized ? (
               <RiCheckboxMultipleBlankLine size={14} />
@@ -81,7 +81,7 @@ const TitleBar = () => {
           </button>
           <button
             onClick={close}
-            className="w-12 h-full flex items-center justify-center text-zinc-400 hover:bg-red-600 hover:text-white transition-colors"
+            className="w-10 h-full flex items-center justify-center text-zinc-500 hover:bg-red-600 hover:text-white transition-colors"
           >
             <RiCloseLine size={18} />
           </button>
