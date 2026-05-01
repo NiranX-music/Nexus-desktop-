@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Nexus API Edit</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="panel">
+        <p class="eyebrow">/api-edit</p>
+        <h1>Nexus Server API console</h1>
+        <p class="copy">
+          Enter the admin pass to inspect this gateway and view the required NVIDIA
+          secret setup. AI request endpoints stay private from normal visitors.
+        </p>
+
+        <form id="unlockForm" class="form">
+          <label for="adminPass">Admin pass</label>
+          <div class="row">
+            <input id="adminPass" type="password" autocomplete="current-password" placeholder="Enter admin pass" />
+            <button type="submit">Unlock</button>
+          </div>
+          <p id="lockStatus" class="status muted">Default admin pass is configured by the operator.</p>
+        </form>
+
+        <section id="adminPanel" class="admin hidden">
+          <div class="status-card">
+            <span>Gateway health</span>
+            <strong id="gatewayState">Checking...</strong>
+            <small id="gatewayMeta">Waiting for status response.</small>
+          </div>
+
+          <div class="instructions">
+            <h2>Configure Nexus Servers</h2>
+            <p>
+              Add <code>NVIDIA_API_KEY</code> as an environment variable on every Vercel
+              and Netlify mirror. The key is never stored in this browser page.
+            </p>
+            <pre><code>NVIDIA_API_KEY=nvapi-your-key
+NEXUS_ADMIN_PASS=05122010
+NEXUS_ALLOW_PUBLIC_AI=false</code></pre>
+            <p>
+              Deploy the same project to three Vercel sites and three Netlify sites.
+              The desktop app rotates across all mirrors automatically.
+            </p>
+          </div>
+
+          <button id="copyEnv" class="ghost" type="button">Copy environment template</button>
+        </section>
+      </section>
+    </main>
+
+    <script>
+      const DEFAULT_PASS = '05122010'
+      const form = document.querySelector('#unlockForm')
+      const input = document.querySelector('#adminPass')
+      const status = document.querySelector('#lockStatus')
+      const adminPanel = document.querySelector('#adminPanel')
+      const gatewayState = document.querySelector('#gatewayState')
+      const gatewayMeta = document.querySelector('#gatewayMeta')
+      const copyEnv = document.querySelector('#copyEnv')
+
+      const endpointFor = (name) => {
+        const isNetlify = location.hostname.includes('netlify.app') || location.pathname.includes('/.netlify/')
+        return isNetlify ? `/.netlify/functions/nvidia-${name}` : `/api/nvidia/${name}`
+      }
+
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault()
+
+        if (input.value !== DEFAULT_PASS) {
+          status.textContent = 'Incorrect admin pass.'
+          status.className = 'status error'
+          input.select()
+          return
+        }
+
+        status.textContent = 'Unlocked. Checking gateway status...'
+        status.className = 'status ok'
+        adminPanel.classList.remove('hidden')
+        await checkGateway()
+      })
+
+      copyEnv.addEventListener('click', async () => {
+        await navigator.clipboard.writeText(
+          'NVIDIA_API_KEY=nvapi-your-key\\nNEXUS_ADMIN_PASS=05122010\\nNEXUS_ALLOW_PUBLIC_AI=false'
+        )
+        copyEnv.textContent = 'Copied'
+        setTimeout(() => {
+          copyEnv.textContent = 'Copy environment template'
+        }, 1400)
+      })
+
+      async function checkGateway() {
+        try {
+          const response = await fetch(endpointFor('status'), {
+            headers: {
+              'x-nexus-admin-pass': DEFAULT_PASS
+            }
+          })
+          const data = await response.json()
+          gatewayState.textContent = data.configured ? 'NVIDIA key configured' : 'NVIDIA key missing'
+          gatewayMeta.textContent = data.configured
+            ? 'This mirror can serve Nexus Server AI requests.'
+            : 'Set NVIDIA_API_KEY in this hosting provider before using this mirror.'
+        } catch (error) {
+          gatewayState.textContent = 'Status check failed'
+          gatewayMeta.textContent = error.message || 'Unable to reach this gateway.'
+        }
+      }
+    </script>
+  </body>
+</html>
+

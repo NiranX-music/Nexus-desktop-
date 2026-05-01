@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Nexus AI Gateway</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <p class="eyebrow">Nexus Servers</p>
+        <h1>Private AI routing layer for the Nexus desktop agent.</h1>
+        <p class="copy">
+          This site is not a public chat page. It hosts protected NVIDIA-compatible API
+          endpoints used by the Nexus desktop app when users select Run models on Nexus
+          Servers.
+        </p>
+        <div class="grid">
+          <a class="card" href="./api-edit.html">
+            <span>Admin</span>
+            <strong>Open API edit console</strong>
+            <small>Password protected with the universal admin pass.</small>
+          </a>
+          <a class="card" href="/api/nvidia/status">
+            <span>Vercel</span>
+            <strong>Status endpoint</strong>
+            <small>Requires desktop header or admin pass for JSON access.</small>
+          </a>
+          <a class="card" href="/.netlify/functions/nvidia-status">
+            <span>Netlify</span>
+            <strong>Status endpoint</strong>
+            <small>Used automatically on Netlify gateway mirrors.</small>
+          </a>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
+

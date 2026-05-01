@@ -1,0 +1,16 @@
+{
+  "name": "nexus-ai-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "High-availability Nexus AI gateway for Vercel and Netlify deployments.",
+  "scripts": {
+    "dev:vercel": "vercel dev",
+    "dev:netlify": "netlify dev",
+    "build": "node scripts/build-check.mjs",
+    "check": "node scripts/build-check.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
