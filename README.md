@@ -1,8 +1,8 @@
 <div align="center">
 
-![Nexus Neural OS Documentation Banner](./assets/banner.jpeg)
+![Nexus AI neural desktop banner](./assets/nexus-banner.svg)
 
-## The Autonomous Neural OS Agent
+## Nexus AI: Autonomous Desktop Agent
 
 <div style="display: flex; justify-center; gap: 10px; margin-bottom: 20px;">
   <a href="https://github.com/NiranX-music/Nexus-desktop-/stargazers">
@@ -19,7 +19,7 @@
   </a>
 </div>
 
-**A local-first neural execution system that turns intent into real OS actions.**
+**A local-first autonomous desktop layer that turns intent into real OS actions, voice workflows, and Nexus Server AI.**
 
 ---
 
@@ -39,18 +39,18 @@
 - [🧩 Extending Nexus](#-extending-nexus)
 - [🧠 Roadmap](#-roadmap)
 - [⚠️ Disclaimer](#️-disclaimer)
-- [👨‍💻 Architect](#-architect)
+- [👨‍💻 Developer](#developer)
 - [📜 License](#-license)
 
 ---
 
 # ⚡ Overview
 
-Nexus is not a chatbot.
+Nexus is not just a chatbot.
 
-It is a **local-first AI Operating System layer** that executes real-world actions across your system, applications, and devices.
+It is a **local-first AI operating layer** for Windows desktop automation. Nexus combines voice control, command execution, file operations, memory, device uplinks, and NVIDIA-powered AI chat in a single operator interface.
 
-> Speak your command. Nexus executes it.
+> Speak or type your command. Nexus plans, routes, and executes it.
 
 ---
 
@@ -264,14 +264,14 @@ npm run dev
 
 ## 🔑 System Keys & Configuration
 
-Nexus operates locally, but requires specific API keys to bridge the gap to large language models and search engines. **Your keys are encrypted and stored locally on your machine. They are never sent to our servers.**
+Nexus operates locally by default, but can bridge into cloud models and search engines when you enable provider integrations. **User-owned keys are encrypted and stored locally on your machine. Nexus Server Mode uses the private gateway mirrors instead, so end users can chat without entering their own NVIDIA key.**
 
 ### How to Configure
 
 - **Desktop App Users:** Open Nexus, navigate to the **Settings Tab (Command Center) > API Keys**, and paste your keys directly into the vault.
 - **Developers (Running from source):** Rename `.env.example` to `.env` in the root directory and place your keys there for local testing.
 - **Nexus Server Mode:** Users can select **Run models on Nexus Servers** in Settings. This routes AI chat through six private gateway mirrors: three Vercel and three Netlify sites.
-- **Gateway Admin:** Open `/api-edit.html` on any gateway mirror and unlock with `05122010` to inspect setup status and environment instructions.
+- **Gateway Admin:** Open `/api-edit.html` on any gateway mirror and unlock with the admin pass to inspect setup status and environment instructions.
 
 ### Nexus AI Gateway Mirrors
 
@@ -282,7 +282,7 @@ Nexus operates locally, but requires specific API keys to bridge the gap to larg
 - `https://nexus-ai-gateway-2.netlify.app`
 - `https://nexus-ai-gateway-3.netlify.app`
 
-Set `NVIDIA_API_KEY` in every gateway hosting provider before enabling Nexus Server AI for production users.
+Set `NVIDIA_API_KEY` as a secret environment variable in every gateway hosting provider before enabling Nexus Server AI for production users.
 
 ### 🔴 Required Keys
 

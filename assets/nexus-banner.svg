@@ -1,0 +1,75 @@
+<svg width="1280" height="640" viewBox="0 0 1280 640" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Nexus AI neural desktop banner</title>
+  <desc id="desc">A dark green command interface banner for Nexus AI by Nexus Tech.</desc>
+  <defs>
+    <radialGradient id="coreGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(650 300) rotate(90) scale(280 430)">
+      <stop stop-color="#21FFD0" stop-opacity="0.45"/>
+      <stop offset="0.45" stop-color="#00B784" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#020604" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="panel" x1="72" y1="72" x2="1208" y2="568" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#071B16"/>
+      <stop offset="0.55" stop-color="#020806"/>
+      <stop offset="1" stop-color="#170B03"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="240" y1="140" x2="1050" y2="520" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4DFFD5"/>
+      <stop offset="0.6" stop-color="#11E5A5"/>
+      <stop offset="1" stop-color="#FF8A2B"/>
+    </linearGradient>
+    <filter id="softGlow" x="-40%" y="-40%" width="180%" height="180%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <pattern id="grid" width="42" height="42" patternUnits="userSpaceOnUse">
+      <path d="M42 0H0V42" stroke="#19F5B2" stroke-opacity="0.08" stroke-width="1"/>
+    </pattern>
+  </defs>
+  <rect width="1280" height="640" fill="#020403"/>
+  <rect x="32" y="32" width="1216" height="576" rx="18" fill="url(#panel)" stroke="#18F5B0" stroke-opacity="0.28" stroke-width="2"/>
+  <rect x="32" y="32" width="1216" height="576" rx="18" fill="url(#grid)"/>
+  <rect x="32" y="32" width="1216" height="576" rx="18" fill="url(#coreGlow)"/>
+  <path d="M88 118H280M1000 118H1192M88 522H280M1000 522H1192" stroke="#1BFFD1" stroke-opacity="0.45" stroke-width="2"/>
+  <path d="M88 118V222M1192 118V222M88 418V522M1192 418V522" stroke="#1BFFD1" stroke-opacity="0.45" stroke-width="2"/>
+  <g opacity="0.78">
+    <rect x="96" y="196" width="260" height="176" rx="10" fill="#020806" fill-opacity="0.72" stroke="#20F8B5" stroke-opacity="0.28"/>
+    <text x="122" y="232" fill="#31FFD0" font-family="Consolas, monospace" font-size="18" font-weight="700" letter-spacing="5">LOCAL FIRST</text>
+    <path d="M122 266H330M122 302H286M122 338H318" stroke="#20F8B5" stroke-opacity="0.5" stroke-width="8"/>
+    <circle cx="326" cy="334" r="14" fill="#21FFD0" fill-opacity="0.8"/>
+  </g>
+  <g opacity="0.78">
+    <rect x="924" y="194" width="260" height="184" rx="10" fill="#020806" fill-opacity="0.72" stroke="#20F8B5" stroke-opacity="0.28"/>
+    <text x="950" y="230" fill="#31FFD0" font-family="Consolas, monospace" font-size="18" font-weight="700" letter-spacing="5">AI GATEWAY</text>
+    <path d="M950 266H1158M950 302H1102M950 338H1136" stroke="#20F8B5" stroke-opacity="0.5" stroke-width="8"/>
+    <circle cx="1158" cy="334" r="14" fill="#FF8A2B" fill-opacity="0.9"/>
+  </g>
+  <g filter="url(#softGlow)">
+    <circle cx="640" cy="304" r="156" stroke="#19F5B2" stroke-opacity="0.36" stroke-width="2"/>
+    <circle cx="640" cy="304" r="102" stroke="#19F5B2" stroke-opacity="0.46" stroke-width="2"/>
+    <circle cx="640" cy="304" r="42" fill="#020403" stroke="#E7FFF8" stroke-opacity="0.8" stroke-width="2"/>
+    <path d="M448 304C500 226 569 188 640 188C711 188 780 226 832 304C780 382 711 420 640 420C569 420 500 382 448 304Z" stroke="url(#accent)" stroke-width="5"/>
+    <path d="M508 304C545 256 590 234 640 234C690 234 735 256 772 304C735 352 690 374 640 374C590 374 545 352 508 304Z" stroke="#E7FFF8" stroke-opacity="0.48" stroke-width="2"/>
+    <g stroke="#28FFD0" stroke-opacity="0.72" stroke-width="1.4">
+      <path d="M488 304H580M700 304H792"/>
+      <path d="M640 148V238M640 370V462"/>
+      <path d="M530 194L592 258M688 350L750 414"/>
+      <path d="M750 194L688 258M592 350L530 414"/>
+    </g>
+    <g fill="#DFFFF8">
+      <circle cx="548" cy="256" r="4"/>
+      <circle cx="592" cy="214" r="4"/>
+      <circle cx="690" cy="246" r="4"/>
+      <circle cx="734" cy="318" r="4"/>
+      <circle cx="588" cy="360" r="4"/>
+      <circle cx="640" cy="188" r="4"/>
+      <circle cx="640" cy="420" r="4"/>
+    </g>
+  </g>
+  <text x="640" y="512" text-anchor="middle" fill="#F5FFF9" font-family="Segoe UI, Arial, sans-serif" font-size="82" font-weight="900" letter-spacing="14">NEXUS AI</text>
+  <text x="640" y="558" text-anchor="middle" fill="#8DFFDD" font-family="Consolas, monospace" font-size="22" font-weight="700" letter-spacing="7">AUTONOMOUS DESKTOP AGENT // NEXUS TECH</text>
+  <text x="74" y="586" fill="#6B7C77" font-family="Consolas, monospace" font-size="14" font-weight="700" letter-spacing="2">MADE WITH LOVE FROM NIRANX, RESOLUTE TEAM</text>
+  <text x="1206" y="586" text-anchor="end" fill="#6B7C77" font-family="Consolas, monospace" font-size="14" font-weight="700" letter-spacing="2">nexus-desktop-app.vercel.app</text>
+</svg>

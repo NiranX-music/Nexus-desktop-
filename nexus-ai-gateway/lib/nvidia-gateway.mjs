@@ -1,5 +1,5 @@
 const NVIDIA_BASE_URL = 'https://integrate.api.nvidia.com/v1'
-const DEFAULT_MODEL = 'deepseek-ai/deepseek-v4-pro'
+const DEFAULT_MODEL = 'google/gemma-2-2b-it'
 const DEFAULT_ADMIN_PASS = '05122010'
 
 const MODEL_CATALOG = [
@@ -170,14 +170,18 @@ export async function createChatResult(rawBody = {}, headers = {}) {
     }
   }
 
+  const model = String(rawBody.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL
   const payload = {
-    model: String(rawBody.model || DEFAULT_MODEL),
+    model,
     messages: finalMessages,
-    temperature: clampNumber(rawBody.temperature, 0, 2, 1),
+    temperature: clampNumber(rawBody.temperature, 0.01, 2, 1),
     top_p: clampNumber(rawBody.top_p, 0, 1, 0.95),
     max_tokens: Math.min(Number(rawBody.max_tokens) || 4096, 16384),
-    chat_template_kwargs: { thinking: false },
     stream: false
+  }
+
+  if (supportsThinkingToggle(model)) {
+    payload.chat_template_kwargs = { thinking: false }
   }
 
   const controller = new AbortController()
@@ -326,6 +330,10 @@ function clampNumber(value, min, max, fallback) {
   const numeric = Number(value)
   if (!Number.isFinite(numeric)) return fallback
   return Math.min(Math.max(numeric, min), max)
+}
+
+function supportsThinkingToggle(model) {
+  return model.includes('deepseek-v4')
 }
 
 function parseJson(text) {

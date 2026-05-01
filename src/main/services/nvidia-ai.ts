@@ -2,7 +2,7 @@ import { IpcMain } from 'electron'
 import OpenAI from 'openai'
 
 const NVIDIA_BASE_URL = 'https://integrate.api.nvidia.com/v1'
-const DEFAULT_MODEL = 'deepseek-ai/deepseek-v4-pro'
+const DEFAULT_MODEL = 'google/gemma-2-2b-it'
 const DEFAULT_NEXUS_GATEWAYS = [
   'https://nexus-ai-gateway.vercel.app',
   'https://nexus-ai-gateway-2.vercel.app',
@@ -191,15 +191,21 @@ export default function registerNvidiaAI({ ipcMain }: { ipcMain: IpcMain }) {
         baseURL: NVIDIA_BASE_URL
       })
 
-      const completion = await client.chat.completions.create({
-        model: payload.model || DEFAULT_MODEL,
+      const model = String(payload.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL
+      const request: any = {
+        model,
         messages: finalMessages,
-        temperature: payload.temperature ?? 1,
+        temperature: clampNumber(payload.temperature, 0.01, 2, 1),
         top_p: payload.top_p ?? 0.95,
         max_tokens: payload.max_tokens ?? 16384,
-        chat_template_kwargs: { thinking: false },
         stream: false
-      } as any)
+      }
+
+      if (supportsThinkingToggle(model)) {
+        request.chat_template_kwargs = { thinking: false }
+      }
+
+      const completion = await client.chat.completions.create(request)
 
       return {
         success: true,
@@ -251,3 +257,11 @@ export default function registerNvidiaAI({ ipcMain }: { ipcMain: IpcMain }) {
     }
   })
 }
+
+const clampNumber = (value: unknown, min: number, max: number, fallback: number) => {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return fallback
+  return Math.min(Math.max(numeric, min), max)
+}
+
+const supportsThinkingToggle = (model: string) => model.includes('deepseek-v4')
