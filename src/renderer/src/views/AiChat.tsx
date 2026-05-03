@@ -28,7 +28,7 @@ interface ChatMessage {
 }
 
 const defaultWelcome =
-  'Nexus Cloud AI is online. Pick a model and type a prompt. Default mode runs on Nexus Servers with multi-site failover; you can switch to your own NVIDIA key in Settings.'
+  'Nexus AI is online. Pick a model and type a prompt. Default mode runs on the hosted Nexus API; you can switch to your own NVIDIA key in Settings.'
 
 const systemPrompt = `You are Nexus, a precise AI chat assistant inside a Windows desktop app. Be helpful, concise, technical when useful, and keep a confident but warm tone.`
 
@@ -40,6 +40,21 @@ const categories: Array<keyof NvidiaModelDefaults> = [
   'translation'
 ]
 
+const getInitialVoiceReplies = () => {
+  const stored = localStorage.getItem('nexus_nvidia_voice_replies')
+  return stored === null ? true : stored === 'true'
+}
+
+const cleanSpeechText = (text: string) =>
+  text
+    .replace(/```[\s\S]*?```/g, 'code block omitted.')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/https?:\/\/\S+/g, 'link')
+    .replace(/[*_#>~]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
 export default function AiChatView() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: 'assistant', content: defaultWelcome }
@@ -50,9 +65,7 @@ export default function AiChatView() {
   const [selectedModel, setSelectedModel] = useState(DEFAULT_NVIDIA_MODEL_DEFAULTS.chat)
   const [isSending, setIsSending] = useState(false)
   const [error, setError] = useState('')
-  const [voiceReplies, setVoiceReplies] = useState(
-    localStorage.getItem('nexus_nvidia_voice_replies') === 'true'
-  )
+  const [voiceReplies, setVoiceReplies] = useState(getInitialVoiceReplies)
   const [providerMode, setProviderMode] = useState(
     localStorage.getItem(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY) || 'nexus'
   )
@@ -67,6 +80,9 @@ export default function AiChatView() {
     setDefaults(storedDefaults)
     setSelectedModel(storedDefaults.chat)
     setProviderMode(localStorage.getItem(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY) || 'nexus')
+    if (localStorage.getItem('nexus_nvidia_voice_replies') === null) {
+      localStorage.setItem('nexus_nvidia_voice_replies', 'true')
+    }
   }, [])
 
   useEffect(() => {
@@ -77,19 +93,34 @@ export default function AiChatView() {
     if (!('speechSynthesis' in window)) return
 
     window.speechSynthesis.cancel()
-    const utterance = new SpeechSynthesisUtterance(text)
-    const voiceProfile = localStorage.getItem('nexus_voice_profile') || 'MALE'
-    const voices = window.speechSynthesis.getVoices()
-    const preferredVoice = voices.find((voice) =>
-      voiceProfile === 'FEMALE'
-        ? /female|zira|aria|jenny|susan|eva/i.test(voice.name)
-        : /male|david|guy|mark|ravi/i.test(voice.name)
-    )
+    const spokenText = cleanSpeechText(text)
+    if (!spokenText) return
 
-    if (preferredVoice) utterance.voice = preferredVoice
-    utterance.rate = 1
-    utterance.pitch = voiceProfile === 'FEMALE' ? 1.05 : 0.92
-    window.speechSynthesis.speak(utterance)
+    const speakNow = () => {
+      const utterance = new SpeechSynthesisUtterance(spokenText)
+      const voiceProfile = localStorage.getItem('nexus_voice_profile') || 'MALE'
+      const voices = window.speechSynthesis.getVoices()
+      const preferredVoice = voices.find((voice) =>
+        voiceProfile === 'FEMALE'
+          ? /female|zira|aria|jenny|susan|eva/i.test(voice.name)
+          : /male|david|guy|mark|ravi/i.test(voice.name)
+      )
+
+      if (preferredVoice) utterance.voice = preferredVoice
+      utterance.rate = 1
+      utterance.pitch = voiceProfile === 'FEMALE' ? 1.05 : 0.92
+      window.speechSynthesis.speak(utterance)
+    }
+
+    if (window.speechSynthesis.getVoices().length > 0) {
+      speakNow()
+      return
+    }
+
+    window.speechSynthesis.onvoiceschanged = () => {
+      window.speechSynthesis.onvoiceschanged = null
+      speakNow()
+    }
   }
 
   const stopSpeaking = () => {
@@ -149,6 +180,7 @@ export default function AiChatView() {
           content: `NVIDIA link failed: ${message}`
         }
       ])
+      if (voiceReplies) speak(`NVIDIA chat failed. ${message}`)
     } finally {
       setIsSending(false)
     }
@@ -248,13 +280,13 @@ export default function AiChatView() {
         >
           <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
             <div>
-              <p className="flex items-center gap-2 text-[10px] font-mono font-bold uppercase tracking-[0.24em] text-emerald-400">
-                <RiBrainLine /> {providerMode === 'own-key' ? 'Personal NVIDIA Key' : 'Nexus Servers Failover'}
+                <p className="flex items-center gap-2 text-[10px] font-mono font-bold uppercase tracking-[0.24em] text-emerald-400">
+                <RiBrainLine /> {providerMode === 'own-key' ? 'Personal NVIDIA Key' : 'Hosted Nexus API'}
               </p>
               <h3 className="mt-1 text-sm font-bold text-white">
                 {selectedModel}
                 <span className="ml-3 rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-[10px] uppercase tracking-widest text-emerald-200">
-                  {providerMode === 'own-key' ? 'Own API' : 'Nexus Cloud'}
+                  {providerMode === 'own-key' ? 'Own API' : 'Nexus API'}
                 </span>
               </h3>
             </div>
@@ -309,6 +341,18 @@ export default function AiChatView() {
           )}
 
           <form onSubmit={handleSubmit} className="border-t border-white/10 p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-[10px] font-black uppercase tracking-[0.2em]">
+              <span className="text-zinc-500">Text Command</span>
+              <span
+                className={`rounded-full border px-3 py-1 ${
+                  voiceReplies
+                    ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300'
+                    : 'border-white/10 bg-white/5 text-zinc-500'
+                }`}
+              >
+                Voice Reply {voiceReplies ? 'On' : 'Off'}
+              </span>
+            </div>
             <div className="flex items-end gap-3 rounded-2xl border border-white/10 bg-black/60 p-3 focus-within:border-emerald-500/40">
               <textarea
                 value={input}

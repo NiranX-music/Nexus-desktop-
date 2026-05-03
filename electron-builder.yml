@@ -62,6 +62,5 @@ appImage:
 
 npmRebuild: false
 publish:
-  provider: github
-  owner: NiranX-music
-  repo: Nexus-desktop-
+  provider: generic
+  url: https://nexus-desktop-app.vercel.app/updates/win

@@ -1,6 +1,9 @@
 const NVIDIA_BASE_URL = 'https://integrate.api.nvidia.com/v1'
-const DEFAULT_MODEL = 'google/gemma-2-2b-it'
+const DEFAULT_MODEL = 'deepseek-ai/deepseek-v4-pro'
 const DEFAULT_ADMIN_PASS = '05122010'
+const NVIDIA_API_KEY_ENV_NAMES = ['NVIDIA_API_KEY', 'NVIDIA_BUILD_API_KEY', 'NVIDIA_NIM_API_KEY']
+const PLACEHOLDER_NVIDIA_KEY_RE =
+  /^(your-|paste-|replace-|example|placeholder|nvapi[_-]?your|\$NVIDIA_API_KEY|\$\{NVIDIA_API_KEY\})/i
 
 const MODEL_CATALOG = [
   'deepseek-ai/deepseek-v4-pro',
@@ -37,6 +40,26 @@ const corsHeaders = {
 export function getEnvValue(name) {
   const netlifyValue = globalThis.Netlify?.env?.get?.(name)
   return (netlifyValue || process.env[name] || '').trim()
+}
+
+export function normalizeNvidiaApiKey(value = '') {
+  const candidate = String(value || '')
+    .trim()
+    .replace(/^Bearer\s+/i, '')
+    .replace(/^['"]|['"]$/g, '')
+    .trim()
+
+  if (!candidate || PLACEHOLDER_NVIDIA_KEY_RE.test(candidate)) return ''
+  return candidate
+}
+
+export function getNvidiaApiKey() {
+  for (const name of NVIDIA_API_KEY_ENV_NAMES) {
+    const apiKey = normalizeNvidiaApiKey(getEnvValue(name))
+    if (apiKey) return apiKey
+  }
+
+  return ''
 }
 
 export function buildHeaders(extra = {}) {
@@ -96,7 +119,7 @@ export function getGatewayStatus(headers = {}) {
     }
   }
 
-  const apiKey = getEnvValue('NVIDIA_API_KEY')
+  const apiKey = getNvidiaApiKey()
   return {
     status: 200,
     body: {
@@ -143,13 +166,14 @@ export async function createChatResult(rawBody = {}, headers = {}) {
     }
   }
 
-  const apiKey = getEnvValue('NVIDIA_API_KEY')
+  const apiKey = getNvidiaApiKey()
   if (!apiKey) {
     return {
       status: 503,
       body: {
         success: false,
-        error: 'Nexus Server NVIDIA_API_KEY is not configured on this gateway.'
+        error:
+          'Nexus Server NVIDIA_API_KEY is not configured on this gateway. Add a real NVIDIA Build key to NVIDIA_API_KEY, NVIDIA_BUILD_API_KEY, or NVIDIA_NIM_API_KEY.'
       }
     }
   }
@@ -176,7 +200,7 @@ export async function createChatResult(rawBody = {}, headers = {}) {
     messages: finalMessages,
     temperature: clampNumber(rawBody.temperature, 0.01, 2, 1),
     top_p: clampNumber(rawBody.top_p, 0, 1, 0.95),
-    max_tokens: Math.min(Number(rawBody.max_tokens) || 4096, 16384),
+    max_tokens: resolveMaxTokens(rawBody.max_tokens, model),
     stream: false
   }
 
@@ -245,7 +269,7 @@ export async function createModelsResult(headers = {}) {
     }
   }
 
-  const apiKey = getEnvValue('NVIDIA_API_KEY')
+  const apiKey = getNvidiaApiKey()
   if (!apiKey) {
     return {
       status: 200,
@@ -330,6 +354,18 @@ function clampNumber(value, min, max, fallback) {
   const numeric = Number(value)
   if (!Number.isFinite(numeric)) return fallback
   return Math.min(Math.max(numeric, min), max)
+}
+
+function maxTokensLimitForModel(model) {
+  const normalized = String(model || '').toLowerCase()
+  if (normalized.includes('deepseek-v4')) return 16384
+  return 4096
+}
+
+function resolveMaxTokens(value, model) {
+  const limit = maxTokensLimitForModel(model)
+  const fallback = Math.min(limit, String(model || '').toLowerCase().includes('deepseek-v4') ? 8192 : 4096)
+  return clampNumber(value, 1, limit, fallback)
 }
 
 function supportsThinkingToggle(model) {

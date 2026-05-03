@@ -351,7 +351,7 @@ export default function DashboardView({
         </div>
 
         <div
-          className={`${glassPanel} h-[6rem] shrink-0 p-3 flex flex-col justify-between relative overflow-hidden`}
+          className={`${glassPanel} h-[8.35rem] shrink-0 p-3 flex flex-col justify-between relative overflow-hidden`}
         >
           <div
             className={`absolute inset-0 bg-linear-to-r from-emerald-500/5 to-transparent transition-opacity duration-1000 ${isSystemActive ? 'opacity-100' : 'opacity-0'}`}
@@ -369,29 +369,29 @@ export default function DashboardView({
             </span>
           </div>
 
-          <div className="flex items-center justify-between mt-2 relative z-10">
-            <div className="flex flex-col">
-              <span className="text-[8px] text-zinc-600 font-mono tracking-widest flex items-center gap-1">
+          <div className="grid grid-cols-3 gap-1.5 mt-2 relative z-10">
+            <div className="border border-white/5 bg-black/25 p-2">
+              <span className="text-[7px] text-zinc-500 font-mono tracking-[0.18em] flex items-center gap-1">
                 WSS LATENCY
               </span>
-              <span className="text-xs font-bold text-emerald-50 font-mono flex items-center gap-1.5 transition-all">
+              <span className="mt-1 text-[11px] font-bold text-emerald-50 font-mono flex items-center gap-1.5 transition-all">
                 <RiWifiLine className={isSystemActive ? 'text-emerald-400' : 'text-zinc-600'} />
                 {isSystemActive ? `${networkStats.ping}ms` : '--'}
               </span>
             </div>
 
-            <div className="flex flex-col items-center">
-              <span className="text-[8px] text-zinc-600 font-mono tracking-widest">
+            <div className="border border-white/5 bg-black/25 p-2">
+              <span className="text-[7px] text-zinc-500 font-mono tracking-[0.18em]">
                 PACKET RATE
               </span>
-              <span className="text-xs font-bold text-emerald-50 font-mono transition-all">
+              <span className="mt-1 block text-[11px] font-bold text-emerald-50 font-mono transition-all">
                 {isSystemActive ? `${networkStats.rate} MB/s` : '--'}
               </span>
             </div>
 
-            <div className="flex flex-col items-end">
-              <span className="text-[8px] text-zinc-600 font-mono tracking-widest">ROUTING</span>
-              <span className="text-xs font-bold text-emerald-50 font-mono flex items-center gap-1.5">
+            <div className="border border-white/5 bg-black/25 p-2">
+              <span className="text-[7px] text-zinc-500 font-mono tracking-[0.18em]">ROUTING</span>
+              <span className="mt-1 text-[11px] font-bold text-emerald-50 font-mono flex items-center gap-1.5">
                 {isSystemActive ? 'GLOBAL' : 'LOCAL'}
                 {isSystemActive ? (
                   <RiEarthLine className="text-cyan-400" />
@@ -402,10 +402,10 @@ export default function DashboardView({
             </div>
           </div>
 
-          <div className="w-full flex flex-col gap-1 mt-2 relative z-10">
+          <div className="w-full grid grid-cols-2 gap-2 mt-2 relative z-10">
             <div className="flex items-center gap-2">
-              <span className="text-[7px] font-mono text-zinc-500 w-3">TX</span>
-              <div className="flex-1 h-1 bg-black/60 rounded-full overflow-hidden">
+              <span className="text-[7px] font-mono text-zinc-500 w-4">TX</span>
+              <div className="flex-1 h-1.5 bg-black/60 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-emerald-500 shadow-[0_0_8px_#10b981] transition-all duration-300 ease-out"
                   style={{ width: `${isSystemActive ? networkStats.tx : 0}%` }}
@@ -413,8 +413,8 @@ export default function DashboardView({
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[7px] font-mono text-zinc-500 w-3">RX</span>
-              <div className="flex-1 h-1 bg-black/60 rounded-full overflow-hidden">
+              <span className="text-[7px] font-mono text-zinc-500 w-4">RX</span>
+              <div className="flex-1 h-1.5 bg-black/60 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-cyan-500 shadow-[0_0_8px_#06b6d4] transition-all duration-300 ease-out delay-75"
                   style={{ width: `${isSystemActive ? networkStats.rx : 0}%` }}
@@ -572,30 +572,51 @@ export default function DashboardView({
           />
         </div>
 
-        <div className={`${glassPanel} z-50 flex items-center justify-between gap-2 p-2`}>
-          <span className="px-2 text-[9px] font-black uppercase tracking-[0.2em] text-zinc-500">
-            Manual Controls
-          </span>
-          <div className="flex items-center gap-2">
+        <div className="nexus-manual-control-rail z-50">
+          <div className="flex min-w-0 flex-col">
+            <span className="text-[9px] font-black uppercase tracking-[0.28em] text-emerald-300/70">
+              Manual Controls
+            </span>
+            <span className="mt-1 text-[8px] font-mono uppercase tracking-[0.18em] text-zinc-500">
+              Tactical override bus
+            </span>
+          </div>
+          <div className="flex min-w-0 items-center gap-2">
             <button
               onClick={onVisionClick}
-              className={`cursor-pointer border px-3 py-2 text-xs font-black uppercase tracking-[0.12em] transition-all ${isVideoOn ? 'border-red-500/30 bg-red-500/20 text-red-300' : 'border-white/10 bg-white/[0.03] text-zinc-400 hover:border-emerald-300/40 hover:text-emerald-200'}`}
+              className={`nexus-control-switch ${isVideoOn ? 'is-danger' : 'is-idle'}`}
             >
-              {isVideoOn ? <RiSwapBoxLine className="inline" size={16} /> : <RiCameraLine className="inline" size={16} />}{' '}
-              Vision
+              <span className="nexus-control-icon">
+                {isVideoOn ? <RiSwapBoxLine size={17} /> : <RiCameraLine size={17} />}
+              </span>
+              <span>
+                <span className="block text-[10px]">Vision</span>
+                <span className="block text-[7px] opacity-55">{isVideoOn ? 'Switch feed' : 'Optics'}</span>
+              </span>
             </button>
             <button
               onClick={toggleSystem}
-              className={`cursor-pointer border px-4 py-2 text-xs font-black uppercase tracking-[0.12em] transition-all ${isSystemActive ? 'border-emerald-300 bg-emerald-400 text-black shadow-[0_0_18px_rgba(16,185,129,0.35)]' : 'border-red-500/40 bg-red-500/10 text-red-300'}`}
+              className={`nexus-control-switch ${isSystemActive ? 'is-active' : 'is-danger'}`}
             >
-              <RiPhoneFill className="inline" size={16} /> Core
+              <span className="nexus-control-icon">
+                <RiPhoneFill size={17} />
+              </span>
+              <span>
+                <span className="block text-[10px]">Core</span>
+                <span className="block text-[7px] opacity-55">{isSystemActive ? 'Online' : 'Standby'}</span>
+              </span>
             </button>
             <button
               onClick={toggleMic}
-              className={`cursor-pointer border px-3 py-2 text-xs font-black uppercase tracking-[0.12em] transition-all ${isMicMuted ? 'border-red-500/30 bg-red-500/20 text-red-300' : 'border-emerald-300/30 bg-emerald-300/10 text-emerald-200'}`}
+              className={`nexus-control-switch ${isMicMuted ? 'is-danger' : 'is-active'}`}
             >
-              {isMicMuted ? <RiMicOffLine className="inline" size={16} /> : <RiMicLine className="inline" size={16} />}{' '}
-              Voice
+              <span className="nexus-control-icon">
+                {isMicMuted ? <RiMicOffLine size={17} /> : <RiMicLine size={17} />}
+              </span>
+              <span>
+                <span className="block text-[10px]">Voice</span>
+                <span className="block text-[7px] opacity-55">{isMicMuted ? 'Muted' : 'Live'}</span>
+              </span>
             </button>
           </div>
         </div>

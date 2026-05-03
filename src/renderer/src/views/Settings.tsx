@@ -53,6 +53,12 @@ const DEFAULT_DEVELOPER_PROFILE = {
   website: 'https://nexus-desktop-app.vercel.app',
   note: 'Nexus AI is maintained by NiranX and Resolute Team.'
 }
+const sanitizeNvidiaKey = (value = '') =>
+  value
+    .trim()
+    .replace(/^Bearer\s+/i, '')
+    .replace(/^['"]|['"]$/g, '')
+    .trim()
 
 const getDeveloperProfile = () => {
   try {
@@ -100,7 +106,8 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const [enrollStatus, setEnrollStatus] = useState('')
   const videoRef = useRef<HTMLVideoElement>(null)
 
-  const [appVersion, setAppVersion] = useState('1.1.5')
+  const [appVersion, setAppVersion] = useState('Loading')
+  const [updateFeedUrl, setUpdateFeedUrl] = useState('https://nexus-desktop-app.vercel.app/updates/win')
   const [updateStatus, setUpdateStatus] = useState<
     'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error'
   >('idle')
@@ -130,14 +137,25 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
         .invoke('check-vault-status')
         .then((res) => setFaceCount(res?.faceCount || 0))
 
-      window.electron.ipcRenderer.invoke('get-app-version').then((v) => setAppVersion(v))
+      window.electron.ipcRenderer
+        .invoke('get-app-version')
+        .then((v) => setAppVersion(v || 'Unknown'))
+        .catch(() => setAppVersion('Unknown'))
 
-      window.electron.ipcRenderer.on('updater-event', (_e, { status, data, error }) => {
+      window.electron.ipcRenderer
+        .invoke('get-update-feed-url')
+        .then((url) => {
+          if (url) setUpdateFeedUrl(url)
+        })
+        .catch(() => {})
+
+      window.electron.ipcRenderer.on('updater-event', (_e, event = {}) => {
+        const { status, data = {}, error = '' } = event
         if (status === 'checking') setUpdateStatus('checking')
         if (status === 'available') {
           setUpdateStatus('available')
-          setUpdateVersion(data.version)
-          setUpdateNotes(data.releaseNotes || 'Bug fixes and performance improvements.')
+          setUpdateVersion(String(data.version || ''))
+          setUpdateNotes(String(data.releaseNotes || 'Bug fixes and performance improvements.'))
         }
         if (status === 'not-available') {
           setUpdateStatus('idle')
@@ -145,12 +163,15 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
         }
         if (status === 'downloading') {
           setUpdateStatus('downloading')
-          setDownloadProgress(Math.round(data.percent))
+          setDownloadProgress(Math.round(Number(data.percent || 0)))
         }
-        if (status === 'downloaded') setUpdateStatus('ready')
+        if (status === 'downloaded') {
+          setUpdateStatus('ready')
+          setUpdateNotes(String(data.releaseNotes || 'Update downloaded and ready to install.'))
+        }
         if (status === 'error') {
           setUpdateStatus('error')
-          setUpdateNotes(`Error: ${error}`)
+          setUpdateNotes(`Error: ${error || 'Unable to reach the update server.'}`)
         }
       })
     }
@@ -160,9 +181,54 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
     }
   }, [])
 
-  const checkForUpdates = () => window.electron.ipcRenderer.invoke('check-for-updates')
-  const downloadUpdate = () => window.electron.ipcRenderer.invoke('download-update')
-  const installUpdate = () => window.electron.ipcRenderer.invoke('install-update')
+  const checkForUpdates = async () => {
+    if (!window.electron?.ipcRenderer) return
+    setUpdateStatus('checking')
+    setUpdateNotes(`Checking firmware feed:\n${updateFeedUrl}`)
+
+    try {
+      const result = await window.electron.ipcRenderer.invoke('check-for-updates')
+      if (result?.success === false) {
+        throw new Error(result.error || 'Unable to check for updates.')
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to check for updates.'
+      setUpdateStatus('error')
+      setUpdateNotes(`Error: ${message}`)
+    }
+  }
+
+  const downloadUpdate = async () => {
+    if (!window.electron?.ipcRenderer) return
+    setUpdateStatus('downloading')
+    setDownloadProgress(0)
+
+    try {
+      const result = await window.electron.ipcRenderer.invoke('download-update')
+      if (result?.success === false) {
+        throw new Error(result.error || 'Unable to download the update.')
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to download the update.'
+      setUpdateStatus('error')
+      setUpdateNotes(`Error: ${message}`)
+    }
+  }
+
+  const installUpdate = async () => {
+    if (!window.electron?.ipcRenderer) return
+
+    try {
+      const result = await window.electron.ipcRenderer.invoke('install-update')
+      if (result?.success === false) {
+        throw new Error(result.error || 'Unable to install the update.')
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to install the update.'
+      setUpdateStatus('error')
+      setUpdateNotes(`Error: ${message}`)
+    }
+  }
 
   const handleVoiceChange = (v: 'MALE' | 'FEMALE') => {
     if (isSystemActive) return
@@ -192,11 +258,14 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   }
 
   const saveApiKeys = async () => {
+    const cleanNvidiaKey = sanitizeNvidiaKey(nvidiaKey)
+    setNvidiaKey(cleanNvidiaKey)
+
     localStorage.setItem('nexus_custom_api_key', geminiKey)
     localStorage.setItem('nexus_groq_api_key', groqKey)
     localStorage.setItem('nexus_hf_api_key', hfKey)
     localStorage.setItem('nexus_tailvy_api_key', tailvyKey)
-    localStorage.setItem(NVIDIA_API_KEY_STORAGE_KEY, nvidiaKey)
+    localStorage.setItem(NVIDIA_API_KEY_STORAGE_KEY, cleanNvidiaKey)
     localStorage.setItem(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY, aiProviderMode)
 
     if (window.electron?.ipcRenderer) {
@@ -204,7 +273,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
         await window.electron.ipcRenderer.invoke('secure-save-keys', {
           groqKey,
           geminiKey,
-          nvidiaKey
+          nvidiaKey: cleanNvidiaKey
         })
       } catch (e) {}
     }
@@ -221,8 +290,9 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const syncNvidiaModels = async () => {
     if (!window.electron?.ipcRenderer) return
     setNvidiaSyncStatus('Syncing live NVIDIA /v1/models...')
+    const cleanNvidiaKey = sanitizeNvidiaKey(nvidiaKey)
     const result = await window.electron.ipcRenderer.invoke('nvidia:list-models', {
-      apiKey: aiProviderMode === 'own-key' ? nvidiaKey : '',
+      apiKey: aiProviderMode === 'own-key' ? cleanNvidiaKey : '',
       useNexusServers: aiProviderMode !== 'own-key'
     })
 
@@ -403,7 +473,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                 <div className={`${cardClass} md:col-span-1 border-emerald-500/20`}>
                   <div className="flex justify-between items-center border-b border-white/10 pb-4">
                     <span className={titleClass}>
-                      <RiRocketLine className="text-emerald-400" size={18} /> OS Firmware
+                      <RiRocketLine className="text-emerald-400" size={18} /> Update Firmware
                     </span>
                     <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-3 py-1 rounded font-mono font-bold tracking-widest">
                       v{appVersion}
@@ -413,13 +483,25 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                   <div className="flex flex-col gap-4 items-center justify-center flex-1 py-4 text-center">
                     {updateStatus === 'idle' || updateStatus === 'error' ? (
                       <>
-                        <RiTerminalWindowLine size={48} className="text-zinc-700" />
-                        <p className="text-xs text-zinc-400 font-mono">Current build is stable.</p>
+                        <RiTerminalWindowLine
+                          size={48}
+                          className={updateStatus === 'error' ? 'text-red-400' : 'text-zinc-700'}
+                        />
+                        <p
+                          className={`text-xs font-mono ${updateStatus === 'error' ? 'text-red-300' : 'text-zinc-400'}`}
+                        >
+                          {updateStatus === 'error'
+                            ? 'Update check failed.'
+                            : 'Current build is stable.'}
+                        </p>
+                        <p className="w-full break-all rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-[10px] leading-relaxed text-zinc-500">
+                          Website feed: {updateFeedUrl}
+                        </p>
                         <button
                           onClick={checkForUpdates}
                           className="mt-2 w-full py-3 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-white font-bold tracking-widest text-[11px] flex items-center justify-center gap-2 transition-all cursor-pointer"
                         >
-                          <RiRefreshLine size={16} /> CHECK FOR UPDATES
+                          <RiRefreshLine size={16} /> CHECK FIRMWARE
                         </button>
                       </>
                     ) : updateStatus === 'checking' ? (
@@ -439,7 +521,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                           onClick={downloadUpdate}
                           className="mt-2 w-full py-3 rounded-lg bg-cyan-500/20 hover:bg-cyan-500 text-cyan-400 hover:text-black font-bold tracking-widest text-[11px] flex items-center justify-center gap-2 transition-all border border-cyan-500/50 cursor-pointer"
                         >
-                          <RiDownloadCloud2Line size={16} /> INITIALIZE DOWNLOAD
+                          <RiDownloadCloud2Line size={16} /> DOWNLOAD FIRMWARE
                         </button>
                       </>
                     ) : updateStatus === 'downloading' ? (
@@ -473,7 +555,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                 <div className={`${cardClass} md:col-span-1`}>
                   <div className="flex justify-between items-center border-b border-white/10 pb-4">
                     <span className={titleClass}>
-                      <RiTerminalWindowLine className="text-zinc-400" size={18} /> Patch Notes
+                      <RiTerminalWindowLine className="text-zinc-400" size={18} /> Firmware Notes
                     </span>
                   </div>
                   <div className="flex-1 bg-[#050505] border border-white/5 rounded-xl p-4 overflow-y-auto max-h-60 scrollbar-small">
@@ -662,7 +744,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                           type="password"
                           value={nvidiaKey}
                           onChange={(e) => setNvidiaKey(e.target.value)}
-                          placeholder="Optional: nvapi_... override"
+                          placeholder="Optional: nvapi-... override"
                           className="bg-transparent border-none outline-none text-sm font-mono text-zinc-100 w-full placeholder:text-zinc-700"
                         />
                       </div>
@@ -722,7 +804,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                           Guide
                         </span>
                         <p className="text-[10px] text-zinc-500 font-mono mt-1 tracking-widest uppercase">
-                          Optional override. Nexus Cloud works without a user key.
+                          Optional override. Nexus API works without a user key.
                         </p>
                       </div>
                       <a
@@ -740,7 +822,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                         {
                           step: '01',
                           title: 'Default Mode',
-                          text: 'Leave this blank to use the hosted Nexus Cloud NVIDIA route.'
+                          text: 'Leave this blank to use the hosted Nexus NVIDIA route.'
                         },
                         {
                           step: '02',
@@ -787,7 +869,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                     <RiShieldKeyholeLine className="text-zinc-500 shrink-0 mt-0.5" size={16} />
                     <p className="text-[10px] text-zinc-400 font-mono leading-relaxed">
                       [SECURITY NOTICE]: Optional local API keys are encrypted and stored strictly
-                      in your local OS. If no NVIDIA key is saved, AI Chat uses the Nexus Cloud
+                      in your local OS. If no NVIDIA key is saved, AI Chat uses the hosted Nexus
                       proxy, so prompts are sent to the hosted Nexus API route and billed through
                       the configured server-side NVIDIA key.
                     </p>
@@ -897,7 +979,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                     <p className="text-[10px] text-zinc-400 font-mono leading-relaxed">
                       The bundled catalog includes current NVIDIA Build LLM, coding, reasoning,
                       multimodal, speech, translation, image, and retrieval models. The live sync
-                      button queries the Nexus Cloud models route when no local key is saved, or
+                      button queries the hosted Nexus models route when no local key is saved, or
                       NVIDIA's /v1/models endpoint directly when you provide an override key.
                     </p>
                   </div>

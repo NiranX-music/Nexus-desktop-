@@ -14,12 +14,11 @@ Set the key in one of two places:
 2. Environment variable before launching the app:
 
 ```powershell
-$env:NVIDIA_API_KEY = 'nvapi_your_key_here'
+$env:NVIDIA_API_KEY = 'nvapi-your-key-here'
 ```
 
-Do not ship a real API key in public source control. If a private distribution needs a bundled key,
-set `NVIDIA_API_KEY` in the app launch environment or paste it into Settings before building your
-installer.
+`NVIDIA_BUILD_API_KEY` and `NVIDIA_NIM_API_KEY` are also accepted as aliases. Do not ship a real
+API key in public source control or inside the desktop bundle.
 
 ## Default Model
 

@@ -37,7 +37,9 @@
             <h2>Configure Nexus Servers</h2>
             <p>
               Add <code>NVIDIA_API_KEY</code> as an environment variable on every Vercel
-              and Netlify mirror. The key is never stored in this browser page.
+              and Netlify mirror. <code>NVIDIA_BUILD_API_KEY</code> and
+              <code>NVIDIA_NIM_API_KEY</code> are accepted as aliases. The key is never stored in
+              this browser page.
             </p>
             <pre><code>NVIDIA_API_KEY=nvapi-your-key
 NEXUS_ADMIN_PASS=05122010
@@ -114,4 +116,3 @@ NEXUS_ALLOW_PUBLIC_AI=false</code></pre>
     </script>
   </body>
 </html>
-

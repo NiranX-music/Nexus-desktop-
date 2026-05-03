@@ -29,7 +29,7 @@ export const NVIDIA_API_KEY_STORAGE_KEY = 'nexus_nvidia_api_key'
 export const NEXUS_AI_PROVIDER_MODE_STORAGE_KEY = 'nexus_ai_provider_mode'
 
 export const DEFAULT_NVIDIA_MODEL_DEFAULTS: NvidiaModelDefaults = {
-  chat: 'google/gemma-2-2b-it',
+  chat: 'deepseek-ai/deepseek-v4-pro',
   coding: 'qwen/qwen3-coder-480b-a35b-instruct',
   reasoning: 'deepseek-ai/deepseek-v4-pro',
   vision: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',

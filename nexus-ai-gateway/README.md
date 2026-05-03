@@ -19,6 +19,9 @@ NEXUS_ADMIN_PASS=05122010
 NEXUS_ALLOW_PUBLIC_AI=false
 ```
 
+`NVIDIA_BUILD_API_KEY` and `NVIDIA_NIM_API_KEY` are accepted as fallback aliases, but use
+`NVIDIA_API_KEY` for the primary deployment setting.
+
 Do not commit the real NVIDIA key.
 
 ## Recommended Mirror Names

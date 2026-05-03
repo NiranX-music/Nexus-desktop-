@@ -198,7 +198,7 @@ export default function LoginPage() {
               <ShieldCheck className="w-6 h-6 text-emerald-400 shrink-0 mt-0.5" />
               <p className="text-xs text-zinc-300 font-mono leading-relaxed">
                 Email sessions are stored locally in the encrypted Nexus vault. OAuth remains
-                available for cloud-linked operators.
+                available for website-linked operators.
               </p>
             </div>
 

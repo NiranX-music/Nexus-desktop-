@@ -8,8 +8,7 @@ import {
   screen,
   session,
   safeStorage,
-  systemPreferences,
-  dialog
+  systemPreferences
 } from 'electron'
 import path, { join } from 'path'
 import fs from 'fs'
@@ -72,6 +71,115 @@ let mainWindow: BrowserWindow | null = null
 let isOverlayMode = false
 
 const secureConfigPath = join(app.getPath('userData'), 'nexus_secure_vault.json')
+const NEXUS_UPDATE_FEED_URL =
+  process.env.NEXUS_UPDATE_FEED_URL || 'https://nexus-desktop-app.vercel.app/updates/win'
+
+const NVIDIA_API_KEY_ENV_NAMES = ['NVIDIA_API_KEY', 'NVIDIA_BUILD_API_KEY', 'NVIDIA_NIM_API_KEY']
+const PLACEHOLDER_NVIDIA_KEY_RE =
+  /^(your-|paste-|replace-|example|placeholder|nvapi[_-]?your|\$NVIDIA_API_KEY|\$\{NVIDIA_API_KEY\})/i
+
+const normalizeNvidiaApiKey = (value = '') => {
+  const candidate = String(value)
+    .trim()
+    .replace(/^Bearer\s+/i, '')
+    .replace(/^['"]|['"]$/g, '')
+    .trim()
+
+  if (!candidate || PLACEHOLDER_NVIDIA_KEY_RE.test(candidate)) return ''
+  return candidate
+}
+
+const getLaunchNvidiaApiKey = () => {
+  for (const name of NVIDIA_API_KEY_ENV_NAMES) {
+    const apiKey = normalizeNvidiaApiKey(process.env[name])
+    if (apiKey) return apiKey
+  }
+
+  return ''
+}
+
+const encryptSecureValue = (value = '') => {
+  if (safeStorage.isEncryptionAvailable()) {
+    return safeStorage.encryptString(value).toString('base64')
+  }
+
+  return Buffer.from(value).toString('base64')
+}
+
+const decryptSecureValue = (value = '') => {
+  if (!value) return ''
+
+  if (safeStorage.isEncryptionAvailable()) {
+    return safeStorage.decryptString(Buffer.from(value, 'base64'))
+  }
+
+  return Buffer.from(value, 'base64').toString('utf8')
+}
+
+const readSecureKeysFromDisk = () => {
+  if (!fs.existsSync(secureConfigPath)) {
+    return { groqKey: '', geminiKey: '', nvidiaKey: '' }
+  }
+
+  try {
+    const data = JSON.parse(fs.readFileSync(secureConfigPath, 'utf8'))
+    return {
+      groqKey: decryptSecureValue(data.groq),
+      geminiKey: decryptSecureValue(data.gemini),
+      nvidiaKey: normalizeNvidiaApiKey(decryptSecureValue(data.nvidia))
+    }
+  } catch {
+    return { groqKey: '', geminiKey: '', nvidiaKey: '' }
+  }
+}
+
+const writeSecureKeysToDisk = ({
+  groqKey = '',
+  geminiKey = '',
+  nvidiaKey = ''
+}: {
+  groqKey?: string
+  geminiKey?: string
+  nvidiaKey?: string
+}) => {
+  const secureData = {
+    groq: encryptSecureValue(groqKey),
+    gemini: encryptSecureValue(geminiKey),
+    nvidia: encryptSecureValue(normalizeNvidiaApiKey(nvidiaKey))
+  }
+
+  fs.writeFileSync(secureConfigPath, JSON.stringify(secureData))
+}
+
+const seedLaunchNvidiaKey = () => {
+  const launchNvidiaKey = getLaunchNvidiaApiKey()
+  if (!launchNvidiaKey) return
+
+  if (!process.env.NVIDIA_API_KEY) {
+    process.env.NVIDIA_API_KEY = launchNvidiaKey
+  }
+
+  const existingKeys = readSecureKeysFromDisk()
+  if (normalizeNvidiaApiKey(existingKeys.nvidiaKey)) return
+
+  writeSecureKeysToDisk({
+    ...existingKeys,
+    nvidiaKey: launchNvidiaKey
+  })
+}
+
+const getUpdaterErrorMessage = (error: unknown) => {
+  if (error instanceof Error) return error.message
+  return String(error || 'Unknown updater error.')
+}
+
+const sendUpdaterEvent = (
+  status: string,
+  data: Record<string, unknown> = {},
+  error = ''
+) => {
+  mainWindow?.webContents.send('updater-event', { status, data, error })
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -157,43 +265,48 @@ function toggleOverlayMode() {
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.electron')
+  seedLaunchNvidiaKey()
 
-  const autoUpdatesEnabled = process.env.NEXUS_ENABLE_AUTO_UPDATE === 'true'
-  autoUpdater.autoDownload = autoUpdatesEnabled
-  autoUpdater.autoInstallOnAppQuit = autoUpdatesEnabled
-  if (autoUpdatesEnabled) {
-    autoUpdater.checkForUpdatesAndNotify()
-  }
+  autoUpdater.autoDownload = false
+  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.allowPrerelease = false
+  autoUpdater.setFeedURL({ provider: 'generic', url: NEXUS_UPDATE_FEED_URL })
+
+  autoUpdater.on('checking-for-update', () => {
+    sendUpdaterEvent('checking')
+  })
 
   autoUpdater.on('update-available', (info) => {
-    dialog.showMessageBox({
-      type: 'info',
-      title: 'Update Found',
-      message: `Neural Core Update Found: v${info.version}. Downloading in background...`
+    sendUpdaterEvent('available', {
+      version: info.version,
+      releaseNotes: info.releaseNotes || 'Bug fixes and performance improvements.'
     })
   })
 
-  autoUpdater.on('error', (err) => {
-    dialog.showErrorBox(
-      'Auto-Updater Error',
-      err == null ? 'unknown error' : (err.stack || err).toString()
-    )
+  autoUpdater.on('update-not-available', (info) => {
+    sendUpdaterEvent('not-available', {
+      version: info.version
+    })
   })
 
-  autoUpdater.on('update-downloaded', () => {
-    dialog
-      .showMessageBox({
-        type: 'info',
-        title: 'Update Ready',
-        message: 'New version downloaded! The system will now force reboot to apply the patch.',
-        buttons: ['Execute Restart']
-      })
-      .then(() => {
-        setImmediate(() => {
-          app.removeAllListeners('window-all-closed')
-          autoUpdater.quitAndInstall(false, true)
-        })
-      })
+  autoUpdater.on('download-progress', (progress) => {
+    sendUpdaterEvent('downloading', {
+      percent: progress.percent,
+      transferred: progress.transferred,
+      total: progress.total,
+      bytesPerSecond: progress.bytesPerSecond
+    })
+  })
+
+  autoUpdater.on('update-downloaded', (info) => {
+    sendUpdaterEvent('downloaded', {
+      version: info.version,
+      releaseNotes: info.releaseNotes || 'Update downloaded and ready to install.'
+    })
+  })
+
+  autoUpdater.on('error', (error) => {
+    sendUpdaterEvent('error', {}, getUpdaterErrorMessage(error))
   })
 
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
@@ -235,25 +348,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle('secure-save-keys', async (_, { groqKey = '', geminiKey = '', nvidiaKey = '' }) => {
     try {
-      let groqEncrypted, geminiEncrypted, nvidiaEncrypted
-
-      if (safeStorage.isEncryptionAvailable()) {
-        groqEncrypted = safeStorage.encryptString(groqKey).toString('base64')
-        geminiEncrypted = safeStorage.encryptString(geminiKey).toString('base64')
-        nvidiaEncrypted = safeStorage.encryptString(nvidiaKey).toString('base64')
-      } else {
-        groqEncrypted = Buffer.from(groqKey).toString('base64')
-        geminiEncrypted = Buffer.from(geminiKey).toString('base64')
-        nvidiaEncrypted = Buffer.from(nvidiaKey).toString('base64')
-      }
-
-      const secureData = {
-        groq: groqEncrypted,
-        gemini: geminiEncrypted,
-        nvidia: nvidiaEncrypted
-      }
-
-      fs.writeFileSync(secureConfigPath, JSON.stringify(secureData))
+      writeSecureKeysToDisk({ groqKey, geminiKey, nvidiaKey })
       return { success: true }
     } catch (error: any) {
       return { success: false, error: error.message }
@@ -263,22 +358,7 @@ app.whenReady().then(() => {
   ipcMain.handle('secure-get-keys', async () => {
     if (!fs.existsSync(secureConfigPath)) return null
     try {
-      const data = JSON.parse(fs.readFileSync(secureConfigPath, 'utf8'))
-      let groqKey, geminiKey, nvidiaKey
-
-      if (safeStorage.isEncryptionAvailable()) {
-        groqKey = data.groq ? safeStorage.decryptString(Buffer.from(data.groq, 'base64')) : ''
-        geminiKey = data.gemini ? safeStorage.decryptString(Buffer.from(data.gemini, 'base64')) : ''
-        nvidiaKey = data.nvidia
-          ? safeStorage.decryptString(Buffer.from(data.nvidia, 'base64'))
-          : ''
-      } else {
-        groqKey = data.groq ? Buffer.from(data.groq, 'base64').toString('utf8') : ''
-        geminiKey = data.gemini ? Buffer.from(data.gemini, 'base64').toString('utf8') : ''
-        nvidiaKey = data.nvidia ? Buffer.from(data.nvidia, 'base64').toString('utf8') : ''
-      }
-
-      return { groqKey, geminiKey, nvidiaKey }
+      return readSecureKeysFromDisk()
     } catch (err) {
       return null
     }
@@ -286,6 +366,60 @@ app.whenReady().then(() => {
 
   ipcMain.handle('check-keys-exist', () => {
     return fs.existsSync(secureConfigPath)
+  })
+
+  ipcMain.handle('get-app-version', () => app.getVersion())
+
+  ipcMain.handle('get-update-feed-url', () => NEXUS_UPDATE_FEED_URL)
+
+  ipcMain.handle('check-for-updates', async () => {
+    if (is.dev && process.env.NEXUS_ALLOW_DEV_UPDATES !== 'true') {
+      const message = 'Update checks are available in the installed desktop app.'
+      sendUpdaterEvent('error', {}, message)
+      return { success: false, error: message }
+    }
+
+    try {
+      sendUpdaterEvent('checking')
+      await autoUpdater.checkForUpdates()
+      return { success: true }
+    } catch (error) {
+      const message = getUpdaterErrorMessage(error)
+      sendUpdaterEvent('error', {}, message)
+      return { success: false, error: message }
+    }
+  })
+
+  ipcMain.handle('download-update', async () => {
+    if (is.dev && process.env.NEXUS_ALLOW_DEV_UPDATES !== 'true') {
+      const message = 'Update downloads are available in the installed desktop app.'
+      sendUpdaterEvent('error', {}, message)
+      return { success: false, error: message }
+    }
+
+    try {
+      sendUpdaterEvent('downloading', { percent: 0 })
+      await autoUpdater.downloadUpdate()
+      return { success: true }
+    } catch (error) {
+      const message = getUpdaterErrorMessage(error)
+      sendUpdaterEvent('error', {}, message)
+      return { success: false, error: message }
+    }
+  })
+
+  ipcMain.handle('install-update', () => {
+    try {
+      setImmediate(() => {
+        app.removeAllListeners('window-all-closed')
+        autoUpdater.quitAndInstall(false, true)
+      })
+      return { success: true }
+    } catch (error) {
+      const message = getUpdaterErrorMessage(error)
+      sendUpdaterEvent('error', {}, message)
+      return { success: false, error: message }
+    }
   })
 
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
