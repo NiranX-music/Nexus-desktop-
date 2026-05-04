@@ -14,13 +14,16 @@ import {
   RiWifiLine,
   RiServerLine,
   RiEarthLine,
-  RiSendPlane2Line
+  RiSendPlane2Line,
+  RiBatteryChargeLine,
+  RiTimeLine
 } from 'react-icons/ri'
 import { FaMemory } from 'react-icons/fa6'
 import { GiTinker } from 'react-icons/gi'
 import { HiComputerDesktop } from 'react-icons/hi2'
 import * as faceapi from 'face-api.js'
 import { VisionMode } from '@renderer/IndexRoot'
+import type { SystemStats } from '@renderer/services/system-info'
 
 interface NexusProps {
   isSystemActive: boolean
@@ -38,12 +41,30 @@ interface NexusProps {
 
 interface DashboardViewProps {
   props: NexusProps
-  stats: any
+  stats: SystemStats | null
   chatHistory: any[]
   onVisionClick: () => void
 }
 
 const glassPanel = 'nexus-glass-card'
+
+const formatBytesPerSecond = (bytes = 0) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B/s'
+  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s']
+  let value = bytes
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`
+}
+
+const metricPercent = (value: unknown) => {
+  const numericValue = Number(value)
+  if (!Number.isFinite(numericValue)) return 0
+  return Math.max(0, Math.min(100, numericValue))
+}
 
 export default function DashboardView({
   props,
@@ -74,8 +95,6 @@ export default function DashboardView({
   const [textCommandStatus, setTextCommandStatus] = useState('')
   const [isSendingTextCommand, setIsSendingTextCommand] = useState(false)
 
-  const [networkStats, setNetworkStats] = useState({ ping: 24, rate: 1.2, tx: 40, rx: 60 })
-
   const submitTextCommand = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const command = textCommand.trim()
@@ -98,24 +117,6 @@ export default function DashboardView({
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }, [chatHistory])
-
-  useEffect(() => {
-    if (!isSystemActive) {
-      setNetworkStats({ ping: 0, rate: 0.0, tx: 0, rx: 0 })
-      return
-    }
-
-    const interval = setInterval(() => {
-      setNetworkStats({
-        ping: Math.floor(Math.random() * (45 - 12 + 1)) + 12,
-        rate: +(Math.random() * 8.5 + 0.5).toFixed(2),
-        tx: Math.floor(Math.random() * 100),
-        rx: Math.floor(Math.random() * 100)
-      })
-    }, 1700)
-
-    return () => clearInterval(interval)
-  }, [isSystemActive])
 
   useEffect(() => {
     const loadModels = async () => {
@@ -250,47 +251,84 @@ export default function DashboardView({
     startVision(nextMode)
   }
 
+  const liveNetwork = stats?.network ?? {
+    rxBytesPerSecond: 0,
+    txBytesPerSecond: 0,
+    totalBytesPerSecond: 0,
+    activeInterfaces: 0,
+    updatedAt: 0
+  }
+  const txRatio = metricPercent((liveNetwork.txBytesPerSecond / (5 * 1024 * 1024)) * 100)
+  const rxRatio = metricPercent((liveNetwork.rxBytesPerSecond / (5 * 1024 * 1024)) * 100)
+  const batteryPercent =
+    stats?.battery?.isPresent && typeof stats.battery.percentage === 'number'
+      ? stats.battery.percentage
+      : null
+  const batteryValue =
+    batteryPercent !== null ? `${batteryPercent}%` : stats?.battery?.isPresent ? '--%' : 'AC'
+  const batteryDetail = stats?.battery?.isPresent ? stats.battery.status : 'Plugged'
+  const temperatureValue =
+    typeof stats?.temperature === 'number' ? `${stats.temperature.toFixed(1)}°C` : '--'
+  const temperatureRaw =
+    typeof stats?.temperature === 'number' ? metricPercent((stats.temperature / 95) * 100) : 0
+
   const systemMetrics = [
     {
       icon: <RiCpuLine />,
       bgIcon: <RiCpuLine size={140} />,
       label: 'CPU LOAD',
       val: isSystemActive && stats ? `${stats.cpu}%` : '--',
-      raw: isSystemActive && stats ? stats.cpu : 0,
+      raw: isSystemActive && stats ? metricPercent(stats.cpu) : 0,
       colorClass: 'text-emerald-400',
       bgClass: 'bg-emerald-500',
       glowClass: 'via-emerald-500/50',
       shadowClass: 'shadow-[0_0_8px_#10b981]',
       bgGradient: 'from-emerald-950/30 to-black/60',
       pattern:
-        'bg-[linear-linear(to_right,#10b98108_1px,transparent_1px),linear-linear(to_bottom,#10b98108_1px,transparent_1px)] bg-[size:12px_12px]'
+        'bg-[linear-gradient(to_right,#10b98108_1px,transparent_1px),linear-gradient(to_bottom,#10b98108_1px,transparent_1px)] bg-[size:12px_12px]'
     },
     {
       icon: <FaMemory />,
       bgIcon: <FaMemory size={140} />,
       label: 'RAM USAGE',
       val: isSystemActive && stats ? `${stats.memory.usedPercentage}%` : '--',
-      raw: isSystemActive && stats ? stats.memory.usedPercentage : 0,
+      raw: isSystemActive && stats ? metricPercent(stats.memory.usedPercentage) : 0,
       colorClass: 'text-cyan-400',
       bgClass: 'bg-cyan-500',
       glowClass: 'via-cyan-500/50',
       shadowClass: 'shadow-[0_0_8px_#06b6d4]',
       bgGradient: 'from-cyan-950/30 to-black/60',
-      pattern: 'bg-[radial-linear(#06b6d415_1px,transparent_1px)] bg-[size:10px_10px]'
+      pattern: 'bg-[radial-gradient(#06b6d415_1px,transparent_1px)] bg-[size:10px_10px]'
+    },
+    {
+      icon: <RiBatteryChargeLine />,
+      bgIcon: <RiBatteryChargeLine size={140} />,
+      label: 'BATTERY',
+      val: isSystemActive && stats ? batteryValue : '--',
+      raw: isSystemActive && batteryPercent !== null ? batteryPercent : 0,
+      colorClass: 'text-lime-300',
+      bgClass: 'bg-lime-400',
+      glowClass: 'via-lime-400/50',
+      shadowClass: 'shadow-[0_0_8px_#a3e635]',
+      bgGradient: 'from-lime-950/25 to-black/60',
+      pattern: 'bg-[linear-gradient(90deg,#a3e6350d_1px,transparent_1px)] bg-[size:16px_16px]',
+      detail: batteryDetail,
+      hideBar: batteryPercent === null
     },
     {
       icon: <GiTinker />,
       bgIcon: <GiTinker size={140} />,
       label: 'TEMP',
-      val: isSystemActive && stats ? `${stats.temperature}°C` : '--',
-      raw: isSystemActive && stats ? Math.min((stats.temperature / 90) * 100, 100) : 0,
+      val: isSystemActive && stats ? temperatureValue : '--',
+      raw: isSystemActive ? temperatureRaw : 0,
       colorClass: 'text-orange-400',
       bgClass: 'bg-orange-500',
       glowClass: 'via-orange-500/50',
       shadowClass: 'shadow-[0_0_8px_#f97316]',
       bgGradient: 'from-orange-950/30 to-black/60',
-      pattern:
-        'bg-[radial-linear(ellipse_at_top_right,_var(--tw-linear-stops))] from-orange-900/20 via-transparent to-transparent'
+      pattern: 'bg-[radial-gradient(ellipse_at_top_right,#f9731620,transparent_60%)]',
+      detail: typeof stats?.temperature === 'number' ? 'Thermal zone' : 'Sensor unavailable',
+      hideBar: typeof stats?.temperature !== 'number'
     },
     {
       icon: <HiComputerDesktop />,
@@ -304,7 +342,22 @@ export default function DashboardView({
       shadowClass: '',
       bgGradient: 'from-purple-950/30 to-black/60',
       pattern:
-        'bg-[linear-linear(45deg,#a855f708_25%,transparent_25%,transparent_50%,#a855f708_50%,#a855f708_75%,transparent_75%,transparent)] bg-[size:24px_24px]',
+        'bg-[linear-gradient(45deg,#a855f708_25%,transparent_25%,transparent_50%,#a855f708_50%,#a855f708_75%,transparent_75%,transparent)] bg-[size:24px_24px]',
+      detail: stats?.os?.arch ?? '',
+      hideBar: true
+    },
+    {
+      icon: <RiTimeLine />,
+      bgIcon: <RiTimeLine size={140} />,
+      label: 'UPTIME',
+      val: isSystemActive && stats ? `${stats.os.uptime}` : '--',
+      raw: 0,
+      colorClass: 'text-sky-300',
+      bgClass: 'bg-sky-400',
+      glowClass: 'via-sky-400/50',
+      shadowClass: '',
+      bgGradient: 'from-sky-950/25 to-black/60',
+      pattern: 'bg-[radial-gradient(circle_at_top_left,#38bdf820,transparent_56%)]',
       hideBar: true
     }
   ]
@@ -399,27 +452,29 @@ export default function DashboardView({
           <div className="grid grid-cols-3 gap-1.5 mt-2 relative z-10">
             <div className="border border-white/5 bg-black/25 p-2">
               <span className="text-[7px] text-zinc-500 font-mono tracking-[0.18em] flex items-center gap-1">
-                WSS LATENCY
+                ADAPTERS
               </span>
               <span className="mt-1 text-[11px] font-bold text-emerald-50 font-mono flex items-center gap-1.5 transition-all">
                 <RiWifiLine className={isSystemActive ? 'text-emerald-400' : 'text-zinc-600'} />
-                {isSystemActive ? `${networkStats.ping}ms` : '--'}
+                {isSystemActive && stats ? liveNetwork.activeInterfaces : '--'}
               </span>
             </div>
 
             <div className="border border-white/5 bg-black/25 p-2">
-              <span className="text-[7px] text-zinc-500 font-mono tracking-[0.18em]">
-                PACKET RATE
-              </span>
+              <span className="text-[7px] text-zinc-500 font-mono tracking-[0.18em]">DOWNLINK</span>
               <span className="mt-1 block text-[11px] font-bold text-emerald-50 font-mono transition-all">
-                {isSystemActive ? `${networkStats.rate} MB/s` : '--'}
+                {isSystemActive && stats
+                  ? formatBytesPerSecond(liveNetwork.rxBytesPerSecond)
+                  : '--'}
               </span>
             </div>
 
             <div className="border border-white/5 bg-black/25 p-2">
-              <span className="text-[7px] text-zinc-500 font-mono tracking-[0.18em]">ROUTING</span>
+              <span className="text-[7px] text-zinc-500 font-mono tracking-[0.18em]">UPLINK</span>
               <span className="mt-1 text-[11px] font-bold text-emerald-50 font-mono flex items-center gap-1.5">
-                {isSystemActive ? 'GLOBAL' : 'LOCAL'}
+                {isSystemActive && stats
+                  ? formatBytesPerSecond(liveNetwork.txBytesPerSecond)
+                  : '--'}
                 {isSystemActive ? (
                   <RiEarthLine className="text-cyan-400" />
                 ) : (
@@ -435,7 +490,7 @@ export default function DashboardView({
               <div className="flex-1 h-1.5 bg-black/60 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-emerald-500 shadow-[0_0_8px_#10b981] transition-all duration-300 ease-out"
-                  style={{ width: `${isSystemActive ? networkStats.tx : 0}%` }}
+                  style={{ width: `${isSystemActive ? txRatio : 0}%` }}
                 />
               </div>
             </div>
@@ -444,7 +499,7 @@ export default function DashboardView({
               <div className="flex-1 h-1.5 bg-black/60 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-cyan-500 shadow-[0_0_8px_#06b6d4] transition-all duration-300 ease-out delay-75"
-                  style={{ width: `${isSystemActive ? networkStats.rx : 0}%` }}
+                  style={{ width: `${isSystemActive ? rxRatio : 0}%` }}
                 />
               </div>
             </div>
@@ -457,11 +512,11 @@ export default function DashboardView({
               <RiLayoutGridLine className="inline mr-1" /> CORE METRICS
             </span>
           </div>
-          <div className="grid grid-cols-2 gap-2 h-full min-h-0 pb-1">
+          <div className="grid grid-cols-2 auto-rows-fr gap-2 h-full min-h-0 pb-1">
             {systemMetrics.map((m, i) => (
               <div
                 key={i}
-                className={`cursor-pointer relative rounded-xl p-2.5 flex flex-col justify-between border border-white/5 overflow-hidden group hover:border-white/10 transition-all duration-300 bg-linear-to-br ${m.bgGradient}`}
+                className={`cursor-pointer relative rounded-xl p-2 flex flex-col justify-between border border-white/5 overflow-hidden group hover:border-white/10 transition-all duration-300 bg-linear-to-br ${m.bgGradient}`}
               >
                 <div
                   className={`absolute inset-0 ${m.pattern} opacity-30 group-hover:opacity-60 transition-opacity duration-500 pointer-events-none`}
@@ -488,10 +543,18 @@ export default function DashboardView({
                   </span>
                 </div>
 
-                <div className="relative z-10 flex flex-col gap-1.5 mt-2">
-                  <span className="text-sm font-bold text-white text-right font-mono tracking-wider drop-shadow-md">
+                <div className="relative z-10 flex min-w-0 flex-col gap-1 mt-1.5">
+                  <span
+                    className="max-w-full truncate text-right text-[12px] font-bold text-white font-mono tracking-wider drop-shadow-md"
+                    title={String(m.val)}
+                  >
                     {m.val}
                   </span>
+                  {'detail' in m && m.detail && (
+                    <span className="max-w-full truncate text-right text-[7px] font-black uppercase tracking-[0.16em] text-zinc-500">
+                      {m.detail}
+                    </span>
+                  )}
 
                   {!m.hideBar && (
                     <div className="w-full h-1 bg-black/40 rounded-full overflow-hidden backdrop-blur-sm border border-white/5">
@@ -519,17 +582,13 @@ export default function DashboardView({
             </p>
           </div>
           <div className={`${glassPanel} p-3`}>
-            <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">
-              Vision
-            </p>
+            <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">Vision</p>
             <p className="mt-1 text-sm font-black uppercase text-cyan-200">
               {isVideoOn ? visionMode : 'Offline'}
             </p>
           </div>
           <div className={`${glassPanel} p-3`}>
-            <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">
-              Voice
-            </p>
+            <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">Voice</p>
             <p className="mt-1 text-sm font-black uppercase text-orange-100">
               {isMicMuted ? 'Muted' : 'Open'}
             </p>
@@ -562,16 +621,11 @@ export default function DashboardView({
 
             <div className="col-span-2 flex min-h-0 flex-col gap-2">
               {agentStages.map((stage) => (
-                <div
-                  key={stage.label}
-                  className="border border-white/10 bg-white/[0.03] p-3"
-                >
+                <div key={stage.label} className="border border-white/10 bg-white/[0.03] p-3">
                   <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">
                     {stage.label}
                   </p>
-                  <p className={`mt-2 text-lg font-black uppercase ${stage.tone}`}>
-                    {stage.value}
-                  </p>
+                  <p className={`mt-2 text-lg font-black uppercase ${stage.tone}`}>{stage.value}</p>
                 </div>
               ))}
               <div className="min-h-0 flex-1 border border-white/10 bg-black/30 p-3">
@@ -643,7 +697,9 @@ export default function DashboardView({
               </span>
               <span>
                 <span className="block text-[10px]">Vision</span>
-                <span className="block text-[7px] opacity-55">{isVideoOn ? 'Switch feed' : 'Optics'}</span>
+                <span className="block text-[7px] opacity-55">
+                  {isVideoOn ? 'Switch feed' : 'Optics'}
+                </span>
               </span>
             </button>
             <button

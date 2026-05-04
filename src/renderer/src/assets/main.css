@@ -27,7 +27,10 @@ body {
     linear-gradient(rgba(16, 185, 129, 0.06) 1px, transparent 1px),
     linear-gradient(90deg, rgba(16, 185, 129, 0.06) 1px, transparent 1px),
     radial-gradient(circle at center, rgba(103, 232, 249, 0.1), transparent 34rem);
-  background-size: 48px 48px, 48px 48px, 100% 100%;
+  background-size:
+    48px 48px,
+    48px 48px,
+    100% 100%;
   mask-image: radial-gradient(circle at center, black, transparent 78%);
 }
 
@@ -39,11 +42,13 @@ body {
     radial-gradient(circle at 18% 15%, rgba(20, 184, 166, 0.14), transparent 28rem),
     radial-gradient(circle at 92% 18%, rgba(249, 115, 22, 0.13), transparent 30rem),
     linear-gradient(135deg, #010403 0%, #05100d 44%, #070503 100%);
-  background-size: 34px 34px, 34px 34px, auto, auto, auto;
-  font-family:
-    'Trebuchet MS',
-    'Segoe UI',
-    sans-serif;
+  background-size:
+    34px 34px,
+    34px 34px,
+    auto,
+    auto,
+    auto;
+  font-family: 'Trebuchet MS', 'Segoe UI', sans-serif;
 }
 
 .nexus-app-shell::before {
@@ -52,8 +57,18 @@ body {
   inset: 0;
   pointer-events: none;
   background:
-    linear-gradient(115deg, transparent 0 28%, rgba(16, 185, 129, 0.07) 28% 28.11%, transparent 28.11%),
-    linear-gradient(65deg, transparent 0 68%, rgba(249, 115, 22, 0.065) 68% 68.11%, transparent 68.11%);
+    linear-gradient(
+      115deg,
+      transparent 0 28%,
+      rgba(16, 185, 129, 0.07) 28% 28.11%,
+      transparent 28.11%
+    ),
+    linear-gradient(
+      65deg,
+      transparent 0 68%,
+      rgba(249, 115, 22, 0.065) 68% 68.11%,
+      transparent 68.11%
+    );
 }
 
 .nexus-liquid-orb {
@@ -187,6 +202,158 @@ body {
     0 18px 60px rgba(0, 0, 0, 0.36);
 }
 
+.nexus-top-command-bar {
+  min-height: 7.35rem;
+  align-items: stretch;
+  justify-content: flex-start;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding: 0.65rem 0.75rem;
+}
+
+.nexus-header-main {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.9rem;
+}
+
+.nexus-header-brand {
+  display: flex;
+  min-width: 13rem;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid rgba(52, 211, 153, 0.18);
+  border-radius: 0.42rem;
+  padding: 0.35rem 0.55rem;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.13), transparent), rgba(0, 0, 0, 0.22);
+}
+
+.nexus-header-title {
+  flex: 1 1 auto;
+}
+
+.nexus-header-status {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.45rem;
+}
+
+.nexus-header-nav {
+  display: flex;
+  min-width: 0;
+  gap: 0.4rem;
+  overflow-x: auto;
+  border-top: 1px solid rgba(255, 255, 255, 0.075);
+  padding-top: 0.55rem;
+  perspective: 900px;
+}
+
+.nexus-header-tab {
+  position: relative;
+  display: inline-flex;
+  min-width: 7.4rem;
+  flex: 1 0 7.4rem;
+  align-items: center;
+  gap: 0.55rem;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 0.38rem;
+  padding: 0.48rem 0.58rem;
+  color: rgba(212, 212, 216, 0.68);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
+    rgba(0, 0, 0, 0.26);
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.05),
+    0 10px 26px rgba(0, 0, 0, 0.2);
+  transform: translateZ(0);
+  transform-style: preserve-3d;
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    background 180ms ease,
+    color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.nexus-header-tab::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.nexus-header-tab:hover {
+  transform: translateY(-2px) rotateX(4deg);
+  border-color: rgba(52, 211, 153, 0.28);
+  color: #f4f4f5;
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.08),
+    0 18px 34px rgba(0, 0, 0, 0.28);
+}
+
+.nexus-header-tab.is-active {
+  color: #ecfdf5;
+  border-color: rgba(52, 211, 153, 0.44);
+  background:
+    linear-gradient(135deg, rgba(16, 185, 129, 0.24), rgba(6, 182, 212, 0.1)), rgba(0, 0, 0, 0.34);
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.1),
+    0 0 24px rgba(16, 185, 129, 0.16);
+}
+
+.nexus-header-tab.is-active::after {
+  background: linear-gradient(90deg, #10b981, #67e8f9);
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.75);
+}
+
+.nexus-header-tab-icon {
+  display: grid;
+  height: 2rem;
+  width: 2rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 0.3rem;
+  background: rgba(0, 0, 0, 0.3);
+  font-size: 1rem;
+}
+
+.nexus-header-tab-copy {
+  min-width: 0;
+  text-align: left;
+}
+
+.nexus-header-tab-copy span,
+.nexus-header-tab-copy small {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nexus-header-tab-copy span {
+  font-size: 0.64rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.nexus-header-tab-copy small {
+  margin-top: 0.08rem;
+  color: rgba(161, 161, 170, 0.72);
+  font-size: 0.48rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .nexus-status-pill {
   display: inline-flex;
   align-items: center;
@@ -211,6 +378,18 @@ body {
     inset 0 1px rgba(255, 255, 255, 0.05),
     inset 0 0 70px rgba(16, 185, 129, 0.045),
     0 28px 90px rgba(0, 0, 0, 0.42);
+}
+
+.nexus-macro-editor {
+  background:
+    radial-gradient(circle at 25% 8%, rgba(16, 185, 129, 0.08), transparent 26rem),
+    radial-gradient(circle at 86% 82%, rgba(249, 115, 22, 0.08), transparent 22rem), #09090b;
+}
+
+.nexus-macro-library {
+  box-shadow:
+    inset -1px 0 rgba(255, 255, 255, 0.03),
+    18px 0 48px rgba(0, 0, 0, 0.24);
 }
 
 .nexus-content-stage::before,
@@ -381,8 +560,7 @@ body {
   border-color: rgba(52, 211, 153, 0.52);
   color: #bbf7d0;
   background:
-    linear-gradient(135deg, rgba(16, 185, 129, 0.22), rgba(6, 182, 212, 0.08)),
-    rgba(0, 0, 0, 0.36);
+    linear-gradient(135deg, rgba(16, 185, 129, 0.22), rgba(6, 182, 212, 0.08)), rgba(0, 0, 0, 0.36);
   box-shadow: inset 0 0 20px rgba(16, 185, 129, 0.08);
 }
 
@@ -395,8 +573,7 @@ body {
   border-color: rgba(248, 113, 113, 0.4);
   color: #fecaca;
   background:
-    linear-gradient(135deg, rgba(127, 29, 29, 0.28), rgba(249, 115, 22, 0.08)),
-    rgba(0, 0, 0, 0.36);
+    linear-gradient(135deg, rgba(127, 29, 29, 0.28), rgba(249, 115, 22, 0.08)), rgba(0, 0, 0, 0.36);
 }
 
 .nexus-control-switch.is-danger::after {
@@ -425,6 +602,11 @@ body {
     padding-block: 0.55rem;
   }
 
+  .nexus-top-command-bar {
+    min-height: 6.75rem;
+    gap: 0.5rem;
+  }
+
   .nexus-side-dock > div:first-child {
     padding: 1rem;
   }
@@ -439,6 +621,32 @@ body {
 
   .nexus-dashboard-arena {
     min-height: 0;
+  }
+}
+
+@media (max-width: 1060px) {
+  .nexus-header-main {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .nexus-header-brand {
+    min-width: 11rem;
+  }
+
+  .nexus-header-status {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .nexus-header-tab {
+    min-width: 3.25rem;
+    flex-basis: 3.25rem;
+    justify-content: center;
+  }
+
+  .nexus-header-tab-copy {
+    display: none;
   }
 }
 

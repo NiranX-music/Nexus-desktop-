@@ -5,9 +5,26 @@ export interface SystemStats {
     free: string
     usedPercentage: string
   }
-  temperature: number
+  temperature: number | null
+  battery: {
+    isPresent: boolean
+    percentage: number | null
+    isCharging: boolean
+    isOnBattery: boolean
+    status: string
+    estimatedMinutes: number | null
+  }
+  network: {
+    rxBytesPerSecond: number
+    txBytesPerSecond: number
+    totalBytesPerSecond: number
+    activeInterfaces: number
+    updatedAt: number
+  }
   os: {
     type: string
+    release: string
+    arch: string
     uptime: string
   }
 }
