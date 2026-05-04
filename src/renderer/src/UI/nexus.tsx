@@ -31,6 +31,7 @@ const AiChatView = lazy(() => import('../views/AiChat'))
 
 interface NexusProps {
   isSystemActive: boolean
+  isSystemStarting: boolean
   toggleSystem: () => void
   isMicMuted: boolean
   toggleMic: () => void
@@ -39,6 +40,7 @@ interface NexusProps {
   startVision: (mode: 'camera' | 'screen') => void
   stopVision: () => void
   activeStream: MediaStream | null
+  sendTextCommand: (command: string) => Promise<void>
 }
 
 const glassPanel = 'nexus-glass-card'

@@ -13,6 +13,7 @@ import { VisionMode } from '@renderer/IndexRoot'
 
 interface OverlayProps {
   isSystemActive: boolean
+  isSystemStarting: boolean
   toggleSystem: () => void
   isMicMuted: boolean
   toggleMic: () => void
@@ -20,10 +21,12 @@ interface OverlayProps {
   visionMode: VisionMode
   startVision: (mode: 'camera' | 'screen') => void
   stopVision: () => void
+  sendTextCommand: (command: string) => Promise<void>
 }
 
 const MiniOverlay = ({
   isSystemActive,
+  isSystemStarting,
   toggleSystem,
   isMicMuted,
   toggleMic,
@@ -89,9 +92,9 @@ const MiniOverlay = ({
 
         <button
           onClick={toggleSystem}
-          className={`p-3 rounded-full border transition-all duration-500 shadow-lg mx-1 ${isSystemActive ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400' : 'bg-zinc-800 border-zinc-600 text-zinc-500 hover:text-red-400'}`}
+          className={`p-3 rounded-full border transition-all duration-500 shadow-lg mx-1 ${isSystemActive ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400' : isSystemStarting ? 'bg-amber-500/15 border-amber-400 text-amber-200' : 'bg-zinc-800 border-zinc-600 text-zinc-500 hover:text-red-400'}`}
         >
-          <GiPowerButton size={20} className={isSystemActive ? 'animate-pulse' : ''} />
+          <GiPowerButton size={20} className={isSystemActive || isSystemStarting ? 'animate-pulse' : ''} />
         </button>
 
         <button

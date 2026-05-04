@@ -62,6 +62,36 @@ import { executeLockSystem } from '@renderer/handlers/LockSystem-handler'
 import AxiosInstance from '@renderer/config/AxiosInstance'
 import { getStoredNvidiaModelDefaults } from '@renderer/config/nvidia-models'
 
+const MIC_CHUNK_TARGET_SAMPLES = 2048
+const MAX_AUDIO_SOCKET_BACKLOG_BYTES = 768 * 1024
+const APP_WATCHER_INTERVAL_MS = 15000
+const APP_WATCHER_IDLE_GUARD_MS = 2500
+const CONTEXT_TIMEOUT_MS = 450
+const MAX_CONTEXT_HISTORY_TURNS = 6
+const MAX_CONTEXT_HISTORY_CHARS = 420
+
+const withTimeout = async <T,>(task: Promise<T>, fallback: T, timeoutMs = CONTEXT_TIMEOUT_MS) => {
+  try {
+    return await Promise.race([
+      task,
+      new Promise<T>((resolve) => setTimeout(() => resolve(fallback), timeoutMs))
+    ])
+  } catch {
+    return fallback
+  }
+}
+
+const trimContextText = (value = '', maxLength = MAX_CONTEXT_HISTORY_CHARS) => {
+  const normalized = String(value).replace(/\s+/g, ' ').trim()
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized
+}
+
+const compactHistory = (history: any[] = []) =>
+  history.slice(-MAX_CONTEXT_HISTORY_TURNS).map((message) => ({
+    role: message?.role || 'user',
+    text: trimContextText(message?.parts?.[0]?.text || '')
+  }))
+
 export class GeminiLiveService {
   public socket: WebSocket | null = null
   public audioContext: AudioContext | null = null
@@ -84,6 +114,10 @@ export class GeminiLiveService {
 
   private appWatcherInterval: NodeJS.Timeout | null = null
   private lastAppList: string[] = []
+  private lastUserAudioSentAt: number = 0
+  private lastResponseAudioAt: number = 0
+  private isAudioEngineReady: boolean = false
+  private cachedGeminiKey: string = ''
 
   constructor() {
     this.apiKey = ''
@@ -91,6 +125,64 @@ export class GeminiLiveService {
 
   setMute(muted: boolean) {
     this.isMicMuted = muted
+  }
+
+  async prewarm(): Promise<void> {
+    try {
+      await Promise.all([this.loadGeminiKey(), this.ensureAudioEngine()])
+    } catch {}
+  }
+
+  private async loadGeminiKey(): Promise<string> {
+    const localKey = localStorage?.getItem('nexus_custom_api_key')?.trim() || ''
+    if (localKey) {
+      this.cachedGeminiKey = localKey
+      return localKey
+    }
+
+    if (this.cachedGeminiKey) return this.cachedGeminiKey
+
+    if (!window.electron?.ipcRenderer) return ''
+
+    const secureKeys = await withTimeout(
+      window.electron.ipcRenderer.invoke('secure-get-keys'),
+      null,
+      700
+    )
+    const secureKey = secureKeys?.geminiKey?.trim() || ''
+    this.cachedGeminiKey = secureKey
+    return secureKey
+  }
+
+  private async ensureAudioEngine(): Promise<void> {
+    if (this.audioContext && this.analyser && this.isAudioEngineReady) return
+
+    this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+    this.analyser = this.audioContext.createAnalyser()
+    this.analyser.fftSize = 256
+    this.analyser.smoothingTimeConstant = 0.5
+
+    const audioWorkletCode = `
+      class PCMProcessor extends AudioWorkletProcessor {
+        process(inputs, outputs, parameters) {
+          const input = inputs[0];
+          if (input.length > 0) {
+            this.port.postMessage(input[0]);
+          }
+          return true;
+        }
+      }
+      registerProcessor('pcm-processor', PCMProcessor);
+    `
+    const blob = new Blob([audioWorkletCode], { type: 'application/javascript' })
+    const workletUrl = URL.createObjectURL(blob)
+
+    try {
+      await this.audioContext.audioWorklet.addModule(workletUrl)
+      this.isAudioEngineReady = true
+    } finally {
+      URL.revokeObjectURL(workletUrl)
+    }
   }
 
   private stopAllAudio() {
@@ -105,42 +197,47 @@ export class GeminiLiveService {
   }
 
   async connect(): Promise<void> {
-    if (window.electron?.ipcRenderer) {
-      const secureKeys = await window.electron.ipcRenderer.invoke('secure-get-keys')
-      this.apiKey = secureKeys?.geminiKey || localStorage?.getItem('nexus_custom_api_key') || ''
-    } else {
-      this.apiKey = localStorage.getItem('nexus_custom_api_key') || ''
-    }
-
-    this.apiKey = this.apiKey.trim()
+    this.apiKey = (await this.loadGeminiKey()).trim()
 
     if (!this.apiKey || this.apiKey === '') {
       throw new Error('NO_API_KEY')
     }
 
-    let cloudUser = {
+    await this.ensureAudioEngine()
+
+    const defaultCloudUser = {
       name: localStorage.getItem('nexus_user_name') || 'NiranX',
       email: 'Not linked'
     }
 
-    try {
-      const res = await AxiosInstance.get('/users/me', { timeout: 3000 })
-      if (res.data) {
-        cloudUser.name = res.data?.user?.name || cloudUser.name
-        cloudUser.email = res.data?.user?.email || cloudUser.email
-      }
-    } catch (e) {}
+    const [
+      cloudUser,
+      history,
+      sysStats,
+      installedApps,
+      runningApps,
+      locationData,
+      storedPersonality
+    ] = await Promise.all([
+      withTimeout(
+        AxiosInstance.get('/users/me', { timeout: CONTEXT_TIMEOUT_MS }).then((res) => ({
+          name: res.data?.user?.name || defaultCloudUser.name,
+          email: res.data?.user?.email || defaultCloudUser.email
+        })),
+        defaultCloudUser
+      ),
+      withTimeout(getHistory(), []),
+      withTimeout(getSystemStatus(), null),
+      withTimeout(getAllApps(), []),
+      withTimeout(getRunningApps(), []),
+      withTimeout(getLiveLocation(), null),
+      withTimeout(window.electron.ipcRenderer.invoke('get-personality'), '')
+    ])
 
-    const history = await getHistory()
-    const sysStats = await getSystemStatus()
-    const allapps = await getAllApps()
-    this.lastAppList = await getRunningApps()
+    this.lastAppList = runningApps
 
-    const locationData = await getLiveLocation()
     const locStr = locationData?.fullString || 'Unknown Location'
     const locTimezone = locationData?.timezone || 'Unknown Timezone'
-
-    const storedPersonality = await window.electron.ipcRenderer.invoke('get-personality')
     const activePersonality =
       storedPersonality && storedPersonality.trim() !== ''
         ? storedPersonality
@@ -192,17 +289,17 @@ If the user says "Click on [Object]", "Click the button", or "Select that":
 - **User Email:** ${cloudUser.email}
 - **Current Physical Location:** ${locStr}
 - **Timezone:** ${locTimezone}
-- **OS:** ${sysStats?.os.type || 'Unknown'}
-- **System Health:** CPU ${sysStats?.cpu || '0'}% | RAM ${sysStats?.memory.usedPercentage || '0'}%
-- **Uptime:** ${sysStats?.os.uptime || 'Unknown'}
+- **OS:** ${sysStats?.os?.type || 'Unknown'}
+- **System Health:** CPU ${sysStats?.cpu || '0'}% | RAM ${sysStats?.memory?.usedPercentage || '0'}%
+- **Uptime:** ${sysStats?.os?.uptime || 'Unknown'}
 - **Temperature:** ${sysStats?.temperature || 'Unknown'}°C
 - **Open Apps:** ${this.lastAppList.join(', ')}
-- **Installed Apps:** ${allapps.slice(0, 10).join(', ')}${allapps.length > 300 ? ', ...' : ''}
+- **Installed Apps:** ${installedApps.slice(0, 8).join(', ')}${installedApps.length > 8 ? ', ...' : ''}
 - **Current Time:** ${new Date().toLocaleString()}
 ---
 
 # 🧠 MEMORY (Last Context)
-${JSON.stringify(history)}
+${JSON.stringify(compactHistory(history))}
 ---
 
 # 🟩 NVIDIA BUILD MODEL DEFAULTS
@@ -212,27 +309,6 @@ ${nvidiaDefaultSummary}
 `
 
     const finalSystemInstruction = Nexus_SYSTEM_INSTRUCTION + contextPrompt
-
-    this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
-    this.analyser = this.audioContext.createAnalyser()
-    this.analyser.fftSize = 256
-    this.analyser.smoothingTimeConstant = 0.5
-
-    const audioWorkletCode = `
-      class PCMProcessor extends AudioWorkletProcessor {
-        process(inputs, outputs, parameters) {
-          const input = inputs[0];
-          if (input.length > 0) {
-            this.port.postMessage(input[0]);
-          }
-          return true;
-        }
-      }
-      registerProcessor('pcm-processor', PCMProcessor);
-    `
-    const blob = new Blob([audioWorkletCode], { type: 'application/javascript' })
-    const workletUrl = URL.createObjectURL(blob)
-    await this.audioContext.audioWorklet.addModule(workletUrl)
 
     const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${this.apiKey}`
     this.socket = new WebSocket(url)
@@ -267,6 +343,8 @@ ${nvidiaDefaultSummary}
       this.userInputBuffer = ''
       this.rawAudioBuffer = []
       this.rawAudioBufferLength = 0
+      this.lastUserAudioSentAt = 0
+      this.lastResponseAudioAt = 0
       const setupMsg = {
         setup: {
           model: this.model,
@@ -1519,6 +1597,7 @@ ${nvidiaDefaultSummary}
           if (serverContent.modelTurn?.parts) {
             serverContent.modelTurn.parts.forEach((part: any) => {
               if (part.inlineData) {
+                this.lastResponseAudioAt = Date.now()
                 this.scheduleAudioChunk(part.inlineData.data)
               }
             })
@@ -1555,6 +1634,12 @@ ${nvidiaDefaultSummary}
   startAppWatcher() {
     this.appWatcherInterval = setInterval(async () => {
       if (!this.isConnected || !this.socket) return
+      const now = Date.now()
+      const isVoiceBusy =
+        now - this.lastUserAudioSentAt < APP_WATCHER_IDLE_GUARD_MS ||
+        now - this.lastResponseAudioAt < APP_WATCHER_IDLE_GUARD_MS
+
+      if (isVoiceBusy) return
 
       const currentApps = await getRunningApps()
 
@@ -1580,14 +1665,20 @@ ${nvidiaDefaultSummary}
           this.socket.send(JSON.stringify(updateFrame))
         }
       }
-    }, 3000)
+    }, APP_WATCHER_INTERVAL_MS)
   }
 
   async startMicrophone(): Promise<void> {
     if (!this.audioContext) return
     try {
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, sampleRate: 16000 }
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
       })
 
       const source = this.audioContext.createMediaStreamSource(this.mediaStream)
@@ -1598,11 +1689,17 @@ ${nvidiaDefaultSummary}
       this.workletNode.port.onmessage = (event) => {
         if (!this.socket || this.socket.readyState !== WebSocket.OPEN || this.isMicMuted) return
 
+        if (this.socket.bufferedAmount > MAX_AUDIO_SOCKET_BACKLOG_BYTES) {
+          this.rawAudioBuffer = []
+          this.rawAudioBufferLength = 0
+          return
+        }
+
         const inputData = event.data
         this.rawAudioBuffer.push(inputData)
         this.rawAudioBufferLength += inputData.length
 
-        const requiredRawSamples = Math.floor(4096 * (inputSampleRate / 16000))
+        const requiredRawSamples = Math.floor(MIC_CHUNK_TARGET_SAMPLES * (inputSampleRate / 16000))
 
         if (this.rawAudioBufferLength >= requiredRawSamples) {
           const combined = new Float32Array(this.rawAudioBufferLength)
@@ -1616,6 +1713,7 @@ ${nvidiaDefaultSummary}
 
           const downsampledData = downsampleTo16000(combined, inputSampleRate)
           const base64Audio = float32ToBase64PCM(downsampledData)
+          this.lastUserAudioSentAt = Date.now()
 
           this.socket.send(
             JSON.stringify({
@@ -1648,7 +1746,7 @@ ${nvidiaDefaultSummary}
     this.analyser.connect(this.audioContext.destination)
 
     const currentTime = this.audioContext.currentTime
-    if (this.nextStartTime < currentTime) this.nextStartTime = currentTime + 0.05
+    if (this.nextStartTime < currentTime) this.nextStartTime = currentTime + 0.02
 
     source.start(this.nextStartTime)
     this.nextStartTime += buffer.duration
@@ -1668,6 +1766,34 @@ ${nvidiaDefaultSummary}
     )
   }
 
+  async sendTextCommand(text: string): Promise<void> {
+    const command = text.trim()
+    if (!command) return
+
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      throw new Error('Core is still starting. Try again in a moment.')
+    }
+
+    this.stopAllAudio()
+    this.userInputBuffer = ''
+    this.aiResponseBuffer = ''
+    await saveMessage('user', command)
+
+    this.socket.send(
+      JSON.stringify({
+        clientContent: {
+          turns: [
+            {
+              role: 'user',
+              parts: [{ text: command }]
+            }
+          ],
+          turnComplete: true
+        }
+      })
+    )
+  }
+
   disconnect(): void {
     if (this.appWatcherInterval) {
       clearInterval(this.appWatcherInterval)
@@ -1676,6 +1802,8 @@ ${nvidiaDefaultSummary}
 
     this.isConnected = false
     this.stopAllAudio()
+    this.lastUserAudioSentAt = 0
+    this.lastResponseAudioAt = 0
 
     if (this.socket) {
       this.socket.close()

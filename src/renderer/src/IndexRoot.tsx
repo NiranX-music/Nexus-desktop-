@@ -23,6 +23,7 @@ const IndexRoot = () => {
   const [isOverlay, setIsOverlay] = useState(false)
 
   const [isSystemActive, setIsSystemActive] = useState(false)
+  const [isSystemStarting, setIsSystemStarting] = useState(false)
   const [isMicMuted, setIsMicMuted] = useState(true)
 
   const [isVideoOn, setIsVideoOn] = useState(false)
@@ -33,30 +34,80 @@ const IndexRoot = () => {
   const aiIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
   useEffect(() => {
+    const prewarmTimer = setTimeout(() => {
+      nexusService.prewarm()
+    }, 700)
+
     window.electron.ipcRenderer.on('overlay-mode', (_e, mode) => setIsOverlay(mode))
     return () => {
+      clearTimeout(prewarmTimer)
       window.electron.ipcRenderer.removeAllListeners('overlay-mode')
     }
   }, [])
 
   useEffect(() => {
     const watchdog = setInterval(() => {
-      if (isSystemActive && !nexusService.isConnected) {
+      if (isSystemActive && !isSystemStarting && !nexusService.isConnected) {
         setIsSystemActive(false)
         setIsMicMuted(true)
         stopVision()
       }
     }, 1000)
     return () => clearInterval(watchdog)
-  }, [isSystemActive])
+  }, [isSystemActive, isSystemStarting])
+
+  const waitForCoreReady = (timeoutMs = 8000) =>
+    new Promise<void>((resolve, reject) => {
+      if (nexusService.isConnected && nexusService.socket?.readyState === WebSocket.OPEN) {
+        resolve()
+        return
+      }
+
+      const start = Date.now()
+      const interval = setInterval(() => {
+        if (nexusService.isConnected && nexusService.socket?.readyState === WebSocket.OPEN) {
+          clearInterval(interval)
+          resolve()
+          return
+        }
+
+        if (Date.now() - start > timeoutMs) {
+          clearInterval(interval)
+          reject(new Error('Core is taking too long to start. Check the Gemini API key/network.'))
+        }
+      }, 100)
+    })
+
+  const startSystem = async () => {
+    if (isSystemActive && nexusService.isConnected) return
+    if (isSystemStarting) {
+      await waitForCoreReady()
+      return
+    }
+
+    setIsSystemStarting(true)
+    try {
+      await nexusService.connect()
+      setIsSystemActive(true)
+      setIsMicMuted(false)
+      nexusService.setMute(false)
+      waitForCoreReady()
+        .then(() => setIsSystemStarting(false))
+        .catch(() => {
+          setIsSystemActive(false)
+          setIsMicMuted(true)
+          setIsSystemStarting(false)
+        })
+    } catch (error) {
+      setIsSystemStarting(false)
+      throw error
+    }
+  }
 
   const toggleSystem = async () => {
     if (!isSystemActive) {
       try {
-        await nexusService.connect()
-        setIsSystemActive(true)
-        setIsMicMuted(false)
-        nexusService.setMute(false)
+        await startSystem()
       } catch (err: any) {
         if (err.message === 'NO_API_KEY') {
           alert(
@@ -66,14 +117,27 @@ const IndexRoot = () => {
           alert(`Connection failed: ${err.message}`)
         }
         setIsSystemActive(false)
+        setIsSystemStarting(false)
       }
     } else {
       nexusService.disconnect()
       setIsSystemActive(false)
+      setIsSystemStarting(false)
       setIsMicMuted(true)
       nexusService.setMute(true)
       stopVision()
     }
+  }
+
+  const sendTextCommand = async (command: string) => {
+    if (!isSystemActive || !nexusService.isConnected) {
+      await startSystem()
+      await waitForCoreReady()
+    } else if (isSystemStarting) {
+      await waitForCoreReady()
+    }
+
+    await nexusService.sendTextCommand(command)
   }
 
   const toggleMic = () => {
@@ -172,6 +236,7 @@ const IndexRoot = () => {
       <div className="w-screen h-screen overflow-hidden flex items-center justify-center bg-transparent">
         <MiniOverlay
           isSystemActive={isSystemActive}
+          isSystemStarting={isSystemStarting}
           toggleSystem={toggleSystem}
           isMicMuted={isMicMuted}
           toggleMic={toggleMic}
@@ -179,6 +244,7 @@ const IndexRoot = () => {
           visionMode={visionMode}
           startVision={startVision}
           stopVision={stopVision}
+          sendTextCommand={sendTextCommand}
         />
       </div>
     )
@@ -190,6 +256,7 @@ const IndexRoot = () => {
       <div className="min-h-0 flex-1 relative">
         <Nexus
           isSystemActive={isSystemActive}
+          isSystemStarting={isSystemStarting}
           toggleSystem={toggleSystem}
           isMicMuted={isMicMuted}
           toggleMic={toggleMic}
@@ -198,6 +265,7 @@ const IndexRoot = () => {
           startVision={startVision}
           stopVision={stopVision}
           activeStream={activeStreamRef.current}
+          sendTextCommand={sendTextCommand}
         />
       </div>
       <SmartDropZonesWidget />

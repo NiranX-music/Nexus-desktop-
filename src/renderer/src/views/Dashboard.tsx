@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef, useState } from 'react'
+import { FormEvent, useEffect, useCallback, useRef, useState } from 'react'
 import Sphere from '@renderer/components/Sphere'
 import {
   RiCpuLine,
@@ -13,7 +13,8 @@ import {
   RiPulseLine,
   RiWifiLine,
   RiServerLine,
-  RiEarthLine
+  RiEarthLine,
+  RiSendPlane2Line
 } from 'react-icons/ri'
 import { FaMemory } from 'react-icons/fa6'
 import { GiTinker } from 'react-icons/gi'
@@ -23,6 +24,7 @@ import { VisionMode } from '@renderer/IndexRoot'
 
 interface NexusProps {
   isSystemActive: boolean
+  isSystemStarting: boolean
   toggleSystem: () => void
   isMicMuted: boolean
   toggleMic: () => void
@@ -31,6 +33,7 @@ interface NexusProps {
   startVision: (mode: 'camera' | 'screen') => void
   stopVision: () => void
   activeStream: MediaStream | null
+  sendTextCommand: (command: string) => Promise<void>
 }
 
 interface DashboardViewProps {
@@ -56,7 +59,9 @@ export default function DashboardView({
     activeStream,
     toggleMic,
     toggleSystem,
-    isMicMuted
+    isMicMuted,
+    isSystemStarting,
+    sendTextCommand
   } = props
 
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -65,8 +70,30 @@ export default function DashboardView({
   const faceScanInterval = useRef<NodeJS.Timeout | null>(null)
 
   const [modelsLoaded, setModelsLoaded] = useState(false)
+  const [textCommand, setTextCommand] = useState('')
+  const [textCommandStatus, setTextCommandStatus] = useState('')
+  const [isSendingTextCommand, setIsSendingTextCommand] = useState(false)
 
   const [networkStats, setNetworkStats] = useState({ ping: 24, rate: 1.2, tx: 40, rx: 60 })
+
+  const submitTextCommand = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const command = textCommand.trim()
+    if (!command || isSendingTextCommand) return
+
+    setIsSendingTextCommand(true)
+    setTextCommandStatus(isSystemActive ? 'Sending command...' : 'Starting core...')
+
+    try {
+      await sendTextCommand(command)
+      setTextCommand('')
+      setTextCommandStatus('Voice response queued.')
+    } catch (error: any) {
+      setTextCommandStatus(error?.message || 'Unable to send text command.')
+    } finally {
+      setIsSendingTextCommand(false)
+    }
+  }
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
@@ -515,7 +542,7 @@ export default function DashboardView({
               Agent Core
             </span>
             <span className="text-[8px] font-mono uppercase tracking-[0.18em] text-zinc-500">
-              Compact Command Matrix
+              {isSystemStarting ? 'Starting low-latency link' : 'Compact Command Matrix'}
             </span>
           </div>
 
@@ -558,6 +585,31 @@ export default function DashboardView({
               </div>
             </div>
           </div>
+
+          <form
+            onSubmit={submitTextCommand}
+            className="mt-3 flex shrink-0 items-center gap-2 border border-emerald-300/15 bg-black/45 p-2"
+          >
+            <input
+              value={textCommand}
+              onChange={(event) => setTextCommand(event.target.value)}
+              placeholder="Type command, Nexus replies in voice..."
+              className="min-w-0 flex-1 bg-transparent px-2 py-2 text-xs font-semibold text-white outline-none placeholder:text-zinc-600"
+            />
+            <button
+              type="submit"
+              disabled={!textCommand.trim() || isSendingTextCommand}
+              className="grid h-10 w-10 shrink-0 place-items-center border border-emerald-300/25 bg-emerald-400/15 text-emerald-200 transition hover:bg-emerald-400 hover:text-black disabled:cursor-not-allowed disabled:opacity-35"
+              title="Send text command with voice response"
+            >
+              <RiSendPlane2Line size={18} />
+            </button>
+            {textCommandStatus && (
+              <span className="hidden max-w-[8rem] truncate text-[8px] font-black uppercase tracking-[0.18em] text-emerald-300/70 xl:block">
+                {textCommandStatus}
+              </span>
+            )}
+          </form>
         </div>
 
         <div
@@ -596,14 +648,17 @@ export default function DashboardView({
             </button>
             <button
               onClick={toggleSystem}
-              className={`nexus-control-switch ${isSystemActive ? 'is-active' : 'is-danger'}`}
+              disabled={isSystemStarting}
+              className={`nexus-control-switch ${isSystemActive ? 'is-active' : isSystemStarting ? 'is-idle' : 'is-danger'}`}
             >
               <span className="nexus-control-icon">
                 <RiPhoneFill size={17} />
               </span>
               <span>
                 <span className="block text-[10px]">Core</span>
-                <span className="block text-[7px] opacity-55">{isSystemActive ? 'Online' : 'Standby'}</span>
+                <span className="block text-[7px] opacity-55">
+                  {isSystemActive ? 'Online' : isSystemStarting ? 'Starting' : 'Standby'}
+                </span>
               </span>
             </button>
             <button
