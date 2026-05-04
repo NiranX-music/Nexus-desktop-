@@ -392,6 +392,40 @@ body {
     18px 0 48px rgba(0, 0, 0, 0.24);
 }
 
+.nexus-browser-control {
+  background:
+    radial-gradient(circle at 18% 12%, rgba(16, 185, 129, 0.1), transparent 26rem),
+    radial-gradient(circle at 86% 72%, rgba(6, 182, 212, 0.08), transparent 22rem),
+    radial-gradient(circle at 50% 100%, rgba(249, 115, 22, 0.06), transparent 24rem);
+}
+
+.nexus-browser-hero {
+  background:
+    linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(6, 182, 212, 0.035)), rgba(0, 0, 0, 0.34);
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.08),
+    0 18px 46px rgba(0, 0, 0, 0.28);
+}
+
+.nexus-browser-action-tile {
+  transform: translateZ(0);
+  transform-style: preserve-3d;
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.055),
+    0 14px 34px rgba(0, 0, 0, 0.24);
+}
+
+.nexus-browser-action-tile:hover {
+  transform: translateY(-3px) rotateX(4deg);
+  border-color: rgba(52, 211, 153, 0.28);
+  background:
+    linear-gradient(135deg, rgba(16, 185, 129, 0.14), rgba(6, 182, 212, 0.05)),
+    rgba(255, 255, 255, 0.04);
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.08),
+    0 20px 44px rgba(0, 0, 0, 0.32);
+}
+
 .nexus-content-stage::before,
 .nexus-content-stage::after {
   content: '';

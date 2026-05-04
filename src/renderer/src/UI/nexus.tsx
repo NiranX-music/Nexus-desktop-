@@ -12,7 +12,8 @@ import {
   RiComputerLine,
   RiCloseLine,
   RiImageLine,
-  RiChatSmile3Line
+  RiChatSmile3Line,
+  RiGlobalLine
 } from 'react-icons/ri'
 import { getSystemStatus } from '@renderer/services/system-info'
 import type { SystemStats } from '@renderer/services/system-info'
@@ -25,6 +26,7 @@ import { VisionMode } from '@renderer/IndexRoot'
 
 const AppsView = lazy(() => import('../views/APP'))
 const WorkFlowEditorView = lazy(() => import('../views/WorkFlowEditor'))
+const BrowserControlView = lazy(() => import('../views/BrowserControl'))
 const NotesView = lazy(() => import('../views/Notes'))
 const SettingsView = lazy(() => import('../views/Settings'))
 const GalleryView = lazy(() => import('../views/Gallery'))
@@ -49,6 +51,12 @@ const glassPanel = 'nexus-glass-card'
 const navTabs = [
   { id: 'DASHBOARD', label: 'Command', detail: 'Core overview', icon: <RiLayoutGridLine /> },
   { id: 'AI CHAT', label: 'AI Chat', detail: 'NVIDIA Build', icon: <RiChatSmile3Line /> },
+  {
+    id: 'BROWSER CONTROL',
+    label: 'Browser',
+    detail: 'Voice + text',
+    icon: <RiGlobalLine />
+  },
   { id: 'Macros', label: 'Macros', detail: 'Automation flow', icon: <RiBrainLine /> },
   { id: 'Apps', label: 'Apps', detail: 'Local tools', icon: <RiFolderOpenLine /> },
   { id: 'NOTES', label: 'Notes', detail: 'Vault memory', icon: <RiFolderOpenLine /> },
@@ -222,6 +230,7 @@ const Nexus = (props: NexusProps) => {
               {activeTab !== 'DASHBOARD' && activeTab !== 'PHONE' && (
                 <div className="absolute inset-0 overflow-y-auto scrollbar-small">
                   {activeTab === 'Macros' && <WorkFlowEditorView />}
+                  {activeTab === 'BROWSER CONTROL' && <BrowserControlView />}
                   {activeTab === 'AI CHAT' && <AiChatView />}
                   {activeTab === 'Apps' && <AppsView />}
                   {activeTab === 'NOTES' && <NotesView glassPanel={glassPanel} />}

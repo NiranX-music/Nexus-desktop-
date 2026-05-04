@@ -1,9 +1,11 @@
 import { IpcMain, shell } from 'electron'
+import { keyboard, Key, mouse, Point, Button } from '@nut-tree-fork/nut-js'
 import puppeteer from 'puppeteer-extra'
 import StealthPlugin from 'puppeteer-extra-plugin-stealth'
 import { load } from 'cheerio'
 
 puppeteer.use(StealthPlugin())
+keyboard.config.autoDelayMs = 18
 
 const USER_BOOKMARKS: Record<string, string> = {
   instagram: 'https://instagram.com',
@@ -11,6 +13,218 @@ const USER_BOOKMARKS: Record<string, string> = {
   chatgpt: 'https://chat.openai.com',
   claude: 'https://claude.ai',
   linkedin: 'https://linkedin.com'
+}
+
+const BROWSER_KEY_MAP: Record<string, Key> = {
+  enter: Key.Enter,
+  return: Key.Enter,
+  tab: Key.Tab,
+  space: Key.Space,
+  escape: Key.Escape,
+  esc: Key.Escape,
+  backspace: Key.Backspace,
+  delete: Key.Delete,
+  up: Key.Up,
+  down: Key.Down,
+  left: Key.Left,
+  right: Key.Right,
+  pageup: Key.PageUp,
+  pagedown: Key.PageDown,
+  home: Key.Home,
+  end: Key.End,
+  f5: Key.F5,
+  a: Key.A,
+  b: Key.B,
+  c: Key.C,
+  d: Key.D,
+  e: Key.E,
+  f: Key.F,
+  g: Key.G,
+  h: Key.H,
+  i: Key.I,
+  j: Key.J,
+  k: Key.K,
+  l: Key.L,
+  m: Key.M,
+  n: Key.N,
+  o: Key.O,
+  p: Key.P,
+  q: Key.Q,
+  r: Key.R,
+  s: Key.S,
+  t: Key.T,
+  u: Key.U,
+  v: Key.V,
+  w: Key.W,
+  x: Key.X,
+  y: Key.Y,
+  z: Key.Z
+}
+
+const MODIFIER_KEY_MAP: Record<string, Key> = {
+  control: Key.LeftControl,
+  ctrl: Key.LeftControl,
+  command: Key.LeftSuper,
+  cmd: Key.LeftSuper,
+  win: Key.LeftSuper,
+  shift: Key.LeftShift,
+  alt: Key.LeftAlt
+}
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+const normalizeUrl = (value: string) => {
+  const target = value.trim().replace(/^["']|["']$/g, '')
+  if (/^https?:\/\//i.test(target)) return target
+  if (/^[\w-]+(\.[\w-]+)+([/?#].*)?$/i.test(target)) return `https://${target}`
+  return `https://www.google.com/search?q=${encodeURIComponent(target)}`
+}
+
+const getGoogleSearchUrl = (query: string) =>
+  `https://www.google.com/search?q=${encodeURIComponent(query.trim())}`
+
+const splitBrowserPrompt = (prompt: string) =>
+  prompt
+    .split(/\s+(?:and then|then|after that)\s+|;\s*/i)
+    .map((step) => step.trim())
+    .filter(Boolean)
+
+const parseShortcut = (value: string) => {
+  const tokens = value
+    .toLowerCase()
+    .replace(/\s*\+\s*/g, '+')
+    .split(/[+\s]+/)
+    .map((token) => token.trim())
+    .filter(Boolean)
+
+  const modifiers: Key[] = []
+  let key: Key | undefined
+
+  for (const token of tokens) {
+    const modifier = MODIFIER_KEY_MAP[token]
+    if (modifier !== undefined) {
+      modifiers.push(modifier)
+      continue
+    }
+
+    const mappedKey = BROWSER_KEY_MAP[token]
+    if (mappedKey !== undefined) key = mappedKey
+  }
+
+  return { modifiers, key }
+}
+
+const pressBrowserShortcut = async (value: string) => {
+  const { modifiers, key } = parseShortcut(value)
+  if (key === undefined) throw new Error(`Unsupported key: ${value}`)
+
+  for (const modifier of modifiers) await keyboard.pressKey(modifier)
+  await keyboard.pressKey(key)
+  await keyboard.releaseKey(key)
+  for (const modifier of modifiers.reverse()) await keyboard.releaseKey(modifier)
+}
+
+const runBrowserStep = async (rawStep: string) => {
+  const step = rawStep.trim()
+  const lower = step.toLowerCase()
+
+  if (/^(new tab|open new tab)$/.test(lower)) {
+    await pressBrowserShortcut('ctrl+t')
+    return { action: 'shortcut', detail: 'New tab' }
+  }
+
+  if (/^(close tab|close current tab)$/.test(lower)) {
+    await pressBrowserShortcut('ctrl+w')
+    return { action: 'shortcut', detail: 'Close tab' }
+  }
+
+  if (/^(reload|refresh)$/.test(lower)) {
+    await pressBrowserShortcut('f5')
+    return { action: 'shortcut', detail: 'Reload' }
+  }
+
+  if (/^(back|go back)$/.test(lower)) {
+    await pressBrowserShortcut('alt+left')
+    return { action: 'shortcut', detail: 'Back' }
+  }
+
+  if (/^(forward|go forward)$/.test(lower)) {
+    await pressBrowserShortcut('alt+right')
+    return { action: 'shortcut', detail: 'Forward' }
+  }
+
+  if (/^(address bar|focus address bar|select address bar)$/.test(lower)) {
+    await pressBrowserShortcut('ctrl+l')
+    return { action: 'shortcut', detail: 'Address bar' }
+  }
+
+  const openMatch = step.match(/^(?:open|go to|visit)\s+(.+)$/i)
+  if (openMatch) {
+    const target = normalizeUrl(openMatch[1])
+    await shell.openExternal(target)
+    await delay(700)
+    return { action: 'open', detail: target }
+  }
+
+  const searchMatch = step.match(/^(?:search|google|look up|find)\s+(?:for\s+)?(.+)$/i)
+  if (searchMatch) {
+    const query = searchMatch[1].trim()
+    const target = getGoogleSearchUrl(query)
+    await shell.openExternal(target)
+    await delay(700)
+    return { action: 'search', detail: query }
+  }
+
+  const typeMatch = step.match(/^(?:type|write|input|paste)\s+(.+)$/i)
+  if (typeMatch) {
+    const text = typeMatch[1].replace(/^["']|["']$/g, '')
+    await keyboard.type(text)
+    return { action: 'type', detail: text.length > 80 ? `${text.slice(0, 80)}...` : text }
+  }
+
+  const pressMatch = step.match(/^(?:press|hit)\s+(.+)$/i)
+  if (pressMatch) {
+    await pressBrowserShortcut(pressMatch[1])
+    return { action: 'shortcut', detail: pressMatch[1] }
+  }
+
+  const coordinateClickMatch = step.match(
+    /^(double\s+click|click)(?:\s+at)?\s+(\d{1,5})\s*[,x]\s*(\d{1,5})$/i
+  )
+  if (coordinateClickMatch) {
+    const x = Number(coordinateClickMatch[2])
+    const y = Number(coordinateClickMatch[3])
+    await mouse.setPosition(new Point(x, y))
+    if (/double/i.test(coordinateClickMatch[1])) await mouse.doubleClick(Button.LEFT)
+    else await mouse.leftClick()
+    return {
+      action: /double/i.test(coordinateClickMatch[1]) ? 'double-click' : 'click',
+      detail: `${x}, ${y}`
+    }
+  }
+
+  if (/^double\s+click$/i.test(step)) {
+    await mouse.doubleClick(Button.LEFT)
+    return { action: 'double-click', detail: 'Current pointer' }
+  }
+
+  if (/^click$/i.test(step)) {
+    await mouse.leftClick()
+    return { action: 'click', detail: 'Current pointer' }
+  }
+
+  const scrollMatch = step.match(/^scroll\s+(up|down)(?:\s+(\d+))?$/i)
+  if (scrollMatch) {
+    const amount = Number(scrollMatch[2] || 420)
+    if (scrollMatch[1].toLowerCase() === 'up') await mouse.scrollUp(amount)
+    else await mouse.scrollDown(amount)
+    return { action: 'scroll', detail: `${scrollMatch[1].toLowerCase()} ${amount}` }
+  }
+
+  const fallbackTarget = getGoogleSearchUrl(step)
+  await shell.openExternal(fallbackTarget)
+  await delay(700)
+  return { action: 'search', detail: step }
 }
 
 const getSmartUrl = (
@@ -68,6 +282,47 @@ const getSmartUrl = (
 }
 
 export default function registerWebAgent(ipcMain: IpcMain) {
+  ipcMain.removeHandler('browser-control:run')
+  ipcMain.handle('browser-control:run', async (_event, payload: { prompt?: string } = {}) => {
+    const prompt = String(payload.prompt || '').trim()
+    if (!prompt) {
+      return {
+        success: false,
+        summary: 'No browser command received.',
+        actions: []
+      }
+    }
+
+    const steps = splitBrowserPrompt(prompt)
+    const actions: Array<{ action: string; detail: string; ok: boolean; error?: string }> = []
+
+    for (const step of steps) {
+      try {
+        const result = await runBrowserStep(step)
+        actions.push({ ...result, ok: true })
+      } catch (error: any) {
+        actions.push({
+          action: 'error',
+          detail: step,
+          ok: false,
+          error: error?.message || 'Browser action failed.'
+        })
+        break
+      }
+    }
+
+    const completed = actions.filter((action) => action.ok).length
+    const failed = actions.find((action) => !action.ok)
+
+    return {
+      success: !failed,
+      summary: failed
+        ? `Completed ${completed}/${steps.length} browser actions. ${failed.error}`
+        : `Completed ${completed} browser action${completed === 1 ? '' : 's'}.`,
+      actions
+    }
+  })
+
   ipcMain.handle('google-search', async (_event, query: string) => {
     let browser: any = null
 
