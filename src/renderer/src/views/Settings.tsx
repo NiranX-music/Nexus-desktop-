@@ -109,11 +109,12 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const [appVersion, setAppVersion] = useState('Loading')
   const [updateFeedUrl, setUpdateFeedUrl] = useState('https://nexus-desktop-app.vercel.app/updates/win')
   const [updateStatus, setUpdateStatus] = useState<
-    'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error'
+    'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'installing' | 'error'
   >('idle')
   const [updateVersion, setUpdateVersion] = useState('')
   const [updateNotes, setUpdateNotes] = useState('No new updates detected.')
   const [downloadProgress, setDownloadProgress] = useState(0)
+  const [isInstallPromptOpen, setIsInstallPromptOpen] = useState(false)
   const [developerProfile, setDeveloperProfile] = useState(getDeveloperProfile())
   const [aboutAdminPass, setAboutAdminPass] = useState('')
   const [isAboutAdminUnlocked, setIsAboutAdminUnlocked] = useState(false)
@@ -163,14 +164,19 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
         }
         if (status === 'downloading') {
           setUpdateStatus('downloading')
+          setIsInstallPromptOpen(false)
           setDownloadProgress(Math.round(Number(data.percent || 0)))
         }
         if (status === 'downloaded') {
           setUpdateStatus('ready')
+          setDownloadProgress(100)
+          if (data.version) setUpdateVersion(String(data.version))
           setUpdateNotes(String(data.releaseNotes || 'Update downloaded and ready to install.'))
+          setIsInstallPromptOpen(true)
         }
         if (status === 'error') {
           setUpdateStatus('error')
+          setIsInstallPromptOpen(false)
           setUpdateNotes(`Error: ${error || 'Unable to reach the update server.'}`)
         }
       })
@@ -181,18 +187,24 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
     }
   }, [])
 
-  const checkForUpdates = async () => {
+  const checkAndDownloadUpdate = async () => {
     if (!window.electron?.ipcRenderer) return
+    setIsInstallPromptOpen(false)
     setUpdateStatus('checking')
-    setUpdateNotes(`Checking firmware feed:\n${updateFeedUrl}`)
+    setUpdateNotes(`Checking firmware feed and preparing in-app download:\n${updateFeedUrl}`)
 
     try {
-      const result = await window.electron.ipcRenderer.invoke('check-for-updates')
+      const result = await window.electron.ipcRenderer.invoke('check-and-download-update')
       if (result?.success === false) {
-        throw new Error(result.error || 'Unable to check for updates.')
+        throw new Error(result.error || 'Unable to download the update.')
+      }
+
+      if (result?.updateAvailable === false) {
+        setUpdateStatus('idle')
+        setUpdateNotes('System is up to date.')
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to check for updates.'
+      const message = error instanceof Error ? error.message : 'Unable to download the update.'
       setUpdateStatus('error')
       setUpdateNotes(`Error: ${message}`)
     }
@@ -200,6 +212,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
 
   const downloadUpdate = async () => {
     if (!window.electron?.ipcRenderer) return
+    setIsInstallPromptOpen(false)
     setUpdateStatus('downloading')
     setDownloadProgress(0)
 
@@ -219,6 +232,8 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
     if (!window.electron?.ipcRenderer) return
 
     try {
+      setIsInstallPromptOpen(false)
+      setUpdateStatus('installing')
       const result = await window.electron.ipcRenderer.invoke('install-update')
       if (result?.success === false) {
         throw new Error(result.error || 'Unable to install the update.')
@@ -228,6 +243,12 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
       setUpdateStatus('error')
       setUpdateNotes(`Error: ${message}`)
     }
+  }
+
+  const installLater = () => {
+    setIsInstallPromptOpen(false)
+    setUpdateStatus('ready')
+    setUpdateNotes('Update downloaded. You can install it from this Settings screen when ready.')
   }
 
   const handleVoiceChange = (v: 'MALE' | 'FEMALE') => {
@@ -498,10 +519,10 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                           Website feed: {updateFeedUrl}
                         </p>
                         <button
-                          onClick={checkForUpdates}
+                          onClick={checkAndDownloadUpdate}
                           className="mt-2 w-full py-3 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-white font-bold tracking-widest text-[11px] flex items-center justify-center gap-2 transition-all cursor-pointer"
                         >
-                          <RiRefreshLine size={16} /> CHECK FIRMWARE
+                          <RiDownloadCloud2Line size={16} /> CHECK & DOWNLOAD FIRMWARE
                         </button>
                       </>
                     ) : updateStatus === 'checking' ? (
@@ -537,16 +558,31 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                           />
                         </div>
                       </div>
+                    ) : updateStatus === 'installing' ? (
+                      <>
+                        <RiRocketLine size={48} className="text-emerald-400 animate-pulse" />
+                        <p className="text-xs text-emerald-400 font-mono">
+                          RESTARTING TO INSTALL...
+                        </p>
+                      </>
                     ) : (
                       <>
                         <RiRecordCircleLine size={48} className="text-emerald-400 animate-pulse" />
                         <p className="text-xs text-emerald-400 font-mono">PATCH DOWNLOADED</p>
-                        <button
-                          onClick={installUpdate}
-                          className="mt-2 w-full py-3 rounded-lg bg-emerald-500 text-black font-bold tracking-widest text-[11px] flex items-center justify-center gap-2 transition-all shadow-[0_0_20px_rgba(16,185,129,0.4)] cursor-pointer"
-                        >
-                          <RiRocketLine size={16} /> EXECUTE RESTART
-                        </button>
+                        <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
+                          <button
+                            onClick={installUpdate}
+                            className="mt-2 w-full py-3 rounded-lg bg-emerald-500 text-black font-bold tracking-widest text-[11px] flex items-center justify-center gap-2 transition-all shadow-[0_0_20px_rgba(16,185,129,0.4)] cursor-pointer"
+                          >
+                            <RiRocketLine size={16} /> INSTALL NOW
+                          </button>
+                          <button
+                            onClick={installLater}
+                            className="mt-2 w-full py-3 rounded-lg bg-white/5 text-zinc-300 hover:text-white border border-white/10 font-bold tracking-widest text-[11px] flex items-center justify-center gap-2 transition-all cursor-pointer"
+                          >
+                            LATER
+                          </button>
+                        </div>
                       </>
                     )}
                   </div>
@@ -1248,6 +1284,56 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                     </p>
                   )}
                 </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <AnimatePresence>
+            {isInstallPromptOpen && (
+              <motion.div
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-6 backdrop-blur-sm"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+              >
+                <motion.div
+                  className="w-full max-w-md rounded-2xl border border-emerald-500/30 bg-[#0b0f0d] p-6 shadow-[0_0_40px_rgba(16,185,129,0.18)]"
+                  initial={{ scale: 0.96, y: 12 }}
+                  animate={{ scale: 1, y: 0 }}
+                  exit={{ scale: 0.96, y: 12 }}
+                >
+                  <div className="mb-5 flex items-center gap-3">
+                    <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3">
+                      <RiDownloadCloud2Line className="text-emerald-400" size={24} />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-white">Update ready</h3>
+                      <p className="text-xs font-mono uppercase tracking-widest text-emerald-300">
+                        v{updateVersion || 'latest'} downloaded in app
+                      </p>
+                    </div>
+                  </div>
+
+                  <p className="mb-6 text-sm leading-relaxed text-zinc-300">
+                    Nexus has downloaded the update. Install now to restart and apply it, or keep
+                    working and install it later from this screen.
+                  </p>
+
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <button
+                      onClick={installLater}
+                      className="rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-xs font-bold tracking-widest text-zinc-300 transition hover:bg-white/10 hover:text-white"
+                    >
+                      LATER
+                    </button>
+                    <button
+                      onClick={installUpdate}
+                      className="rounded-lg bg-emerald-500 px-4 py-3 text-xs font-bold tracking-widest text-black shadow-[0_0_20px_rgba(16,185,129,0.35)] transition hover:bg-emerald-400"
+                    >
+                      INSTALL NOW
+                    </button>
+                  </div>
+                </motion.div>
               </motion.div>
             )}
           </AnimatePresence>

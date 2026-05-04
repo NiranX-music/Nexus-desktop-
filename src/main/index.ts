@@ -71,6 +71,8 @@ if (!gotTheLock) {
 
 let mainWindow: BrowserWindow | null = null
 let isOverlayMode = false
+let updateDownloadPromise: Promise<Array<string>> | null = null
+let downloadedUpdateInfo: { version: string; releaseNotes: string } | null = null
 
 const secureConfigPath = join(app.getPath('userData'), 'nexus_secure_vault.json')
 const NEXUS_UPDATE_FEED_URL =
@@ -244,6 +246,30 @@ const sendUpdaterEvent = (status: string, data: Record<string, unknown> = {}, er
   mainWindow?.webContents.send('updater-event', { status, data, error })
 }
 
+const getInstallerOnlyUpdateGuardMessage = (action: string) =>
+  `${action} are available in the installed desktop app.`
+
+const canUseUpdaterForRequest = (action: string) => {
+  if (!is.dev || process.env.NEXUS_ALLOW_DEV_UPDATES === 'true') return ''
+  return getInstallerOnlyUpdateGuardMessage(action)
+}
+
+const downloadCheckedUpdate = async () => {
+  if (downloadedUpdateInfo) {
+    sendUpdaterEvent('downloaded', downloadedUpdateInfo)
+    return []
+  }
+
+  if (!updateDownloadPromise) {
+    sendUpdaterEvent('downloading', { percent: 0 })
+    updateDownloadPromise = autoUpdater.downloadUpdate().finally(() => {
+      updateDownloadPromise = null
+    })
+  }
+
+  return updateDownloadPromise
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -331,7 +357,7 @@ app.whenReady().then(() => {
   seedLaunchNvidiaKey()
 
   autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.autoInstallOnAppQuit = false
   autoUpdater.allowPrerelease = false
   autoUpdater.setFeedURL({ provider: 'generic', url: NEXUS_UPDATE_FEED_URL })
 
@@ -340,6 +366,9 @@ app.whenReady().then(() => {
   })
 
   autoUpdater.on('update-available', (info) => {
+    if (downloadedUpdateInfo?.version !== info.version) {
+      downloadedUpdateInfo = null
+    }
     sendUpdaterEvent('available', {
       version: info.version,
       releaseNotes: info.releaseNotes || 'Bug fixes and performance improvements.'
@@ -347,6 +376,7 @@ app.whenReady().then(() => {
   })
 
   autoUpdater.on('update-not-available', (info) => {
+    downloadedUpdateInfo = null
     sendUpdaterEvent('not-available', {
       version: info.version
     })
@@ -362,13 +392,15 @@ app.whenReady().then(() => {
   })
 
   autoUpdater.on('update-downloaded', (info) => {
-    sendUpdaterEvent('downloaded', {
+    downloadedUpdateInfo = {
       version: info.version,
-      releaseNotes: info.releaseNotes || 'Update downloaded and ready to install.'
-    })
+      releaseNotes: String(info.releaseNotes || 'Update downloaded and ready to install.')
+    }
+    sendUpdaterEvent('downloaded', downloadedUpdateInfo)
   })
 
   autoUpdater.on('error', (error) => {
+    updateDownloadPromise = null
     sendUpdaterEvent('error', {}, getUpdaterErrorMessage(error))
   })
 
@@ -466,8 +498,9 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('check-for-updates', async () => {
-    if (is.dev && process.env.NEXUS_ALLOW_DEV_UPDATES !== 'true') {
-      const message = 'Update checks are available in the installed desktop app.'
+    const guardMessage = canUseUpdaterForRequest('Update checks')
+    if (guardMessage) {
+      const message = guardMessage
       sendUpdaterEvent('error', {}, message)
       return { success: false, error: message }
     }
@@ -483,16 +516,63 @@ app.whenReady().then(() => {
     }
   })
 
+  ipcMain.handle('check-and-download-update', async () => {
+    const guardMessage = canUseUpdaterForRequest('Update downloads')
+    if (guardMessage) {
+      sendUpdaterEvent('error', {}, guardMessage)
+      return { success: false, error: guardMessage }
+    }
+
+    try {
+      const checkResult = await autoUpdater.checkForUpdates()
+      if (!checkResult) {
+        const message = 'Updater is not active for this build.'
+        sendUpdaterEvent('error', {}, message)
+        return { success: false, error: message }
+      }
+
+      if (!checkResult.isUpdateAvailable) {
+        return {
+          success: true,
+          updateAvailable: false,
+          version: checkResult.updateInfo.version
+        }
+      }
+
+      if (downloadedUpdateInfo?.version === checkResult.updateInfo.version) {
+        sendUpdaterEvent('downloaded', downloadedUpdateInfo)
+        return {
+          success: true,
+          updateAvailable: true,
+          downloaded: true,
+          version: downloadedUpdateInfo.version
+        }
+      }
+
+      await downloadCheckedUpdate()
+      return {
+        success: true,
+        updateAvailable: true,
+        downloaded: true,
+        version: checkResult.updateInfo.version
+      }
+    } catch (error) {
+      const message = getUpdaterErrorMessage(error)
+      sendUpdaterEvent('error', {}, message)
+      return { success: false, error: message }
+    }
+  })
+
   ipcMain.handle('download-update', async () => {
-    if (is.dev && process.env.NEXUS_ALLOW_DEV_UPDATES !== 'true') {
-      const message = 'Update downloads are available in the installed desktop app.'
+    const guardMessage = canUseUpdaterForRequest('Update downloads')
+    if (guardMessage) {
+      const message = guardMessage
       sendUpdaterEvent('error', {}, message)
       return { success: false, error: message }
     }
 
     try {
-      sendUpdaterEvent('downloading', { percent: 0 })
-      await autoUpdater.downloadUpdate()
+      await downloadCheckedUpdate()
       return { success: true }
     } catch (error) {
       const message = getUpdaterErrorMessage(error)
@@ -503,6 +583,12 @@ app.whenReady().then(() => {
 
   ipcMain.handle('install-update', () => {
     try {
+      if (!downloadedUpdateInfo) {
+        const message = 'The update has not finished downloading yet.'
+        sendUpdaterEvent('error', {}, message)
+        return { success: false, error: message }
+      }
+
       setImmediate(() => {
         app.removeAllListeners('window-all-closed')
         autoUpdater.quitAndInstall(false, true)
