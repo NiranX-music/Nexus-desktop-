@@ -426,6 +426,17 @@ body {
     0 20px 44px rgba(0, 0, 0, 0.32);
 }
 
+.nexus-browser-scope-card {
+  transform: translateZ(0);
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.055),
+    0 12px 28px rgba(0, 0, 0, 0.22);
+}
+
+.nexus-browser-scope-card:hover {
+  transform: translateY(-2px);
+}
+
 .nexus-content-stage::before,
 .nexus-content-stage::after {
   content: '';

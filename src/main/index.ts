@@ -12,6 +12,7 @@ import {
 } from 'electron'
 import path, { join } from 'path'
 import fs from 'fs'
+import { get as httpsGet } from 'https'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 
@@ -33,6 +34,7 @@ import registerGalleryHandlers from './logic/gallery-manager'
 import registerGmailHandlers from './logic/gmail-manager'
 import registerLocationHandlers from './logic/live-location'
 import registerAdbHandlers from './logic/adb-manager'
+import registerMediaControl from './logic/media-control'
 import registerRealityHacker from './logic/reality-hacker'
 import registerNexusCoder from './services/nexus-coder'
 import registerTelekinesis from './logic/telekinesis'
@@ -173,11 +175,72 @@ const getUpdaterErrorMessage = (error: unknown) => {
   return String(error || 'Unknown updater error.')
 }
 
-const sendUpdaterEvent = (
-  status: string,
-  data: Record<string, unknown> = {},
-  error = ''
-) => {
+const compareVersions = (left: string, right: string) => {
+  const leftParts = left.split(/[.-]/).map((part) => Number.parseInt(part, 10) || 0)
+  const rightParts = right.split(/[.-]/).map((part) => Number.parseInt(part, 10) || 0)
+  const length = Math.max(leftParts.length, rightParts.length)
+
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = leftParts[index] || 0
+    const rightPart = rightParts[index] || 0
+    if (leftPart > rightPart) return 1
+    if (leftPart < rightPart) return -1
+  }
+
+  return 0
+}
+
+const fetchText = (url: string): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const request = httpsGet(url, { timeout: 8000 }, (response) => {
+      if (
+        response.statusCode &&
+        response.statusCode >= 300 &&
+        response.statusCode < 400 &&
+        response.headers.location
+      ) {
+        resolve(fetchText(new URL(response.headers.location, url).toString()))
+        return
+      }
+
+      if (!response.statusCode || response.statusCode >= 400) {
+        reject(new Error(`Update server returned ${response.statusCode || 'no status'}.`))
+        return
+      }
+
+      let body = ''
+      response.setEncoding('utf8')
+      response.on('data', (chunk) => {
+        body += chunk
+      })
+      response.on('end', () => resolve(body))
+    })
+
+    request.on('timeout', () => {
+      request.destroy(new Error('Update check timed out.'))
+    })
+    request.on('error', reject)
+  })
+
+const getLatestUpdateInfo = async () => {
+  const feedUrl = NEXUS_UPDATE_FEED_URL.replace(/\/+$/, '')
+  const latestYmlUrl = `${feedUrl}/latest.yml`
+  const latestYml = await fetchText(latestYmlUrl)
+  const version = latestYml.match(/^version:\s*['"]?([^'"\r\n]+)['"]?/m)?.[1]?.trim()
+  const releaseDate = latestYml.match(/^releaseDate:\s*['"]?([^'"\r\n]+)['"]?/m)?.[1]?.trim()
+
+  if (!version) throw new Error('Update feed did not include a version.')
+
+  return {
+    version,
+    releaseDate: releaseDate || '',
+    feedUrl,
+    latestYmlUrl,
+    installerUrl: `${feedUrl}/nexus-ai-latest-setup.exe`
+  }
+}
+
+const sendUpdaterEvent = (status: string, data: Record<string, unknown> = {}, error = '') => {
   mainWindow?.webContents.send('updater-event', { status, data, error })
 }
 
@@ -346,14 +409,17 @@ app.whenReady().then(() => {
     }
   }
 
-  ipcMain.handle('secure-save-keys', async (_, { groqKey = '', geminiKey = '', nvidiaKey = '' }) => {
-    try {
-      writeSecureKeysToDisk({ groqKey, geminiKey, nvidiaKey })
-      return { success: true }
-    } catch (error: any) {
-      return { success: false, error: error.message }
+  ipcMain.handle(
+    'secure-save-keys',
+    async (_, { groqKey = '', geminiKey = '', nvidiaKey = '' }) => {
+      try {
+        writeSecureKeysToDisk({ groqKey, geminiKey, nvidiaKey })
+        return { success: true }
+      } catch (error: any) {
+        return { success: false, error: error.message }
+      }
     }
-  })
+  )
 
   ipcMain.handle('secure-get-keys', async () => {
     if (!fs.existsSync(secureConfigPath)) return null
@@ -371,6 +437,33 @@ app.whenReady().then(() => {
   ipcMain.handle('get-app-version', () => app.getVersion())
 
   ipcMain.handle('get-update-feed-url', () => NEXUS_UPDATE_FEED_URL)
+
+  ipcMain.handle('mandatory-update:status', async () => {
+    const currentVersion = app.getVersion()
+
+    try {
+      const latest = await getLatestUpdateInfo()
+      const updateRequired = compareVersions(latest.version, currentVersion) > 0
+
+      return {
+        success: true,
+        updateRequired,
+        currentVersion,
+        latestVersion: latest.version,
+        releaseDate: latest.releaseDate,
+        feedUrl: latest.feedUrl,
+        installerUrl: latest.installerUrl
+      }
+    } catch (error) {
+      return {
+        success: false,
+        updateRequired: false,
+        currentVersion,
+        latestVersion: currentVersion,
+        error: getUpdaterErrorMessage(error)
+      }
+    }
+  })
 
   ipcMain.handle('check-for-updates', async () => {
     if (is.dev && process.env.NEXUS_ALLOW_DEV_UPDATES !== 'true') {
@@ -463,6 +556,7 @@ app.whenReady().then(() => {
   registerNexusCoder({ ipcMain, app })
   registerRealityHacker(ipcMain)
   registerAdbHandlers(ipcMain)
+  registerMediaControl(ipcMain)
   registerLocationHandlers(ipcMain)
   registerGmailHandlers(ipcMain)
   registerGalleryHandlers(ipcMain)

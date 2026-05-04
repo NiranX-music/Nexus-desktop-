@@ -1,6 +1,6 @@
 {
   "name": "nexus-ai",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "description": "Nexus AI desktop agent and autonomous command interface.",
   "main": "./out/main/index.js",
   "author": {

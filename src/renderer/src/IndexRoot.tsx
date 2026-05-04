@@ -1,4 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
+import {
+  RiDownloadCloud2Line,
+  RiLoader4Line,
+  RiRefreshLine,
+  RiShieldFlashLine
+} from 'react-icons/ri'
 import MiniOverlay from './components/MiniOverlay'
 import { nexusService } from './services/nexus-voice-ai'
 import { getScreenSourceId } from './hooks/CaptureDesktop'
@@ -18,6 +24,174 @@ import SmartDropZonesWidget from './Widgets/SmartZoneWidget'
 import TitleBar from './components/Titlebar'
 
 export type VisionMode = 'camera' | 'screen' | 'none'
+
+interface MandatoryUpdateStatus {
+  success: boolean
+  updateRequired: boolean
+  currentVersion: string
+  latestVersion: string
+  releaseDate?: string
+  installerUrl?: string
+  error?: string
+}
+
+const MandatoryUpdateGate = ({ children }: { children: React.ReactNode }) => {
+  const [status, setStatus] = useState<MandatoryUpdateStatus | null>(null)
+  const [isChecking, setIsChecking] = useState(true)
+  const [updatePhase, setUpdatePhase] = useState('Checking update policy')
+  const [progress, setProgress] = useState(0)
+  const [isBusy, setIsBusy] = useState(false)
+  const [isDownloaded, setIsDownloaded] = useState(false)
+
+  const refreshStatus = async () => {
+    setIsChecking(true)
+    setUpdatePhase('Checking update policy')
+    const nextStatus = await window.electron.ipcRenderer.invoke('mandatory-update:status')
+    setStatus(nextStatus)
+    setIsChecking(false)
+  }
+
+  useEffect(() => {
+    refreshStatus()
+
+    const unsubscribe = window.electron.ipcRenderer.on(
+      'updater-event',
+      (_event: any, event: any) => {
+        if (!event) return
+        if (event.status === 'checking') setUpdatePhase('Checking for update')
+        if (event.status === 'available')
+          setUpdatePhase(`Update ${event.data?.version || ''} available`)
+        if (event.status === 'downloading') {
+          setUpdatePhase('Downloading required update')
+          setProgress(Math.round(Number(event.data?.percent || 0)))
+        }
+        if (event.status === 'downloaded') {
+          setUpdatePhase('Update ready to install')
+          setProgress(100)
+          setIsDownloaded(true)
+          setIsBusy(false)
+        }
+        if (event.status === 'error') {
+          setUpdatePhase(event.error || 'Update failed')
+          setIsBusy(false)
+        }
+      }
+    )
+
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe()
+    }
+  }, [])
+
+  const downloadRequiredUpdate = async () => {
+    setIsBusy(true)
+    setProgress(0)
+    setUpdatePhase('Preparing required update')
+
+    const check = await window.electron.ipcRenderer.invoke('check-for-updates')
+    if (!check?.success) {
+      setUpdatePhase(check?.error || 'Unable to check for update')
+      setIsBusy(false)
+      return
+    }
+
+    const download = await window.electron.ipcRenderer.invoke('download-update')
+    if (!download?.success) {
+      setUpdatePhase(download?.error || 'Unable to download update')
+      setIsBusy(false)
+    }
+  }
+
+  const installRequiredUpdate = async () => {
+    setIsBusy(true)
+    setUpdatePhase('Installing update')
+    await window.electron.ipcRenderer.invoke('install-update')
+  }
+
+  if (isChecking) {
+    return (
+      <div className="nexus-desktop-frame grid h-screen w-screen place-items-center text-zinc-100">
+        <div className="flex items-center gap-3 text-[11px] font-black uppercase tracking-[0.24em] text-emerald-300">
+          <RiLoader4Line className="animate-spin text-xl" />
+          Checking required update
+        </div>
+      </div>
+    )
+  }
+
+  if (!status?.updateRequired) return <>{children}</>
+
+  return (
+    <div className="nexus-desktop-frame relative grid h-screen w-screen place-items-center overflow-hidden border border-emerald-400/25 p-6 text-zinc-100">
+      <div className="nexus-radar-grid absolute inset-0 opacity-45" />
+      <div className="relative z-10 w-full max-w-xl border border-emerald-300/25 bg-black/70 p-6 shadow-[0_30px_90px_rgba(0,0,0,0.45)] backdrop-blur-2xl">
+        <div className="mb-5 flex items-center gap-4 border-b border-white/10 pb-4">
+          <div className="grid h-14 w-14 place-items-center rounded-lg border border-emerald-300/30 bg-emerald-300/10 text-2xl text-emerald-200">
+            <RiShieldFlashLine />
+          </div>
+          <div className="min-w-0">
+            <h1 className="text-xl font-black uppercase tracking-[0.16em] text-white">
+              Required Update
+            </h1>
+            <p className="mt-1 text-[10px] font-black uppercase tracking-[0.22em] text-emerald-300/70">
+              Nexus must update before the app can run
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="border border-white/10 bg-white/[0.03] p-3">
+            <p className="text-[9px] font-black uppercase tracking-[0.18em] text-zinc-500">
+              Installed
+            </p>
+            <p className="mt-2 text-lg font-black text-zinc-100">{status.currentVersion}</p>
+          </div>
+          <div className="border border-emerald-300/20 bg-emerald-300/10 p-3">
+            <p className="text-[9px] font-black uppercase tracking-[0.18em] text-emerald-300/70">
+              Required
+            </p>
+            <p className="mt-2 text-lg font-black text-emerald-100">{status.latestVersion}</p>
+          </div>
+        </div>
+
+        <div className="mt-5 border border-white/10 bg-black/45 p-4">
+          <div className="mb-2 flex items-center justify-between text-[9px] font-black uppercase tracking-[0.18em] text-zinc-500">
+            <span>{updatePhase}</span>
+            <span>{progress}%</span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-black/70">
+            <div
+              className="h-full bg-emerald-400 shadow-[0_0_18px_rgba(52,211,153,0.85)] transition-all"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        </div>
+
+        <div className="mt-5 flex flex-wrap gap-3">
+          {isDownloaded ? (
+            <button
+              onClick={installRequiredUpdate}
+              disabled={isBusy}
+              className="flex flex-1 items-center justify-center gap-2 border border-emerald-300/25 bg-emerald-400 px-5 py-3 text-[10px] font-black uppercase tracking-[0.18em] text-black transition hover:bg-emerald-300 disabled:opacity-50"
+            >
+              <RiRefreshLine />
+              Install and restart
+            </button>
+          ) : (
+            <button
+              onClick={downloadRequiredUpdate}
+              disabled={isBusy}
+              className="flex flex-1 items-center justify-center gap-2 border border-emerald-300/25 bg-emerald-400 px-5 py-3 text-[10px] font-black uppercase tracking-[0.18em] text-black transition hover:bg-emerald-300 disabled:opacity-50"
+            >
+              {isBusy ? <RiLoader4Line className="animate-spin" /> : <RiDownloadCloud2Line />}
+              Download update
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 const IndexRoot = () => {
   const [isOverlay, setIsOverlay] = useState(false)
@@ -233,54 +407,58 @@ const IndexRoot = () => {
 
   if (isOverlay) {
     return (
-      <div className="w-screen h-screen overflow-hidden flex items-center justify-center bg-transparent">
-        <MiniOverlay
-          isSystemActive={isSystemActive}
-          isSystemStarting={isSystemStarting}
-          toggleSystem={toggleSystem}
-          isMicMuted={isMicMuted}
-          toggleMic={toggleMic}
-          isVideoOn={isVideoOn}
-          visionMode={visionMode}
-          startVision={startVision}
-          stopVision={stopVision}
-          sendTextCommand={sendTextCommand}
-        />
-      </div>
+      <MandatoryUpdateGate>
+        <div className="w-screen h-screen overflow-hidden flex items-center justify-center bg-transparent">
+          <MiniOverlay
+            isSystemActive={isSystemActive}
+            isSystemStarting={isSystemStarting}
+            toggleSystem={toggleSystem}
+            isMicMuted={isMicMuted}
+            toggleMic={toggleMic}
+            isVideoOn={isVideoOn}
+            visionMode={visionMode}
+            startVision={startVision}
+            stopVision={stopVision}
+            sendTextCommand={sendTextCommand}
+          />
+        </div>
+      </MandatoryUpdateGate>
     )
   }
 
   return (
-    <div className="nexus-desktop-frame flex flex-col h-screen w-screen overflow-hidden relative border border-emerald-400/25 rounded-md">
-      <TitleBar />
-      <div className="min-h-0 flex-1 relative">
-        <Nexus
-          isSystemActive={isSystemActive}
-          isSystemStarting={isSystemStarting}
-          toggleSystem={toggleSystem}
-          isMicMuted={isMicMuted}
-          toggleMic={toggleMic}
-          isVideoOn={isVideoOn}
-          visionMode={visionMode}
-          startVision={startVision}
-          stopVision={stopVision}
-          activeStream={activeStreamRef.current}
-          sendTextCommand={sendTextCommand}
-        />
+    <MandatoryUpdateGate>
+      <div className="nexus-desktop-frame flex flex-col h-screen w-screen overflow-hidden relative border border-emerald-400/25 rounded-md">
+        <TitleBar />
+        <div className="min-h-0 flex-1 relative">
+          <Nexus
+            isSystemActive={isSystemActive}
+            isSystemStarting={isSystemStarting}
+            toggleSystem={toggleSystem}
+            isMicMuted={isMicMuted}
+            toggleMic={toggleMic}
+            isVideoOn={isVideoOn}
+            visionMode={visionMode}
+            startVision={startVision}
+            stopVision={stopVision}
+            activeStream={activeStreamRef.current}
+            sendTextCommand={sendTextCommand}
+          />
+        </div>
+        <SmartDropZonesWidget />
+        <SemanticWidget />
+        <OracleWidget />
+        <WormholeWidget />
+        <LeafletMapWidget />
+        <StockWidget />
+        <WeatherWidget />
+        <ImageWidget />
+        <EmailWidget />
+        <TerminalOverlay />
+        <LiveCodingWidget />
+        <ResearchWidget />
       </div>
-      <SmartDropZonesWidget />
-      <SemanticWidget />
-      <OracleWidget />
-      <WormholeWidget />
-      <LeafletMapWidget />
-      <StockWidget />
-      <WeatherWidget />
-      <ImageWidget />
-      <EmailWidget />
-      <TerminalOverlay />
-      <LiveCodingWidget />
-      <ResearchWidget />
-    </div>
+    </MandatoryUpdateGate>
   )
 }
 

@@ -16,13 +16,24 @@ import {
   RiEarthLine,
   RiSendPlane2Line,
   RiBatteryChargeLine,
-  RiTimeLine
+  RiTimeLine,
+  RiMusic2Line,
+  RiPauseFill,
+  RiPlayFill,
+  RiRefreshLine,
+  RiSkipBackFill,
+  RiSkipForwardFill
 } from 'react-icons/ri'
 import { FaMemory } from 'react-icons/fa6'
 import { GiTinker } from 'react-icons/gi'
 import { HiComputerDesktop } from 'react-icons/hi2'
 import * as faceapi from 'face-api.js'
 import { VisionMode } from '@renderer/IndexRoot'
+import {
+  controlMediaSession,
+  getMediaSessions,
+  MediaSessionItem
+} from '@renderer/functions/media-control-api'
 import type { SystemStats } from '@renderer/services/system-info'
 
 interface NexusProps {
@@ -66,6 +77,14 @@ const metricPercent = (value: unknown) => {
   return Math.max(0, Math.min(100, numericValue))
 }
 
+const formatMediaTime = (ms: number) => {
+  if (!Number.isFinite(ms) || ms <= 0) return '0:00'
+  const totalSeconds = Math.floor(ms / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}:${String(seconds).padStart(2, '0')}`
+}
+
 export default function DashboardView({
   props,
   stats,
@@ -94,6 +113,8 @@ export default function DashboardView({
   const [textCommand, setTextCommand] = useState('')
   const [textCommandStatus, setTextCommandStatus] = useState('')
   const [isSendingTextCommand, setIsSendingTextCommand] = useState(false)
+  const [mediaSessions, setMediaSessions] = useState<MediaSessionItem[]>([])
+  const [mediaStatus, setMediaStatus] = useState('Scanning media')
 
   const submitTextCommand = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -117,6 +138,32 @@ export default function DashboardView({
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }, [chatHistory])
+
+  const refreshMediaSessions = useCallback(async () => {
+    const sessions = await getMediaSessions()
+    setMediaSessions(sessions)
+    setMediaStatus(
+      sessions.length > 0
+        ? `${sessions.length} session${sessions.length === 1 ? '' : 's'}`
+        : 'No media'
+    )
+  }, [])
+
+  useEffect(() => {
+    refreshMediaSessions()
+    const timer = setInterval(refreshMediaSessions, 3000)
+    return () => clearInterval(timer)
+  }, [refreshMediaSessions])
+
+  const handleMediaControl = async (
+    session: MediaSessionItem,
+    action: 'play' | 'pause' | 'toggle' | 'next' | 'previous'
+  ) => {
+    setMediaStatus('Sending command')
+    const result = await controlMediaSession(session.index, action)
+    setMediaStatus(result.success ? 'Command sent' : result.error || 'Command failed')
+    setTimeout(refreshMediaSessions, 450)
+  }
 
   useEffect(() => {
     const loadModels = async () => {
@@ -271,6 +318,17 @@ export default function DashboardView({
     typeof stats?.temperature === 'number' ? `${stats.temperature.toFixed(1)}°C` : '--'
   const temperatureRaw =
     typeof stats?.temperature === 'number' ? metricPercent((stats.temperature / 95) * 100) : 0
+  const prioritizedMediaSessions = [...mediaSessions].sort((a, b) => {
+    if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1
+    if (a.status === 'Playing' && b.status !== 'Playing') return -1
+    if (b.status === 'Playing' && a.status !== 'Playing') return 1
+    return 0
+  })
+  const featuredMedia = prioritizedMediaSessions[0]
+  const featuredProgress =
+    featuredMedia && featuredMedia.durationMs > 0
+      ? metricPercent((featuredMedia.positionMs / featuredMedia.durationMs) * 100)
+      : 0
 
   const systemMetrics = [
     {
@@ -378,56 +436,95 @@ export default function DashboardView({
       </div>
       <div className="hidden lg:flex col-span-3 flex-col gap-2 h-full min-h-0 z-40">
         <div
-          className={`${glassPanel} h-[clamp(9rem,24vh,13rem)] shrink-0 flex flex-col p-1 overflow-hidden relative group`}
+          className={`${glassPanel} h-[clamp(10rem,25vh,14rem)] shrink-0 flex flex-col p-3 overflow-hidden relative group`}
         >
-          <div className="absolute top-3 left-3 z-30 flex items-center gap-2">
-            <span
-              className={`w-1.5 h-1.5 rounded-full ${isVideoOn ? 'bg-red-500 animate-pulse shadow-[0_0_8px_red]' : 'bg-zinc-600'}`}
-            />
-            <span
-              className={`text-[9px] font-bold tracking-widest ${isVideoOn ? 'text-red-400/80' : 'text-zinc-600'}`}
-            >
-              {isVideoOn
-                ? visionMode === 'screen'
-                  ? 'SCREEN FEED'
-                  : 'OPTICAL FEED'
-                : 'OPTICS OFFLINE'}
+          <div className="flex items-center justify-between border-b border-white/10 pb-2">
+            <span className="flex items-center gap-1 text-[10px] font-bold tracking-widest text-zinc-400">
+              <RiMusic2Line className="text-emerald-400" /> MEDIA PREVIEW
             </span>
-          </div>
-
-          {isVideoOn && (
             <button
-              onClick={toggleSource}
-              className="absolute top-2 right-2 z-30 p-1.5 rounded-md bg-black/50 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500 hover:text-black transition-all"
+              onClick={refreshMediaSessions}
+              className="grid h-6 w-6 place-items-center rounded-md border border-white/10 bg-black/35 text-zinc-500 transition hover:border-emerald-300/35 hover:text-emerald-200"
+              title="Refresh media sessions"
             >
-              <RiSwapBoxLine size={14} />
+              <RiRefreshLine size={13} />
             </button>
-          )}
-
-          <div
-            className={`w-full h-full rounded-xl overflow-hidden bg-black/20 relative border border-white/5 transition-all ${isVideoOn ? 'opacity-100' : 'opacity-30'}`}
-          >
-            <video
-              key={visionMode}
-              ref={setVideoRef}
-              className={`absolute inset-0 w-full h-full object-cover ${visionMode === 'camera' ? '-scale-x-100' : ''}`}
-              autoPlay
-              playsInline
-              muted
-            />
-
-            <canvas
-              ref={canvasRef}
-              className="absolute inset-0 w-full h-full object-cover pointer-events-none z-20"
-            />
-
-            {!isVideoOn && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 opacity-50">
-                <RiCameraLine size={24} />
-                <span className="text-[9px] font-mono">NO SIGNAL</span>
-              </div>
-            )}
           </div>
+
+          {featuredMedia ? (
+            <div className="min-h-0 flex-1 pt-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="grid h-12 w-12 shrink-0 place-items-center rounded-lg border border-emerald-300/20 bg-emerald-300/10 text-xl text-emerald-200">
+                  <RiMusic2Line />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-black text-white" title={featuredMedia.title}>
+                    {featuredMedia.title}
+                  </p>
+                  <p className="mt-1 truncate text-[10px] font-semibold text-zinc-500">
+                    {featuredMedia.artist || featuredMedia.source || 'System media'}
+                  </p>
+                </div>
+              </div>
+              <div className="mt-3 flex items-center gap-2 text-[8px] font-mono text-zinc-500">
+                <span>{formatMediaTime(featuredMedia.positionMs)}</span>
+                <div className="h-1 flex-1 overflow-hidden rounded-full bg-black/55">
+                  <div
+                    className="h-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]"
+                    style={{ width: `${featuredProgress}%` }}
+                  />
+                </div>
+                <span>{formatMediaTime(featuredMedia.durationMs)}</span>
+              </div>
+              <div className="mt-3 grid grid-cols-4 gap-2">
+                <button
+                  onClick={() => handleMediaControl(featuredMedia, 'previous')}
+                  className="grid h-8 place-items-center border border-white/10 bg-black/35 text-zinc-300 transition hover:border-emerald-300/35 hover:text-emerald-200"
+                  title="Previous"
+                >
+                  <RiSkipBackFill />
+                </button>
+                <button
+                  onClick={() => handleMediaControl(featuredMedia, 'toggle')}
+                  className="grid h-8 place-items-center border border-emerald-300/25 bg-emerald-300/15 text-emerald-100 transition hover:bg-emerald-300 hover:text-black"
+                  title="Play or pause"
+                >
+                  {featuredMedia.status === 'Playing' ? <RiPauseFill /> : <RiPlayFill />}
+                </button>
+                <button
+                  onClick={() => handleMediaControl(featuredMedia, 'next')}
+                  className="grid h-8 place-items-center border border-white/10 bg-black/35 text-zinc-300 transition hover:border-emerald-300/35 hover:text-emerald-200"
+                  title="Next"
+                >
+                  <RiSkipForwardFill />
+                </button>
+                <span className="grid h-8 place-items-center border border-white/10 bg-black/35 text-[8px] font-black uppercase tracking-[0.12em] text-zinc-500">
+                  {featuredMedia.status}
+                </span>
+              </div>
+              {prioritizedMediaSessions.length > 1 && (
+                <div className="mt-2 flex gap-1 overflow-x-auto scrollbar-small">
+                  {prioritizedMediaSessions.slice(1, 5).map((session) => (
+                    <button
+                      key={`${session.source}-${session.index}`}
+                      onClick={() => handleMediaControl(session, 'toggle')}
+                      className="max-w-[7rem] shrink-0 truncate border border-white/10 bg-white/[0.03] px-2 py-1.5 text-left text-[9px] font-semibold text-zinc-500 transition hover:border-emerald-300/25 hover:text-zinc-200"
+                      title={`${session.title} - ${session.status}`}
+                    >
+                      {session.title}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="grid min-h-0 flex-1 place-items-center text-center">
+              <div className="space-y-2 text-zinc-700">
+                <RiMusic2Line className="mx-auto text-2xl" />
+                <p className="text-[9px] font-black uppercase tracking-[0.22em]">{mediaStatus}</p>
+              </div>
+            </div>
+          )}
         </div>
 
         <div

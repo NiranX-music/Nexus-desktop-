@@ -14,6 +14,7 @@ import {
   RiTerminalBoxLine
 } from 'react-icons/ri'
 import {
+  BrowserAccessScope,
   BrowserControlAction,
   BrowserControlResult,
   runBrowserControlPrompt
@@ -33,6 +34,28 @@ const quickPrompts = [
   { label: 'Back', prompt: 'back', icon: <RiArrowGoBackLine /> },
   { label: 'Click', prompt: 'click', icon: <RiCursorLine /> },
   { label: 'Scroll', prompt: 'scroll down', icon: <RiTerminalBoxLine /> }
+]
+
+const accessScopes: Array<{
+  id: BrowserAccessScope
+  label: string
+  detail: string
+}> = [
+  {
+    id: 'tab',
+    label: 'Tab Access',
+    detail: 'Only the active tab: type, click, scroll, reload, back/forward.'
+  },
+  {
+    id: 'tab-group',
+    label: 'Tab Group',
+    detail: 'Current window tabs: open/search in new tabs and manage tab flow.'
+  },
+  {
+    id: 'browser',
+    label: 'Entire Browser',
+    detail: 'All browser windows: open windows, launch URLs, and global browser actions.'
+  }
 ]
 
 const getSpeechRecognition = () =>
@@ -67,6 +90,7 @@ export default function BrowserControlView() {
   const [isListening, setIsListening] = useState(false)
   const [voiceStatus, setVoiceStatus] = useState('Voice ready')
   const [autoRunVoice, setAutoRunVoice] = useState(true)
+  const [scope, setScope] = useState<BrowserAccessScope>('tab')
   const recognitionRef = useRef<any>(null)
   const logRef = useRef<HTMLDivElement>(null)
 
@@ -95,7 +119,7 @@ export default function BrowserControlView() {
     if (!command || isRunning) return
 
     setIsRunning(true)
-    const result = await runBrowserControlPrompt(command)
+    const result = await runBrowserControlPrompt(command, scope)
     setEvents((current) => [
       ...current.slice(-9),
       {
@@ -190,22 +214,50 @@ export default function BrowserControlView() {
                   Browser Control
                 </h2>
                 <p className="mt-1 truncate text-[10px] font-black uppercase tracking-[0.2em] text-emerald-300/70">
-                  Local browser execution bus
+                  Scoped local browser execution
                 </p>
               </div>
             </div>
 
-            <div className="grid shrink-0 grid-cols-3 gap-2 text-[9px] font-black uppercase tracking-[0.16em]">
+            <div className="hidden shrink-0 grid-cols-3 gap-2 text-[9px] font-black uppercase tracking-[0.16em] lg:grid">
               <span className="rounded-md border border-emerald-300/15 bg-emerald-300/10 px-3 py-2 text-emerald-200">
-                Open
+                Voice
               </span>
               <span className="rounded-md border border-cyan-300/15 bg-cyan-300/10 px-3 py-2 text-cyan-100">
-                Type
+                Text
               </span>
               <span className="rounded-md border border-orange-300/15 bg-orange-300/10 px-3 py-2 text-orange-100">
-                Click
+                Scoped
               </span>
             </div>
+          </div>
+
+          <div className="grid shrink-0 grid-cols-1 gap-2 lg:grid-cols-3">
+            {accessScopes.map((item) => (
+              <button
+                key={item.id}
+                onClick={() => setScope(item.id)}
+                className={`nexus-browser-scope-card min-h-24 border p-3 text-left transition ${
+                  scope === item.id
+                    ? 'border-emerald-300/40 bg-emerald-300/10 text-white'
+                    : 'border-white/10 bg-white/[0.03] text-zinc-500 hover:border-white/20 hover:text-zinc-200'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-black uppercase tracking-[0.16em]">
+                    {item.label}
+                  </span>
+                  <span
+                    className={`h-2 w-2 rounded-full ${
+                      scope === item.id ? 'bg-emerald-300 shadow-[0_0_10px_#34d399]' : 'bg-zinc-700'
+                    }`}
+                  />
+                </div>
+                <p className="mt-2 line-clamp-2 text-[10px] font-semibold leading-relaxed text-zinc-500">
+                  {item.detail}
+                </p>
+              </button>
+            ))}
           </div>
 
           <form
@@ -215,7 +267,13 @@ export default function BrowserControlView() {
             <input
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
-              placeholder="Browser command..."
+              placeholder={
+                scope === 'tab'
+                  ? 'Active tab command...'
+                  : scope === 'tab-group'
+                    ? 'Tab group command...'
+                    : 'Entire browser command...'
+              }
               className="min-w-0 flex-1 bg-transparent px-2 py-3 text-sm font-semibold text-white outline-none placeholder:text-zinc-600"
             />
             <button
@@ -321,7 +379,7 @@ export default function BrowserControlView() {
               Browser Log
             </span>
             <span className="text-[8px] font-black uppercase tracking-[0.2em] text-emerald-300/60">
-              Local
+              {scope}
             </span>
           </div>
 

@@ -83,6 +83,8 @@ const normalizeUrl = (value: string) => {
 const getGoogleSearchUrl = (query: string) =>
   `https://www.google.com/search?q=${encodeURIComponent(query.trim())}`
 
+type BrowserAccessScope = 'tab' | 'tab-group' | 'browser'
+
 const splitBrowserPrompt = (prompt: string) =>
   prompt
     .split(/\s+(?:and then|then|after that)\s+|;\s*/i)
@@ -124,18 +126,64 @@ const pressBrowserShortcut = async (value: string) => {
   for (const modifier of modifiers.reverse()) await keyboard.releaseKey(modifier)
 }
 
-const runBrowserStep = async (rawStep: string) => {
+const openInCurrentTab = async (target: string) => {
+  await pressBrowserShortcut('ctrl+l')
+  await keyboard.type(target)
+  await keyboard.pressKey(Key.Enter)
+  await keyboard.releaseKey(Key.Enter)
+  await delay(700)
+}
+
+const openInTabGroup = async (target: string) => {
+  await pressBrowserShortcut('ctrl+t')
+  await keyboard.type(target)
+  await keyboard.pressKey(Key.Enter)
+  await keyboard.releaseKey(Key.Enter)
+  await delay(700)
+}
+
+const openWithScope = async (target: string, scope: BrowserAccessScope) => {
+  if (scope === 'tab') {
+    await openInCurrentTab(target)
+    return 'Active tab'
+  }
+
+  if (scope === 'tab-group') {
+    await openInTabGroup(target)
+    return 'Current tab group'
+  }
+
+  await shell.openExternal(target)
+  await delay(700)
+  return 'All browser windows'
+}
+
+const requireScope = (scope: BrowserAccessScope, allowed: BrowserAccessScope[], action: string) => {
+  if (!allowed.includes(scope)) {
+    throw new Error(`${action} requires ${allowed.join(' or ')} access.`)
+  }
+}
+
+const runBrowserStep = async (rawStep: string, scope: BrowserAccessScope) => {
   const step = rawStep.trim()
   const lower = step.toLowerCase()
 
   if (/^(new tab|open new tab)$/.test(lower)) {
+    requireScope(scope, ['tab-group', 'browser'], 'Opening a new tab')
     await pressBrowserShortcut('ctrl+t')
-    return { action: 'shortcut', detail: 'New tab' }
+    return { action: 'shortcut', detail: `New tab (${scope})` }
   }
 
   if (/^(close tab|close current tab)$/.test(lower)) {
+    requireScope(scope, ['tab-group', 'browser'], 'Closing tabs')
     await pressBrowserShortcut('ctrl+w')
-    return { action: 'shortcut', detail: 'Close tab' }
+    return { action: 'shortcut', detail: `Close tab (${scope})` }
+  }
+
+  if (/^(new window|open new window)$/.test(lower)) {
+    requireScope(scope, ['browser'], 'Opening a new browser window')
+    await pressBrowserShortcut('ctrl+n')
+    return { action: 'shortcut', detail: 'New browser window' }
   }
 
   if (/^(reload|refresh)$/.test(lower)) {
@@ -161,18 +209,16 @@ const runBrowserStep = async (rawStep: string) => {
   const openMatch = step.match(/^(?:open|go to|visit)\s+(.+)$/i)
   if (openMatch) {
     const target = normalizeUrl(openMatch[1])
-    await shell.openExternal(target)
-    await delay(700)
-    return { action: 'open', detail: target }
+    const access = await openWithScope(target, scope)
+    return { action: 'open', detail: `${target} via ${access}` }
   }
 
   const searchMatch = step.match(/^(?:search|google|look up|find)\s+(?:for\s+)?(.+)$/i)
   if (searchMatch) {
     const query = searchMatch[1].trim()
     const target = getGoogleSearchUrl(query)
-    await shell.openExternal(target)
-    await delay(700)
-    return { action: 'search', detail: query }
+    const access = await openWithScope(target, scope)
+    return { action: 'search', detail: `${query} via ${access}` }
   }
 
   const typeMatch = step.match(/^(?:type|write|input|paste)\s+(.+)$/i)
@@ -222,9 +268,8 @@ const runBrowserStep = async (rawStep: string) => {
   }
 
   const fallbackTarget = getGoogleSearchUrl(step)
-  await shell.openExternal(fallbackTarget)
-  await delay(700)
-  return { action: 'search', detail: step }
+  const access = await openWithScope(fallbackTarget, scope)
+  return { action: 'search', detail: `${step} via ${access}` }
 }
 
 const getSmartUrl = (
@@ -283,45 +328,55 @@ const getSmartUrl = (
 
 export default function registerWebAgent(ipcMain: IpcMain) {
   ipcMain.removeHandler('browser-control:run')
-  ipcMain.handle('browser-control:run', async (_event, payload: { prompt?: string } = {}) => {
-    const prompt = String(payload.prompt || '').trim()
-    if (!prompt) {
+  ipcMain.handle(
+    'browser-control:run',
+    async (_event, payload: { prompt?: string; scope?: BrowserAccessScope } = {}) => {
+      const prompt = String(payload.prompt || '').trim()
+      const requestedScope = payload.scope || 'tab'
+      const scope: BrowserAccessScope = ['tab', 'tab-group', 'browser'].includes(requestedScope)
+        ? requestedScope
+        : 'tab'
+
+      if (!prompt) {
+        return {
+          success: false,
+          summary: 'No browser command received.',
+          scope,
+          actions: []
+        }
+      }
+
+      const steps = splitBrowserPrompt(prompt)
+      const actions: Array<{ action: string; detail: string; ok: boolean; error?: string }> = []
+
+      for (const step of steps) {
+        try {
+          const result = await runBrowserStep(step, scope)
+          actions.push({ ...result, ok: true })
+        } catch (error: any) {
+          actions.push({
+            action: 'error',
+            detail: step,
+            ok: false,
+            error: error?.message || 'Browser action failed.'
+          })
+          break
+        }
+      }
+
+      const completed = actions.filter((action) => action.ok).length
+      const failed = actions.find((action) => !action.ok)
+
       return {
-        success: false,
-        summary: 'No browser command received.',
-        actions: []
+        success: !failed,
+        summary: failed
+          ? `Completed ${completed}/${steps.length} ${scope} browser actions. ${failed.error}`
+          : `Completed ${completed} ${scope} browser action${completed === 1 ? '' : 's'}.`,
+        scope,
+        actions
       }
     }
-
-    const steps = splitBrowserPrompt(prompt)
-    const actions: Array<{ action: string; detail: string; ok: boolean; error?: string }> = []
-
-    for (const step of steps) {
-      try {
-        const result = await runBrowserStep(step)
-        actions.push({ ...result, ok: true })
-      } catch (error: any) {
-        actions.push({
-          action: 'error',
-          detail: step,
-          ok: false,
-          error: error?.message || 'Browser action failed.'
-        })
-        break
-      }
-    }
-
-    const completed = actions.filter((action) => action.ok).length
-    const failed = actions.find((action) => !action.ok)
-
-    return {
-      success: !failed,
-      summary: failed
-        ? `Completed ${completed}/${steps.length} browser actions. ${failed.error}`
-        : `Completed ${completed} browser action${completed === 1 ? '' : 's'}.`,
-      actions
-    }
-  })
+  )
 
   ipcMain.handle('google-search', async (_event, query: string) => {
     let browser: any = null
