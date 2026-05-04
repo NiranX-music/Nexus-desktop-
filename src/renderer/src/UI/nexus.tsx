@@ -13,7 +13,8 @@ import {
   RiCloseLine,
   RiImageLine,
   RiChatSmile3Line,
-  RiGlobalLine
+  RiGlobalLine,
+  RiLogoutBoxRLine
 } from 'react-icons/ri'
 import { getSystemStatus } from '@renderer/services/system-info'
 import type { SystemStats } from '@renderer/services/system-info'
@@ -44,6 +45,7 @@ interface NexusProps {
   stopVision: () => void
   activeStream: MediaStream | null
   sendTextCommand: (command: string) => Promise<void>
+  onLogout: () => void
 }
 
 const glassPanel = 'nexus-glass-card'
@@ -187,6 +189,14 @@ const Nexus = (props: NexusProps) => {
                 <span className="nexus-status-pill text-orange-100">
                   {time.toLocaleTimeString()}
                 </span>
+                <button
+                  type="button"
+                  className="nexus-status-pill nexus-logout-button"
+                  onClick={props.onLogout}
+                  title="Logout account"
+                >
+                  <RiLogoutBoxRLine /> Logout
+                </button>
               </div>
             </div>
 

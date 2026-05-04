@@ -27,8 +27,15 @@ export const useAuthStore = create<AuthState>()(
 
     logout: () =>
       set((state) => {
+        const emailSession = localStorage.getItem('nexus_email_session')
+
+        if (emailSession) {
+          window.electron?.ipcRenderer?.invoke?.('email-auth:logout', emailSession).catch(() => {})
+        }
+
         localStorage.removeItem('nexus_cloud_token')
         localStorage.removeItem('nexus_email_session')
+        window.dispatchEvent(new Event('nexus-auth-logout'))
         state.accessToken = null
         state.isAuthInitialized = true
       })

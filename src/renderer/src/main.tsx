@@ -41,6 +41,10 @@ class SystemErrorBoundary extends React.Component<
 
 let isSessionUnlocked = false
 
+window.addEventListener('nexus-auth-logout', () => {
+  isSessionUnlocked = false
+})
+
 const ProtectedRoute = ({ children }: { children: JSX.Element }) => {
   const [status, setStatus] = useState<'checking' | 'authorized'>('checking')
   const navigate = useNavigate()
@@ -135,8 +139,7 @@ const AppRouter = () => {
 
             navigate('/')
           }
-        } catch (e) {
-        }
+        } catch (e) {}
       })
     }
     return () => electronAPI?.removeAllListeners('oauth-callback')
@@ -152,7 +155,6 @@ const AppRouter = () => {
           </PublicRoute>
         }
       />
-
 
       <Route
         path="/lock"

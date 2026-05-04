@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   RiDownloadCloud2Line,
   RiLoader4Line,
@@ -22,6 +23,7 @@ import ResearchWidget from './Widgets/DeepResearch'
 import SemanticWidget from './Widgets/SematicSearch'
 import SmartDropZonesWidget from './Widgets/SmartZoneWidget'
 import TitleBar from './components/Titlebar'
+import { useAuthStore } from './store/auth-store'
 
 export type VisionMode = 'camera' | 'screen' | 'none'
 
@@ -194,6 +196,8 @@ const MandatoryUpdateGate = ({ children }: { children: React.ReactNode }) => {
 }
 
 const IndexRoot = () => {
+  const navigate = useNavigate()
+  const logout = useAuthStore((state) => state.logout)
   const [isOverlay, setIsOverlay] = useState(false)
 
   const [isSystemActive, setIsSystemActive] = useState(false)
@@ -320,6 +324,17 @@ const IndexRoot = () => {
     nexusService.setMute(s)
   }
 
+  const logoutAccount = () => {
+    nexusService.disconnect()
+    setIsSystemActive(false)
+    setIsSystemStarting(false)
+    setIsMicMuted(true)
+    nexusService.setMute(true)
+    stopVision()
+    logout()
+    navigate('/login', { replace: true })
+  }
+
   const startVision = async (mode: 'camera' | 'screen') => {
     if (!isSystemActive) return
 
@@ -443,6 +458,7 @@ const IndexRoot = () => {
             stopVision={stopVision}
             activeStream={activeStreamRef.current}
             sendTextCommand={sendTextCommand}
+            onLogout={logoutAccount}
           />
         </div>
         <SmartDropZonesWidget />
