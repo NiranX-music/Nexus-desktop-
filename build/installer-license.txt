@@ -1,0 +1,8 @@
+Nexus AI Desktop Agent
+
+Install Nexus AI only on devices you own or have permission to administer.
+The app can run local automation, browser actions, voice features, update checks,
+and AI model requests after you configure access inside the application.
+
+By continuing, you agree to keep your API keys private and to use local automation
+features responsibly.
