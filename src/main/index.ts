@@ -502,24 +502,27 @@ function toggleOverlayMode() {
 
   const primaryDisplay = screen.getPrimaryDisplay()
   const { width, height } = primaryDisplay.workAreaSize
+  const dockWidth = 760
+  const dockHeight = 82
+  const cameraClearance = Math.max(38, Math.round(height * 0.055))
 
   if (isOverlayMode) {
     mainWindow.setResizable(true)
     mainWindow.setAlwaysOnTop(false)
+    mainWindow.setSkipTaskbar(false)
     mainWindow.setBounds({ width: 950, height: 670 })
     mainWindow.center()
     mainWindow.webContents.send('overlay-mode', false)
   } else {
-    const w = 620
-    const h = 86
     mainWindow.setBounds({
-      width: w,
-      height: h,
-      x: Math.floor(width / 2 - w / 2),
-      y: height - h - 42
+      width: dockWidth,
+      height: dockHeight,
+      x: Math.floor(width / 2 - dockWidth / 2),
+      y: cameraClearance
     })
     mainWindow.setAlwaysOnTop(true, 'screen-saver')
     mainWindow.setResizable(false)
+    mainWindow.setSkipTaskbar(true)
     mainWindow.webContents.send('overlay-mode', true)
   }
   isOverlayMode = !isOverlayMode
