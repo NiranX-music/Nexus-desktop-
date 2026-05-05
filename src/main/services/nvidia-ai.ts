@@ -2,7 +2,7 @@ import { IpcMain } from 'electron'
 
 const NVIDIA_BASE_URL = 'https://integrate.api.nvidia.com/v1'
 const DEFAULT_MODEL = 'deepseek-ai/deepseek-v4-pro'
-const DEFAULT_NEXUS_API_BASE_URL = 'https://nexus-desktop-app.vercel.app'
+const DEFAULT_NEXUS_API_BASE_URL = 'https://niranx-nexus-agent.vercel.app'
 const NVIDIA_API_KEY_ENV_NAMES = ['NVIDIA_API_KEY', 'NVIDIA_BUILD_API_KEY', 'NVIDIA_NIM_API_KEY']
 const PLACEHOLDER_NVIDIA_KEY_RE =
   /^(your-|paste-|replace-|example|placeholder|nvapi[_-]?your|\$NVIDIA_API_KEY|\$\{NVIDIA_API_KEY\})/i

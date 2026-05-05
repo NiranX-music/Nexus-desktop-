@@ -11,6 +11,7 @@ import {
   RiCloseLine,
   RiEditLine 
 } from 'react-icons/ri'
+import { deleteCloudData, listCloudData, saveCloudData } from '@renderer/services/cloud-data'
 
 interface Note {
   filename: string
@@ -18,6 +19,14 @@ interface Note {
   content: string
   createdAt: Date
 }
+
+type CloudNoteValue = {
+  title?: string
+  content?: string
+  timestamp?: string
+}
+
+const createNoteKey = (title: string) => title.replace(/[^a-z0-9]/gi, '_').toLowerCase()
 
 const MarkdownComponents = {
   code({ node, inline, className, children, ...props }: any) {
@@ -47,8 +56,33 @@ const NotesView = ({ glassPanel }: { glassPanel?: string }) => {
 
   const fetchNotes = async () => {
     try {
-      const data = await window.electron.ipcRenderer.invoke('get-notes')
-      setNotes(data)
+      const data: Note[] = await window.electron.ipcRenderer.invoke('get-notes')
+      const cloudRows = await listCloudData<CloudNoteValue>('notes')
+      const notesByFilename = new Map<string, Note>()
+
+      for (const note of data || []) {
+        notesByFilename.set(note.filename, {
+          ...note,
+          createdAt: new Date(note.createdAt)
+        })
+      }
+
+      for (const row of cloudRows) {
+        const value = row.value || {}
+        const title = value.title || row.item_key.replace(/_/g, ' ')
+        const filename = `${row.item_key}.md`
+        notesByFilename.set(filename, {
+          filename,
+          title,
+          content: value.content || '',
+          createdAt: new Date(value.timestamp || row.updated_at || Date.now())
+        })
+      }
+
+      const mergedNotes = Array.from(notesByFilename.values()).sort(
+        (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
+      )
+      setNotes(mergedNotes)
     } catch (e) {
     }
   }
@@ -93,6 +127,11 @@ const NotesView = ({ glassPanel }: { glassPanel?: string }) => {
       title: newTitle,
       content: newContent
     })
+    await saveCloudData('notes', createNoteKey(newTitle), {
+      title: newTitle,
+      content: newContent,
+      timestamp: new Date().toISOString()
+    })
 
     setIsEditorOpen(false)
     setEditOriginalFilename(null)
@@ -111,6 +150,7 @@ const NotesView = ({ glassPanel }: { glassPanel?: string }) => {
   const deleteNote = async (filename: string, e: React.MouseEvent) => {
     e.stopPropagation()
     await window.electron.ipcRenderer.invoke('delete-note', filename)
+    await deleteCloudData('notes', filename.replace(/\.md$/i, ''))
     fetchNotes()
     if (selectedNote?.filename === filename) setSelectedNote(null)
   }

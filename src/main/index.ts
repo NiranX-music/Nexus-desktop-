@@ -51,7 +51,6 @@ import registerScreenPeeler from './handlers/ScreenPeeler-handler'
 import registerPhantomKeyboard from './handlers/PhantomControl-handler'
 import registerSecurityVault from './security/Security'
 import registerLockSystem from './security/lock-system'
-import registerEmailAuth from './security/email-auth'
 import { autoUpdater } from 'electron-updater'
 
 app.commandLine.appendSwitch('use-fake-ui-for-media-stream')
@@ -73,10 +72,24 @@ let mainWindow: BrowserWindow | null = null
 let isOverlayMode = false
 let updateDownloadPromise: Promise<Array<string>> | null = null
 let downloadedUpdateInfo: { version: string; releaseNotes: string } | null = null
+let pendingCloudAuthState = ''
+let pendingCloudAuthExpiresAt = 0
+let pendingCloudAuthRequest: {
+  requestId: string
+  deviceCode: string
+  userCode: string
+  expiresAt: number
+} | null = null
+let pendingCloudAuthPollTimer: ReturnType<typeof setInterval> | null = null
+let isCloudAuthClaimInFlight = false
 
 const secureConfigPath = join(app.getPath('userData'), 'nexus_secure_vault.json')
 const NEXUS_UPDATE_FEED_URL =
-  process.env.NEXUS_UPDATE_FEED_URL || 'https://nexus-desktop-app.vercel.app/updates/win'
+  process.env.NEXUS_UPDATE_FEED_URL || 'https://niranx-nexus-agent.vercel.app/updates/win'
+const NEXUS_WEB_APP_URL = (
+  process.env.NEXUS_WEB_APP_URL || 'https://niranx-nexus-agent.vercel.app'
+).replace(/\/+$/, '')
+const NEXUS_DESKTOP_AUTH_API_URL = `${NEXUS_WEB_APP_URL}/api/desktop-auth`
 
 const NVIDIA_API_KEY_ENV_NAMES = ['NVIDIA_API_KEY', 'NVIDIA_BUILD_API_KEY', 'NVIDIA_NIM_API_KEY']
 const PLACEHOLDER_NVIDIA_KEY_RE =
@@ -254,6 +267,120 @@ const canUseUpdaterForRequest = (action: string) => {
   return getInstallerOnlyUpdateGuardMessage(action)
 }
 
+type DesktopAuthApiResponse = {
+  ok?: boolean
+  status?: string
+  error?: string
+  requestId?: string
+  deviceCode?: string
+  userCode?: string
+  expiresAt?: string
+  verificationUri?: string
+  accessToken?: string
+  refreshToken?: string
+  userId?: string
+  email?: string
+}
+
+const postDesktopAuth = async (
+  endpoint: 'start' | 'claim',
+  body: Record<string, unknown>
+): Promise<DesktopAuthApiResponse> => {
+  const response = await fetch(`${NEXUS_DESKTOP_AUTH_API_URL}/${endpoint}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-nexus-client': 'desktop'
+    },
+    body: JSON.stringify(body)
+  })
+  const data = (await response.json().catch(() => ({}))) as DesktopAuthApiResponse
+
+  if (!response.ok || data.ok === false) {
+    const error = new Error(data.error || `Desktop authorization returned ${response.status}.`)
+    ;(error as Error & { status?: number }).status = response.status
+    throw error
+  }
+
+  return data
+}
+
+const clearCloudAuthPolling = () => {
+  if (pendingCloudAuthPollTimer) {
+    clearInterval(pendingCloudAuthPollTimer)
+    pendingCloudAuthPollTimer = null
+  }
+  isCloudAuthClaimInFlight = false
+}
+
+const clearPendingCloudAuth = () => {
+  clearCloudAuthPolling()
+  pendingCloudAuthState = ''
+  pendingCloudAuthExpiresAt = 0
+  pendingCloudAuthRequest = null
+}
+
+const sendCloudAuthCallback = (payload: Record<string, unknown>) => {
+  mainWindow?.webContents.send('cloud-auth-callback', payload)
+}
+
+const pollPendingCloudAuth = async () => {
+  if (!pendingCloudAuthRequest || isCloudAuthClaimInFlight) return
+
+  if (Date.now() >= pendingCloudAuthRequest.expiresAt) {
+    clearPendingCloudAuth()
+    sendCloudAuthCallback({
+      ok: false,
+      error: 'The website authorization code expired. Start login again from Nexus AI.'
+    })
+    return
+  }
+
+  isCloudAuthClaimInFlight = true
+
+  try {
+    const result = await postDesktopAuth('claim', {
+      requestId: pendingCloudAuthRequest.requestId,
+      deviceCode: pendingCloudAuthRequest.deviceCode
+    })
+
+    if (result.status !== 'approved') return
+
+    clearPendingCloudAuth()
+    sendCloudAuthCallback({
+      ok: true,
+      state: result.requestId || '',
+      accessToken: result.accessToken || '',
+      refreshToken: result.refreshToken || '',
+      expiresAt: result.expiresAt || '',
+      userId: result.userId || '',
+      email: result.email || ''
+    })
+  } catch (error) {
+    const status = (error as Error & { status?: number }).status || 0
+    if (!status || status >= 400) {
+      clearPendingCloudAuth()
+      sendCloudAuthCallback({
+        ok: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : 'Unable to claim the website authorization session.'
+      })
+    }
+  } finally {
+    isCloudAuthClaimInFlight = false
+  }
+}
+
+const startCloudAuthPolling = () => {
+  clearCloudAuthPolling()
+  pendingCloudAuthPollTimer = setInterval(() => {
+    void pollPendingCloudAuth()
+  }, 2000)
+  void pollPendingCloudAuth()
+}
+
 const downloadCheckedUpdate = async () => {
   if (downloadedUpdateInfo) {
     sendUpdaterEvent('downloaded', downloadedUpdateInfo)
@@ -311,6 +438,52 @@ function createWindow(): void {
   }
 }
 
+const isCloudAuthProtocolUrl = (url: URL) => {
+  const target = `${url.hostname}${url.pathname}`.replace(/^\/+/, '').replace(/\//g, '-')
+  return target === 'auth-callback' || target === 'authcallback'
+}
+
+const handleProtocolUrl = (url: string) => {
+  if (!mainWindow || !url.startsWith('nexus://')) return
+
+  try {
+    const parsed = new URL(url)
+
+    if (isCloudAuthProtocolUrl(parsed)) {
+      const state = parsed.searchParams.get('state') || ''
+      const isValidState =
+        pendingCloudAuthState &&
+        state === pendingCloudAuthState &&
+        Date.now() < pendingCloudAuthExpiresAt
+
+      if (!isValidState) {
+        mainWindow.webContents.send('cloud-auth-callback', {
+          ok: false,
+          error: 'The website authorization code expired. Start login again from Nexus AI.'
+        })
+        return
+      }
+
+      clearCloudAuthPolling()
+      pendingCloudAuthState = ''
+      pendingCloudAuthExpiresAt = 0
+      pendingCloudAuthRequest = null
+      mainWindow.webContents.send('cloud-auth-callback', {
+        ok: true,
+        state,
+        accessToken: parsed.searchParams.get('access_token') || '',
+        refreshToken: parsed.searchParams.get('refresh_token') || '',
+        expiresAt: parsed.searchParams.get('expires_at') || '',
+        userId: parsed.searchParams.get('user_id') || '',
+        email: parsed.searchParams.get('email') || ''
+      })
+      return
+    }
+  } catch {}
+
+  mainWindow.webContents.send('oauth-callback', url)
+}
+
 app.on('second-instance', (event, commandLine) => {
   if (!event) {
   }
@@ -319,7 +492,7 @@ app.on('second-instance', (event, commandLine) => {
     mainWindow.focus()
     const url = commandLine.find((arg) => arg.startsWith('nexus://'))
     if (url) {
-      mainWindow.webContents.send('oauth-callback', url)
+      handleProtocolUrl(url)
     }
   }
 })
@@ -337,13 +510,13 @@ function toggleOverlayMode() {
     mainWindow.center()
     mainWindow.webContents.send('overlay-mode', false)
   } else {
-    const w = 340
-    const h = 70
+    const w = 620
+    const h = 86
     mainWindow.setBounds({
       width: w,
       height: h,
       x: Math.floor(width / 2 - w / 2),
-      y: height - h - 50
+      y: height - h - 42
     })
     mainWindow.setAlwaysOnTop(true, 'screen-saver')
     mainWindow.setResizable(false)
@@ -469,6 +642,48 @@ app.whenReady().then(() => {
   ipcMain.handle('get-app-version', () => app.getVersion())
 
   ipcMain.handle('get-update-feed-url', () => NEXUS_UPDATE_FEED_URL)
+
+  ipcMain.handle('cloud-auth:start', async () => {
+    try {
+      clearPendingCloudAuth()
+      const authRequest = await postDesktopAuth('start', {
+        version: app.getVersion(),
+        deviceName: `${app.getName()} ${process.platform}`
+      })
+
+      if (
+        !authRequest.requestId ||
+        !authRequest.deviceCode ||
+        !authRequest.userCode ||
+        !authRequest.expiresAt ||
+        !authRequest.verificationUri
+      ) {
+        throw new Error('The Nexus website did not return a complete desktop pairing request.')
+      }
+
+      const expiresAt = new Date(authRequest.expiresAt).getTime()
+      pendingCloudAuthRequest = {
+        requestId: authRequest.requestId,
+        deviceCode: authRequest.deviceCode,
+        userCode: authRequest.userCode,
+        expiresAt: Number.isFinite(expiresAt) ? expiresAt : Date.now() + 1000 * 60 * 10
+      }
+
+      await shell.openExternal(authRequest.verificationUri)
+      startCloudAuthPolling()
+
+      return {
+        ok: true,
+        requestId: authRequest.requestId,
+        userCode: authRequest.userCode,
+        url: authRequest.verificationUri,
+        expiresAt: authRequest.expiresAt
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to open website login.'
+      return { ok: false, error: message }
+    }
+  })
 
   ipcMain.handle('mandatory-update:status', async () => {
     const currentVersion = app.getVersion()
@@ -619,14 +834,11 @@ app.whenReady().then(() => {
 
   app.on('open-url', (event, url) => {
     event.preventDefault()
-    if (mainWindow && url.startsWith('nexus://')) {
-      mainWindow.webContents.send('oauth-callback', url)
-    }
+    handleProtocolUrl(url)
   })
 
   registerLockSystem()
   registerSecurityVault()
-  registerEmailAuth()
   registerPhantomKeyboard()
   registerScreenPeeler()
   registerDropZoneControl(ipcMain)
@@ -669,6 +881,7 @@ app.whenReady().then(() => {
   createWindow()
 
   globalShortcut.register('CommandOrControl+Shift+I', () => toggleOverlayMode())
+  globalShortcut.register('Super+Shift+N', () => toggleOverlayMode())
   ipcMain.on('toggle-overlay', () => toggleOverlayMode())
 
   app.on('activate', function () {

@@ -1,8 +1,8 @@
 import { useEffect } from 'react'
 import { useAuthStore } from '../store/auth-store'
-import AxiosInstance from '../config/AxiosInstance'
-
-const electronAPI = (window as any).electron?.ipcRenderer
+import { SECURITY_VERIFICATIONS_PAUSED } from '../config/security-flags'
+import { bootstrapCloudAccount, syncLocalSettingsToCloud } from '@renderer/services/cloud-data'
+import { getCloudSession, getVerifiedCloudUser } from '@renderer/lib/supabase'
 
 export default function AuthInitializer() {
   const setAccessToken = useAuthStore((s) => s.setAccessToken)
@@ -10,37 +10,32 @@ export default function AuthInitializer() {
 
   useEffect(() => {
     const init = async () => {
+      if (SECURITY_VERIFICATIONS_PAUSED) {
+        localStorage.removeItem('nexus_cloud_token')
+        localStorage.removeItem('nexus_email_session')
+        localStorage.removeItem('nexus_user_name')
+        setAccessToken(null)
+        if (setIsAuthInitialized) setIsAuthInitialized(true)
+        return
+      }
+
       try {
-        const storedEmailSession = localStorage.getItem('nexus_email_session')
-        if (storedEmailSession && electronAPI) {
-          const session = await electronAPI.invoke('email-auth:verify-session', storedEmailSession)
-          if (session?.ok) {
-            setAccessToken(storedEmailSession)
-            return
-          }
-          localStorage.removeItem('nexus_email_session')
-        }
+        const session = await getCloudSession()
+        const user = await getVerifiedCloudUser()
 
-        const storedRefreshToken = localStorage.getItem('nexus_cloud_token')
-
-        if (!storedRefreshToken) {
+        if (!session || !user) {
           setAccessToken(null)
           return
         }
 
-        const res = await AxiosInstance.post('/users/refresh-token', {
-          refreshToken: storedRefreshToken
-        })
-
-        const accessToken = res.data.accessToken
-        setAccessToken(accessToken)
-
-        if (res.data.refreshToken) {
-          localStorage.setItem('nexus_cloud_token', res.data.refreshToken)
-        }
+        setAccessToken(session.access_token)
+        localStorage.setItem('nexus_cloud_token', session.refresh_token)
+        await bootstrapCloudAccount()
+        await syncLocalSettingsToCloud()
       } catch (err) {
         setAccessToken(null)
         localStorage.removeItem('nexus_cloud_token')
+        localStorage.removeItem('nexus_email_session')
       } finally {
         if (setIsAuthInitialized) setIsAuthInitialized(true)
       }

@@ -1,4 +1,4 @@
-import { FormEvent, useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Cpu,
@@ -9,61 +9,46 @@ import {
   Activity,
   Database,
   Lock,
-  Mail,
-  KeyRound,
-  User,
   Loader2,
-  AlertCircle
+  AlertCircle,
+  LogIn
 } from 'lucide-react'
-import { FcGoogle } from 'react-icons/fc'
-import { useNavigate } from 'react-router-dom'
-import { useAuthStore } from '../store/auth-store'
-
-type AuthPanelMode = 'login' | 'register'
 
 export default function LoginPage() {
-  const navigate = useNavigate()
-  const setAccessToken = useAuthStore((state) => state.setAccessToken)
   const [bootLogs, setBootLogs] = useState<string[]>([])
   const [isReady, setIsReady] = useState(false)
-  const [mode, setMode] = useState<AuthPanelMode>('login')
-  const [name, setName] = useState('')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
   const [authError, setAuthError] = useState('')
+  const [desktopAuthStatus, setDesktopAuthStatus] = useState('')
+  const [desktopAuthCode, setDesktopAuthCode] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const electronAPI = (window as any).electron?.ipcRenderer
 
-  const handleGoogleLogin = () => {
-    window.open(`${import.meta.env.VITE_BACKEND_KEY}/users/google`, '_blank')
-  }
-
-  const handleEmailAuth = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
+  const handleWebsiteLogin = async () => {
     setAuthError('')
+    setDesktopAuthStatus('')
+    setDesktopAuthCode('')
 
     if (!electronAPI) {
-      setAuthError('Local email auth is unavailable in this runtime.')
+      window.open(`${import.meta.env.VITE_NEXUS_WEB_APP_URL || 'https://niranx-nexus-agent.vercel.app'}/auth=desktop`, '_blank')
       return
     }
 
     setIsSubmitting(true)
     try {
-      const channel = mode === 'register' ? 'email-auth:register' : 'email-auth:login'
-      const response = await electronAPI.invoke(channel, { name, email, password })
-
+      const response = await electronAPI.invoke('cloud-auth:start')
       if (!response?.ok) {
-        setAuthError(response?.error || 'Unable to complete email authentication.')
+        setAuthError(response?.error || 'Unable to open Nexus website authorization.')
         return
       }
-
-      localStorage.removeItem('nexus_cloud_token')
-      localStorage.setItem('nexus_email_session', response.token)
-      setAccessToken(response.token)
-      navigate('/', { replace: true })
+      setDesktopAuthCode(response.userCode || '')
+      setDesktopAuthStatus(
+        response.userCode
+          ? 'Website authorization opened. Confirm this code on the Nexus website, then approve.'
+          : 'Website authorization opened. Verify on the Nexus website, then approve this desktop.'
+      )
     } catch {
-      setAuthError('Unable to reach the local authentication vault.')
+      setAuthError('Unable to start the Nexus website authorization flow.')
     } finally {
       setIsSubmitting(false)
     }
@@ -75,7 +60,7 @@ export default function LoginPage() {
       'SECURE_ENCLAVE: MOUNTED',
       'NEURAL_LINK: ESTABLISHING...',
       'IPC_BRIDGE: [OK]',
-      'LOCAL_VAULT: WAITING FOR DECRYPTION',
+      'CLOUD_IDENTITY: WAITING FOR WEBSITE AUTH',
       'AGENTIC_ROUTER: ONLINE',
       'AWAITING OPERATOR HANDSHAKE...'
     ]
@@ -197,111 +182,44 @@ export default function LoginPage() {
             <div className="mb-6 p-4 rounded-xl bg-emerald-500/5 border border-emerald-500/20 flex items-start gap-4">
               <ShieldCheck className="w-6 h-6 text-emerald-400 shrink-0 mt-0.5" />
               <p className="text-xs text-zinc-300 font-mono leading-relaxed">
-                Email sessions are stored locally in the encrypted Nexus vault. OAuth remains
-                available for website-linked operators.
+                Nexus 2.0 uses Supabase cloud login. Authorize from the Nexus website, then the
+                verified session returns to this desktop automatically.
               </p>
-            </div>
-
-            <div className="mb-5 grid grid-cols-2 rounded-xl border border-white/10 bg-white/[0.03] p-1">
-              <button
-                type="button"
-                onClick={() => {
-                  setMode('login')
-                  setAuthError('')
-                }}
-                className={`h-10 rounded-lg text-[10px] font-bold uppercase tracking-widest transition ${mode === 'login' ? 'bg-emerald-500 text-black' : 'text-zinc-400 hover:text-white'}`}
-              >
-                Sign In
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setMode('register')
-                  setAuthError('')
-                }}
-                className={`h-10 rounded-lg text-[10px] font-bold uppercase tracking-widest transition ${mode === 'register' ? 'bg-emerald-500 text-black' : 'text-zinc-400 hover:text-white'}`}
-              >
-                Create
-              </button>
-            </div>
-
-            <form onSubmit={handleEmailAuth} className="flex flex-col gap-4">
-              {mode === 'register' && (
-                <label className="relative block">
-                  <User className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-emerald-500/70" />
-                  <input
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
-                    autoComplete="name"
-                    placeholder="Operator name"
-                    className="h-12 w-full rounded-xl border border-white/10 bg-black/50 pl-11 pr-4 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-emerald-500/70 focus:bg-black"
-                  />
-                </label>
-              )}
-
-              <label className="relative block">
-                <Mail className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-emerald-500/70" />
-                <input
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  autoComplete="email"
-                  inputMode="email"
-                  placeholder="Email address"
-                  className="h-12 w-full rounded-xl border border-white/10 bg-black/50 pl-11 pr-4 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-emerald-500/70 focus:bg-black"
-                />
-              </label>
-
-              <label className="relative block">
-                <KeyRound className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-emerald-500/70" />
-                <input
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
-                  placeholder="Password"
-                  type="password"
-                  className="h-12 w-full rounded-xl border border-white/10 bg-black/50 pl-11 pr-4 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-emerald-500/70 focus:bg-black"
-                />
-              </label>
-
-              {authError && (
-                <div className="flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200">
-                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-300" />
-                  <span>{authError}</span>
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={!isReady || isSubmitting}
-                className={`flex h-12 w-full items-center justify-center gap-3 rounded-xl border border-emerald-500/50 bg-emerald-500 text-black text-xs font-black uppercase tracking-widest transition ${!isReady || isSubmitting ? 'cursor-not-allowed opacity-50' : 'hover:bg-white hover:border-white'}`}
-              >
-                {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
-                {mode === 'register' ? 'Create Email Access' : 'Enter With Email'}
-              </button>
-            </form>
-
-            <div className="my-6 flex items-center gap-3">
-              <div className="h-px flex-1 bg-white/10" />
-              <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-600">or</span>
-              <div className="h-px flex-1 bg-white/10" />
             </div>
 
             <div className="w-full relative group">
               <div className="absolute -inset-0.5 bg-linear-to-r from-emerald-500 to-cyan-600 rounded-xl opacity-0 group-hover:opacity-100 blur transition duration-300" />
 
               <button
-                onClick={handleGoogleLogin}
-                disabled={!isReady}
+                onClick={handleWebsiteLogin}
+                disabled={!isReady || isSubmitting}
                 className={`relative flex w-full items-center justify-center gap-3 py-4 px-6 rounded-xl bg-black border border-white/40 text-white transition-all duration-200 ease-in-out font-bold text-xs tracking-widest uppercase shadow-lg ${!isReady ? 'opacity-50 cursor-not-allowed' : 'hover:bg-white hover:text-black hover:border-emerald-500/90 cursor-pointer'}`}
               >
-                <FcGoogle className="w-5 h-5" />
-                Continue With Google
+                {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <LogIn className="h-5 w-5" />}
+                Sign In / Login
               </button>
             </div>
 
+            {desktopAuthStatus && (
+              <div className="mt-4 rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-3 text-xs text-cyan-100">
+                <div>{desktopAuthStatus}</div>
+                {desktopAuthCode && (
+                  <div className="mt-3 rounded-lg border border-cyan-300/20 bg-black/40 px-3 py-2 text-center font-mono text-lg font-black tracking-[0.25em] text-white">
+                    {desktopAuthCode}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {authError && (
+              <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200">
+                {authError}
+              </div>
+            )}
+
             <div className="mt-6 flex items-center justify-center gap-2 text-emerald-500/50 text-[10px] font-mono tracking-widest uppercase">
               <Fingerprint size={14} />
-              Secure Local Session
+              Supabase Cloud Session
             </div>
           </div>
         </motion.div>

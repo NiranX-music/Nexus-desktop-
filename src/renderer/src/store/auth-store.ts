@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
+import { signOutCloudSession } from '@renderer/lib/supabase'
 
 interface AuthState {
   accessToken: string | null
@@ -27,12 +28,7 @@ export const useAuthStore = create<AuthState>()(
 
     logout: () =>
       set((state) => {
-        const emailSession = localStorage.getItem('nexus_email_session')
-
-        if (emailSession) {
-          window.electron?.ipcRenderer?.invoke?.('email-auth:logout', emailSession).catch(() => {})
-        }
-
+        signOutCloudSession().catch(() => {})
         localStorage.removeItem('nexus_cloud_token')
         localStorage.removeItem('nexus_email_session')
         window.dispatchEvent(new Event('nexus-auth-logout'))

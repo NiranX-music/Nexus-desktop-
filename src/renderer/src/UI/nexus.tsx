@@ -240,7 +240,16 @@ const Nexus = (props: NexusProps) => {
               {activeTab !== 'DASHBOARD' && activeTab !== 'PHONE' && (
                 <div className="absolute inset-0 overflow-y-auto scrollbar-small">
                   {activeTab === 'Macros' && <WorkFlowEditorView />}
-                  {activeTab === 'BROWSER CONTROL' && <BrowserControlView />}
+                  {activeTab === 'BROWSER CONTROL' && (
+                    <BrowserControlView
+                      isSystemActive={props.isSystemActive}
+                      isSystemStarting={props.isSystemStarting}
+                      isMicMuted={props.isMicMuted}
+                      toggleSystem={props.toggleSystem}
+                      toggleMic={props.toggleMic}
+                      sendTextCommand={props.sendTextCommand}
+                    />
+                  )}
                   {activeTab === 'AI CHAT' && <AiChatView />}
                   {activeTab === 'Apps' && <AppsView />}
                   {activeTab === 'NOTES' && <NotesView glassPanel={glassPanel} />}

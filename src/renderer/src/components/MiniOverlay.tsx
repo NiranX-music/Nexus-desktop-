@@ -1,11 +1,14 @@
-import { useState, useEffect, useRef } from 'react'
+import { FormEvent, useState, useEffect, useRef } from 'react'
 import {
+  RiChat3Line,
   RiMicLine,
   RiMicOffLine,
   RiComputerLine,
   RiCameraLine,
   RiFullscreenLine,
-  RiDragMove2Fill
+  RiDragMove2Fill,
+  RiLoader4Line,
+  RiSendPlane2Line
 } from 'react-icons/ri'
 import { GiPowerButton } from 'react-icons/gi'
 import { nexusService } from '@renderer/services/nexus-voice-ai'
@@ -33,9 +36,12 @@ const MiniOverlay = ({
   isVideoOn,
   visionMode,
   startVision,
-  stopVision
+  stopVision,
+  sendTextCommand
 }: OverlayProps) => {
   const [isTalking, setIsTalking] = useState(false)
+  const [textCommand, setTextCommand] = useState('')
+  const [isSendingText, setIsSendingText] = useState(false)
   const analyzerRef = useRef<AnalyserNode | null>(null)
   const dataArrayRef = useRef<Uint8Array | any | null>(null)
 
@@ -69,8 +75,22 @@ const MiniOverlay = ({
     window.electron.ipcRenderer.send('toggle-overlay')
   }
 
+  const submitTextCommand = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const command = textCommand.trim()
+    if (!command || isSendingText) return
+
+    setIsSendingText(true)
+    try {
+      await sendTextCommand(command)
+      setTextCommand('')
+    } finally {
+      setIsSendingText(false)
+    }
+  }
+
   return (
-    <div className="w-full h-full flex items-center justify-between px-3 bg-zinc-950/90 backdrop-blur-xl rounded-full border border-emerald-500/30 drag-region overflow-hidden">
+    <div className="w-full h-full flex items-center justify-between gap-2 px-3 bg-zinc-950/90 backdrop-blur-xl rounded-full border border-emerald-500/30 drag-region overflow-hidden shadow-[0_18px_60px_rgba(0,0,0,0.45)]">
       <div className="flex items-center gap-3 no-drag">
         <div
           className={`w-8 h-8 rounded-full flex items-center justify-center border transition-all duration-300 ${isSystemActive ? (isTalking ? 'border-emerald-500 bg-emerald-500/20 shadow-[0_0_15px_#10b981]' : 'border-emerald-500/50 bg-emerald-900/20') : 'border-zinc-700 bg-zinc-900'}`}
@@ -105,6 +125,29 @@ const MiniOverlay = ({
         >
           <RiCameraLine size={18} />
         </button>
+
+        <form
+          onSubmit={submitTextCommand}
+          className={`group flex h-11 items-center overflow-hidden rounded-full border border-emerald-400/20 bg-black/45 text-zinc-100 transition-all duration-300 ease-out ${textCommand ? 'w-72' : 'w-11 hover:w-72 focus-within:w-72'}`}
+          title="Text command"
+        >
+          <div className="grid h-11 w-11 shrink-0 place-items-center text-emerald-300">
+            <RiChat3Line size={17} />
+          </div>
+          <input
+            value={textCommand}
+            onChange={(event) => setTextCommand(event.target.value)}
+            placeholder="Type command..."
+            className={`min-w-0 flex-1 bg-transparent pr-2 text-xs font-semibold text-white outline-none placeholder:text-zinc-600 transition-opacity duration-200 ${textCommand ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'}`}
+          />
+          <button
+            type="submit"
+            disabled={!textCommand.trim() || isSendingText}
+            className={`mr-1 grid h-9 w-9 shrink-0 place-items-center rounded-full border border-emerald-300/20 bg-emerald-400/10 text-emerald-200 transition hover:bg-emerald-400 hover:text-black disabled:cursor-not-allowed disabled:opacity-35 ${textCommand ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'}`}
+          >
+            {isSendingText ? <RiLoader4Line className="animate-spin" size={15} /> : <RiSendPlane2Line size={15} />}
+          </button>
+        </form>
 
         <button
           onClick={() => handleVisionClick('screen')}

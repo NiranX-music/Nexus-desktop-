@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import {
   RiArrowGoBackLine,
+  RiBrainLine,
   RiCursorLine,
   RiGlobalLine,
   RiKeyboardLine,
@@ -10,6 +11,7 @@ import {
   RiPlayFill,
   RiRefreshLine,
   RiSendPlane2Line,
+  RiShieldFlashLine,
   RiSpeakLine,
   RiTerminalBoxLine
 } from 'react-icons/ri'
@@ -24,8 +26,19 @@ interface BrowserEvent {
   id: number
   prompt: string
   result: BrowserControlResult
-  source: 'text' | 'voice' | 'quick'
+  source: 'text' | 'voice' | 'quick' | 'core'
 }
+
+interface BrowserControlViewProps {
+  isSystemActive: boolean
+  isSystemStarting: boolean
+  isMicMuted: boolean
+  toggleSystem: () => void | Promise<void>
+  toggleMic: () => void
+  sendTextCommand: (command: string) => Promise<void>
+}
+
+type BrowserExecutionMode = 'core' | 'bridge'
 
 const quickPrompts = [
   { label: 'Search', prompt: 'search Nexus AI desktop agent', icon: <RiGlobalLine /> },
@@ -61,6 +74,39 @@ const accessScopes: Array<{
 const getSpeechRecognition = () =>
   (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
 
+const browserScopeLabels: Record<BrowserAccessScope, string> = {
+  tab: 'Tab Access',
+  'tab-group': 'Tab Group Access',
+  browser: 'Entire Browser Access'
+}
+
+const buildCoreBrowserCommand = (command: string, scope: BrowserAccessScope) => `
+[Browser Control Mode]
+Access scope: ${scope} (${browserScopeLabels[scope]}).
+Use the control_browser tool with this exact scope for browser actions.
+Browser command: ${command}
+After the tool result, reply in voice with a short status.
+`
+
+const createBrowserEventResult = (
+  scope: BrowserAccessScope,
+  success: boolean,
+  summary: string,
+  detail: string
+): BrowserControlResult => ({
+  success,
+  summary,
+  scope,
+  actions: [
+    {
+      action: 'core_voice',
+      detail,
+      ok: success,
+      error: success ? undefined : summary
+    }
+  ]
+})
+
 const ActionRow = ({ action }: { action: BrowserControlAction }) => (
   <div className="flex items-center justify-between gap-3 border-b border-white/5 py-2 last:border-b-0">
     <div className="min-w-0">
@@ -83,14 +129,23 @@ const ActionRow = ({ action }: { action: BrowserControlAction }) => (
   </div>
 )
 
-export default function BrowserControlView() {
+export default function BrowserControlView({
+  isSystemActive,
+  isSystemStarting,
+  isMicMuted,
+  toggleSystem,
+  toggleMic,
+  sendTextCommand
+}: BrowserControlViewProps) {
   const [prompt, setPrompt] = useState('')
   const [events, setEvents] = useState<BrowserEvent[]>([])
   const [isRunning, setIsRunning] = useState(false)
   const [isListening, setIsListening] = useState(false)
   const [voiceStatus, setVoiceStatus] = useState('Voice ready')
+  const [coreStatus, setCoreStatus] = useState('Core voice ready')
   const [autoRunVoice, setAutoRunVoice] = useState(true)
   const [scope, setScope] = useState<BrowserAccessScope>('tab')
+  const [executionMode, setExecutionMode] = useState<BrowserExecutionMode>('core')
   const recognitionRef = useRef<any>(null)
   const logRef = useRef<HTMLDivElement>(null)
 
@@ -119,18 +174,59 @@ export default function BrowserControlView() {
     if (!command || isRunning) return
 
     setIsRunning(true)
-    const result = await runBrowserControlPrompt(command, scope)
-    setEvents((current) => [
-      ...current.slice(-9),
-      {
-        id: Date.now(),
-        prompt: command,
-        result,
-        source
+
+    if (executionMode === 'core') {
+      setCoreStatus(isSystemActive ? 'Sending to Core voice' : 'Starting Core voice')
+      try {
+        await sendTextCommand(buildCoreBrowserCommand(command, scope))
+        setEvents((current) => [
+          ...current.slice(-9),
+          {
+            id: Date.now(),
+            prompt: command,
+            result: createBrowserEventResult(
+              scope,
+              true,
+              'Sent through Core voice model. Voice response queued.',
+              `${browserScopeLabels[scope]} routed through Core`
+            ),
+            source: 'core'
+          }
+        ])
+        setCoreStatus('Core voice response queued')
+      } catch (error: any) {
+        const message = error?.message || 'Unable to reach Core voice model.'
+        setEvents((current) => [
+          ...current.slice(-9),
+          {
+            id: Date.now(),
+            prompt: command,
+            result: createBrowserEventResult(scope, false, message, 'Core voice route failed'),
+            source: 'core'
+          }
+        ])
+        setCoreStatus(message)
+      } finally {
+        setIsRunning(false)
       }
-    ])
-    speak(result.summary)
-    setIsRunning(false)
+      return
+    }
+
+    try {
+      const result = await runBrowserControlPrompt(command, scope)
+      setEvents((current) => [
+        ...current.slice(-9),
+        {
+          id: Date.now(),
+          prompt: command,
+          result,
+          source
+        }
+      ])
+      speak(result.summary)
+    } finally {
+      setIsRunning(false)
+    }
   }
 
   const submitPrompt = async (event: FormEvent<HTMLFormElement>) => {
@@ -198,6 +294,33 @@ export default function BrowserControlView() {
     setVoiceStatus('Voice ready')
   }
 
+  const toggleCoreVoice = async () => {
+    if (isSystemStarting) {
+      setCoreStatus('Core voice starting')
+      return
+    }
+
+    if (!isSystemActive) {
+      setCoreStatus('Starting Core voice')
+      await toggleSystem()
+      setCoreStatus('Core voice online')
+      return
+    }
+
+    toggleMic()
+    setCoreStatus(isMicMuted ? 'Core mic live' : 'Core mic muted')
+  }
+
+  const handleVoiceButton = () => {
+    if (executionMode === 'core') {
+      toggleCoreVoice()
+      return
+    }
+
+    if (isListening) stopVoicePrompt()
+    else startVoicePrompt()
+  }
+
   const latestEvent = events[events.length - 1]
 
   return (
@@ -219,16 +342,32 @@ export default function BrowserControlView() {
               </div>
             </div>
 
-            <div className="hidden shrink-0 grid-cols-3 gap-2 text-[9px] font-black uppercase tracking-[0.16em] lg:grid">
-              <span className="rounded-md border border-emerald-300/15 bg-emerald-300/10 px-3 py-2 text-emerald-200">
-                Voice
-              </span>
-              <span className="rounded-md border border-cyan-300/15 bg-cyan-300/10 px-3 py-2 text-cyan-100">
-                Text
-              </span>
-              <span className="rounded-md border border-orange-300/15 bg-orange-300/10 px-3 py-2 text-orange-100">
-                Scoped
-              </span>
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 text-[9px] font-black uppercase tracking-[0.16em]">
+              <button
+                type="button"
+                onClick={() => {
+                  stopVoicePrompt()
+                  setExecutionMode('core')
+                }}
+                className={`flex items-center gap-2 rounded-md border px-3 py-2 transition ${
+                  executionMode === 'core'
+                    ? 'border-emerald-300/30 bg-emerald-300/15 text-emerald-100'
+                    : 'border-white/10 bg-white/[0.03] text-zinc-500 hover:text-zinc-200'
+                }`}
+              >
+                <RiBrainLine /> Core Voice
+              </button>
+              <button
+                type="button"
+                onClick={() => setExecutionMode('bridge')}
+                className={`flex items-center gap-2 rounded-md border px-3 py-2 transition ${
+                  executionMode === 'bridge'
+                    ? 'border-cyan-300/30 bg-cyan-300/15 text-cyan-100'
+                    : 'border-white/10 bg-white/[0.03] text-zinc-500 hover:text-zinc-200'
+                }`}
+              >
+                <RiTerminalBoxLine /> Direct Bridge
+              </button>
             </div>
           </div>
 
@@ -268,25 +407,43 @@ export default function BrowserControlView() {
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
               placeholder={
-                scope === 'tab'
-                  ? 'Active tab command...'
-                  : scope === 'tab-group'
-                    ? 'Tab group command...'
-                    : 'Entire browser command...'
+                executionMode === 'core'
+                  ? 'Ask Core to control the browser...'
+                  : scope === 'tab'
+                    ? 'Active tab command...'
+                    : scope === 'tab-group'
+                      ? 'Tab group command...'
+                      : 'Entire browser command...'
               }
               className="min-w-0 flex-1 bg-transparent px-2 py-3 text-sm font-semibold text-white outline-none placeholder:text-zinc-600"
             />
             <button
               type="button"
-              onClick={isListening ? stopVoicePrompt : startVoicePrompt}
+              onClick={handleVoiceButton}
               className={`grid h-12 w-12 shrink-0 place-items-center border text-lg transition ${
-                isListening
-                  ? 'border-red-300/30 bg-red-400/15 text-red-200'
-                  : 'border-cyan-300/25 bg-cyan-300/10 text-cyan-100 hover:bg-cyan-300 hover:text-black'
+                executionMode === 'core'
+                  ? isSystemActive && !isMicMuted
+                    ? 'border-emerald-300/30 bg-emerald-300/15 text-emerald-100'
+                    : 'border-cyan-300/25 bg-cyan-300/10 text-cyan-100 hover:bg-cyan-300 hover:text-black'
+                  : isListening
+                    ? 'border-red-300/30 bg-red-400/15 text-red-200'
+                    : 'border-cyan-300/25 bg-cyan-300/10 text-cyan-100 hover:bg-cyan-300 hover:text-black'
               }`}
-              title="Voice prompt"
+              title={executionMode === 'core' ? 'Core voice model' : 'Voice prompt'}
             >
-              {isListening ? <RiMicOffLine /> : <RiMicLine />}
+              {executionMode === 'core' ? (
+                isSystemStarting ? (
+                  <RiLoader4Line className="animate-spin" />
+                ) : isSystemActive && !isMicMuted ? (
+                  <RiSpeakLine className="animate-pulse" />
+                ) : (
+                  <RiMicLine />
+                )
+              ) : isListening ? (
+                <RiMicOffLine />
+              ) : (
+                <RiMicLine />
+              )}
             </button>
             <button
               type="submit"
@@ -340,33 +497,72 @@ export default function BrowserControlView() {
             <div className="min-h-0 border border-white/10 bg-black/35 p-4">
               <div className="mb-3 flex items-center justify-between border-b border-white/10 pb-2">
                 <span className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400">
-                  Voice
+                  {executionMode === 'core' ? 'Core Voice Model' : 'Voice'}
                 </span>
-                <button
-                  onClick={() => setAutoRunVoice((value) => !value)}
-                  className={`rounded-md border px-3 py-1.5 text-[8px] font-black uppercase tracking-[0.18em] ${
-                    autoRunVoice
-                      ? 'border-emerald-300/25 bg-emerald-300/10 text-emerald-200'
-                      : 'border-white/10 bg-white/[0.03] text-zinc-500'
-                  }`}
-                >
-                  Auto run {autoRunVoice ? 'on' : 'off'}
-                </button>
+                {executionMode === 'bridge' ? (
+                  <button
+                    onClick={() => setAutoRunVoice((value) => !value)}
+                    className={`rounded-md border px-3 py-1.5 text-[8px] font-black uppercase tracking-[0.18em] ${
+                      autoRunVoice
+                        ? 'border-emerald-300/25 bg-emerald-300/10 text-emerald-200'
+                        : 'border-white/10 bg-white/[0.03] text-zinc-500'
+                    }`}
+                  >
+                    Auto run {autoRunVoice ? 'on' : 'off'}
+                  </button>
+                ) : (
+                  <span
+                    className={`rounded-md border px-3 py-1.5 text-[8px] font-black uppercase tracking-[0.18em] ${
+                      isSystemActive
+                        ? 'border-emerald-300/25 bg-emerald-300/10 text-emerald-200'
+                        : 'border-white/10 bg-white/[0.03] text-zinc-500'
+                    }`}
+                  >
+                    {isSystemStarting ? 'Starting' : isSystemActive ? 'Online' : 'Standby'}
+                  </span>
+                )}
               </div>
 
               <div className="flex h-52 flex-col items-center justify-center gap-4">
                 <button
-                  onClick={isListening ? stopVoicePrompt : startVoicePrompt}
+                  onClick={handleVoiceButton}
                   className={`grid h-24 w-24 place-items-center rounded-lg border text-4xl transition ${
-                    isListening
-                      ? 'border-red-300/30 bg-red-400/15 text-red-100 shadow-[0_0_30px_rgba(248,113,113,0.18)]'
-                      : 'border-emerald-300/25 bg-emerald-300/10 text-emerald-100 hover:bg-emerald-300 hover:text-black'
+                    executionMode === 'core'
+                      ? isSystemActive && !isMicMuted
+                        ? 'border-emerald-300/30 bg-emerald-300/15 text-emerald-100 shadow-[0_0_30px_rgba(52,211,153,0.18)]'
+                        : 'border-cyan-300/25 bg-cyan-300/10 text-cyan-100 hover:bg-cyan-300 hover:text-black'
+                      : isListening
+                        ? 'border-red-300/30 bg-red-400/15 text-red-100 shadow-[0_0_30px_rgba(248,113,113,0.18)]'
+                        : 'border-emerald-300/25 bg-emerald-300/10 text-emerald-100 hover:bg-emerald-300 hover:text-black'
                   }`}
                 >
-                  {isListening ? <RiSpeakLine className="animate-pulse" /> : <RiMicLine />}
+                  {executionMode === 'core' ? (
+                    isSystemStarting ? (
+                      <RiLoader4Line className="animate-spin" />
+                    ) : isSystemActive && !isMicMuted ? (
+                      <RiSpeakLine className="animate-pulse" />
+                    ) : (
+                      <RiBrainLine />
+                    )
+                  ) : isListening ? (
+                    <RiSpeakLine className="animate-pulse" />
+                  ) : (
+                    <RiMicLine />
+                  )}
                 </button>
                 <p className="text-[10px] font-black uppercase tracking-[0.22em] text-zinc-500">
-                  {voiceStatus}
+                  {executionMode === 'core'
+                    ? isSystemStarting
+                      ? 'Core starting'
+                      : isSystemActive
+                        ? isMicMuted
+                          ? 'Core online, mic muted'
+                          : 'Core listening'
+                        : 'Core standby'
+                    : voiceStatus}
+                </p>
+                <p className="max-w-xs text-center text-[10px] font-semibold leading-relaxed text-zinc-600">
+                  {executionMode === 'core' ? coreStatus : 'Local voice bridge'}
                 </p>
               </div>
             </div>
@@ -419,8 +615,8 @@ export default function BrowserControlView() {
 
           <div className="mt-3 border-t border-white/10 pt-3">
             <div className="flex items-center gap-2 text-[9px] font-black uppercase tracking-[0.18em] text-emerald-300/70">
-              <RiPlayFill />
-              Browser bridge armed
+              {executionMode === 'core' ? <RiShieldFlashLine /> : <RiPlayFill />}
+              {executionMode === 'core' ? 'Core browser voice armed' : 'Browser bridge armed'}
             </div>
           </div>
         </aside>

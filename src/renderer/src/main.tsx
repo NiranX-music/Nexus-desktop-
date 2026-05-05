@@ -7,11 +7,20 @@ import { HashRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'r
 import LockScreen from './UI/LockScreen'
 import LoginPage from './auth/Login'
 import { useAuthStore } from './store/auth-store'
-import AxiosInstance from './config/AxiosInstance'
 import AuthInitializer from './auth/AuthToken'
 import IndexRoot from './IndexRoot'
+import { LOCAL_DEVICE_LOCK_ENABLED, SECURITY_VERIFICATIONS_PAUSED } from './config/security-flags'
+import { bootstrapCloudAccount, syncLocalSettingsToCloud } from './services/cloud-data'
+import { completeCloudSession, getCloudSession, getVerifiedCloudUser } from './lib/supabase'
 
 const electronAPI = (window as any).electron?.ipcRenderer
+
+const clearPausedSecuritySession = () => {
+  localStorage.removeItem('nexus_cloud_token')
+  localStorage.removeItem('nexus_email_session')
+  localStorage.removeItem('nexus_user_name')
+  useAuthStore.getState().setAccessToken(null)
+}
 
 class SystemErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -45,6 +54,15 @@ window.addEventListener('nexus-auth-logout', () => {
   isSessionUnlocked = false
 })
 
+const activateCloudSession = async (payload: any) => {
+  const session = await completeCloudSession(payload)
+  localStorage.removeItem('nexus_email_session')
+  localStorage.setItem('nexus_cloud_token', session.refresh_token)
+  useAuthStore.getState().setAccessToken(session.access_token)
+  await bootstrapCloudAccount()
+  await syncLocalSettingsToCloud()
+}
+
 const ProtectedRoute = ({ children }: { children: JSX.Element }) => {
   const [status, setStatus] = useState<'checking' | 'authorized'>('checking')
   const navigate = useNavigate()
@@ -54,40 +72,28 @@ const ProtectedRoute = ({ children }: { children: JSX.Element }) => {
   const logout = useAuthStore((state) => state.logout)
 
   useEffect(() => {
+    if (SECURITY_VERIFICATIONS_PAUSED) {
+      clearPausedSecuritySession()
+      isSessionUnlocked = true
+      setStatus('authorized')
+      return
+    }
+
     const verifyAccess = async () => {
       try {
-        const emailSession = localStorage.getItem('nexus_email_session')
-        const cloudToken = localStorage.getItem('nexus_cloud_token')
+        const session = await getCloudSession()
+        const user = await getVerifiedCloudUser()
 
-        if (emailSession && electronAPI) {
-          const session = await electronAPI.invoke('email-auth:verify-session', emailSession)
-          if (!session?.ok) {
-            localStorage.removeItem('nexus_email_session')
-            throw new Error('Local email session expired')
-          }
-
-          if (accessToken !== emailSession) {
-            useAuthStore.getState().setAccessToken(emailSession)
-          }
-
-          if (!isSessionUnlocked && location.pathname !== '/lock') {
-            navigate('/lock', { replace: true })
-            return
-          }
-
-          setStatus('authorized')
-          return
-        }
-
-        if (!accessToken && !cloudToken) {
+        if (!session || !user) {
           navigate('/login', { replace: true })
           return
         }
 
-        const userRes = await AxiosInstance.get('/users/me')
-        if (userRes.status !== 200) throw new Error('Website Auth Failed')
+        if (accessToken !== session.access_token) {
+          useAuthStore.getState().setAccessToken(session.access_token)
+        }
 
-        if (!isSessionUnlocked && location.pathname !== '/lock') {
+        if (LOCAL_DEVICE_LOCK_ENABLED && !isSessionUnlocked && location.pathname !== '/lock') {
           navigate('/lock', { replace: true })
           return
         }
@@ -105,7 +111,7 @@ const ProtectedRoute = ({ children }: { children: JSX.Element }) => {
   if (status === 'checking') {
     return (
       <div className="h-screen w-screen bg-[#050505] flex items-center justify-center text-[#10b981] font-mono text-sm tracking-widest uppercase">
-        Verifying Security Clearance...
+        Loading Nexus...
       </div>
     )
   }
@@ -114,10 +120,10 @@ const ProtectedRoute = ({ children }: { children: JSX.Element }) => {
 }
 
 const PublicRoute = ({ children }: { children: JSX.Element }) => {
+  if (SECURITY_VERIFICATIONS_PAUSED) return <Navigate to="/" replace />
+
   const accessToken =
-    useAuthStore((state) => state.accessToken) ||
-    localStorage.getItem('nexus_cloud_token') ||
-    localStorage.getItem('nexus_email_session')
+    useAuthStore((state) => state.accessToken) || localStorage.getItem('nexus_cloud_token')
   return accessToken ? <Navigate to="/" replace /> : children
 }
 
@@ -126,23 +132,45 @@ const AppRouter = () => {
 
   useEffect(() => {
     if (electronAPI) {
-      electronAPI.on('oauth-callback', (_event: any, url: string) => {
+      electronAPI.on('oauth-callback', async (_event: any, url: string) => {
         try {
           const urlObj = new URL(url.replace('nexus://', 'http://localhost/'))
 
-          const refreshToken = urlObj.searchParams.get('refreshToken')
-          const accessToken = urlObj.searchParams.get('accessToken')
+          const refreshToken =
+            urlObj.searchParams.get('refreshToken') || urlObj.searchParams.get('refresh_token')
+          const accessToken =
+            urlObj.searchParams.get('accessToken') || urlObj.searchParams.get('access_token')
 
           if (refreshToken && accessToken) {
-            localStorage.setItem('nexus_cloud_token', refreshToken)
-            useAuthStore.getState().setAccessToken(accessToken)
+            if (SECURITY_VERIFICATIONS_PAUSED) {
+              clearPausedSecuritySession()
+              navigate('/', { replace: true })
+              return
+            }
+
+            await activateCloudSession({ refreshToken, accessToken })
 
             navigate('/')
           }
         } catch (e) {}
       })
+
+      electronAPI.on('cloud-auth-callback', async (_event: any, payload: any) => {
+        try {
+          if (!payload?.ok) throw new Error(payload?.error || 'Website authorization failed.')
+          await activateCloudSession(payload)
+          isSessionUnlocked = true
+          navigate('/', { replace: true })
+        } catch (error) {
+          useAuthStore.getState().logout()
+          navigate('/login', { replace: true })
+        }
+      })
     }
-    return () => electronAPI?.removeAllListeners('oauth-callback')
+    return () => {
+      electronAPI?.removeAllListeners('oauth-callback')
+      electronAPI?.removeAllListeners('cloud-auth-callback')
+    }
   }, [navigate])
 
   return (
@@ -159,14 +187,18 @@ const AppRouter = () => {
       <Route
         path="/lock"
         element={
-          <ProtectedRoute>
-            <LockScreen
-              onUnlock={() => {
-                isSessionUnlocked = true
-                navigate('/')
-              }}
-            />
-          </ProtectedRoute>
+          SECURITY_VERIFICATIONS_PAUSED || !LOCAL_DEVICE_LOCK_ENABLED ? (
+            <Navigate to="/" replace />
+          ) : (
+            <ProtectedRoute>
+              <LockScreen
+                onUnlock={() => {
+                  isSessionUnlocked = true
+                  navigate('/')
+                }}
+              />
+            </ProtectedRoute>
+          )
         }
       />
 

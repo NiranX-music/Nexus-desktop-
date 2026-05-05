@@ -36,6 +36,12 @@ import {
   NVIDIA_MODEL_CATEGORIES,
   NvidiaModelDefaults
 } from '@renderer/config/nvidia-models'
+import {
+  bootstrapCloudAccount,
+  loadCloudSettings,
+  saveCloudSetting,
+  syncLocalSettingsToCloud
+} from '@renderer/services/cloud-data'
 
 interface SettingsProps {
   isSystemActive: boolean
@@ -50,7 +56,7 @@ const DEFAULT_DEVELOPER_PROFILE = {
   team: 'Resolute Team',
   company: 'Nexus tech',
   role: 'Lead Developer / AI Systems',
-  website: 'https://nexus-desktop-app.vercel.app',
+  website: 'https://niranx-nexus-agent.vercel.app',
   note: 'Nexus AI is maintained by NiranX and Resolute Team.'
 }
 const sanitizeNvidiaKey = (value = '') =>
@@ -69,6 +75,13 @@ const getDeveloperProfile = () => {
   } catch {
     return DEFAULT_DEVELOPER_PROFILE
   }
+}
+
+const readCloudString = (value: unknown) => {
+  if (!value) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'object' && 'value' in value) return String((value as any).value || '')
+  return ''
 }
 
 const SettingsView = ({ isSystemActive }: SettingsProps) => {
@@ -107,7 +120,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const videoRef = useRef<HTMLVideoElement>(null)
 
   const [appVersion, setAppVersion] = useState('Loading')
-  const [updateFeedUrl, setUpdateFeedUrl] = useState('https://nexus-desktop-app.vercel.app/updates/win')
+  const [updateFeedUrl, setUpdateFeedUrl] = useState('https://niranx-nexus-agent.vercel.app/updates/win')
   const [updateStatus, setUpdateStatus] = useState<
     'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'installing' | 'error'
   >('idle')
@@ -119,9 +132,55 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const [aboutAdminPass, setAboutAdminPass] = useState('')
   const [isAboutAdminUnlocked, setIsAboutAdminUnlocked] = useState(false)
   const [aboutStatus, setAboutStatus] = useState('')
+  const [cloudSyncStatus, setCloudSyncStatus] = useState('Cloud sync pending.')
 
   useEffect(() => {
     setNvidiaDefaults(getStoredNvidiaModelDefaults())
+
+    const hydrateCloudSettings = async () => {
+      const boot = await bootstrapCloudAccount()
+      if (!boot.ok) {
+        setCloudSyncStatus(boot.error || 'Cloud account is not connected.')
+        return
+      }
+
+      const settings = await loadCloudSettings()
+      const cloudUserName = readCloudString(settings.nexus_user_name)
+      const cloudVoice = readCloudString(settings.nexus_voice_profile)
+      const cloudProviderMode = readCloudString(settings.nexus_ai_provider_mode)
+      const cloudModelDefaults = readCloudString(settings.nexus_nvidia_default_models)
+
+      if (cloudUserName) {
+        setUserName(cloudUserName)
+        localStorage.setItem('nexus_user_name', cloudUserName)
+      }
+
+      if (cloudVoice === 'MALE' || cloudVoice === 'FEMALE') {
+        setVoice(cloudVoice)
+        localStorage.setItem('nexus_voice_profile', cloudVoice)
+      }
+
+      if (cloudProviderMode) {
+        setAiProviderMode(cloudProviderMode)
+        localStorage.setItem(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY, cloudProviderMode)
+      }
+
+      if (cloudModelDefaults) {
+        try {
+          const parsedDefaults = {
+            ...DEFAULT_NVIDIA_MODEL_DEFAULTS,
+            ...JSON.parse(cloudModelDefaults)
+          }
+          setNvidiaDefaults(parsedDefaults)
+          localStorage.setItem(NVIDIA_DEFAULTS_STORAGE_KEY, JSON.stringify(parsedDefaults))
+        } catch {}
+      }
+
+      await syncLocalSettingsToCloud()
+      setCloudSyncStatus('Cloud sync active. Settings and operator data are stored in Supabase.')
+    }
+
+    hydrateCloudSettings()
 
     if (window.electron?.ipcRenderer) {
       window.electron.ipcRenderer.invoke('secure-get-keys').then((keys) => {
@@ -255,6 +314,9 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
     if (isSystemActive) return
     setVoice(v)
     localStorage.setItem('nexus_voice_profile', v)
+    saveCloudSetting('nexus_voice_profile', { value: v }).then((result) => {
+      setCloudSyncStatus(result.ok ? 'Voice profile synced to Supabase.' : result.error || 'Cloud sync failed.')
+    })
   }
 
   const handlePersonalityChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -269,12 +331,16 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const savePersonality = async () => {
     if (window.electron?.ipcRenderer) {
       await window.electron.ipcRenderer.invoke('set-personality', personality)
+      await saveCloudSetting('nexus_personality', { value: personality })
+      setCloudSyncStatus('Personality matrix synced to Supabase.')
       alert('Personality Matrix Saved Securely to OS.')
     }
   }
 
-  const saveUserName = () => {
+  const saveUserName = async () => {
     localStorage.setItem('nexus_user_name', userName)
+    const result = await saveCloudSetting('nexus_user_name', { value: userName })
+    setCloudSyncStatus(result.ok ? 'User designation synced to Supabase.' : result.error || 'Cloud sync failed.')
     alert('User Designation Saved.')
   }
 
@@ -298,13 +364,28 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
         })
       } catch (e) {}
     }
+    await Promise.all([
+      saveCloudSetting(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY, { value: aiProviderMode }),
+      saveCloudSetting('nexus_key_status', {
+        gemini: Boolean(geminiKey),
+        groq: Boolean(groqKey),
+        hf: Boolean(hfKey),
+        tavily: Boolean(tailvyKey),
+        nvidia: Boolean(cleanNvidiaKey)
+      })
+    ])
+    setCloudSyncStatus('AI routing preferences synced. Secret API values remain in the OS vault.')
     alert(
       'Neural uplinks saved. AI Chat will use the selected Nexus Server / Own API routing mode.'
     )
   }
 
-  const saveNvidiaDefaults = () => {
+  const saveNvidiaDefaults = async () => {
     localStorage.setItem(NVIDIA_DEFAULTS_STORAGE_KEY, JSON.stringify(nvidiaDefaults))
+    const result = await saveCloudSetting(NVIDIA_DEFAULTS_STORAGE_KEY, {
+      value: JSON.stringify(nvidiaDefaults)
+    })
+    setCloudSyncStatus(result.ok ? 'NVIDIA model defaults synced to Supabase.' : result.error || 'Cloud sync failed.')
     alert('NVIDIA Build model defaults saved.')
   }
 
@@ -698,6 +779,27 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                       title="Disconnect AI to change voice"
                     ></div>
                   )}
+                </div>
+
+                <div className={`${cardClass} md:col-span-2`}>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <span className={titleClass}>
+                      <RiCloudLine className="text-cyan-300" size={18} /> Nexus 2.0 Cloud Data
+                    </span>
+                    <button
+                      onClick={async () => {
+                        setCloudSyncStatus('Syncing local Nexus settings to Supabase...')
+                        await syncLocalSettingsToCloud()
+                        setCloudSyncStatus('Manual cloud sync complete.')
+                      }}
+                      className="inline-flex items-center gap-2 rounded-lg border border-cyan-500/25 bg-cyan-500/10 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-cyan-200 transition-colors hover:bg-cyan-500/20"
+                    >
+                      <RiRefreshLine size={14} /> Sync Now
+                    </button>
+                  </div>
+                  <p className="rounded-lg border border-white/10 bg-black/30 px-4 py-3 text-xs leading-relaxed text-zinc-300">
+                    {cloudSyncStatus}
+                  </p>
                 </div>
               </motion.div>
             )}

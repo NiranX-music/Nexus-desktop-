@@ -51,6 +51,22 @@ It is a **local-first AI operating layer** for Windows desktop automation. Nexus
 
 > Speak or type your command. Nexus plans, routes, and executes it.
 
+## Nexus 2.0 Cloud Login
+
+Desktop login now starts from the installed app and authorizes through the hosted Vercel website.
+Set these values in `.env` for local development:
+
+```env
+NEXUS_WEB_APP_URL=https://niranx-nexus-agent.vercel.app
+VITE_NEXUS_WEB_APP_URL=https://niranx-nexus-agent.vercel.app
+VITE_SUPABASE_URL=https://your-project-ref.supabase.co
+VITE_SUPABASE_ANON_KEY=your-supabase-publishable-or-anon-key
+```
+
+The website returns the verified Supabase session through `nexus://auth-callback` with a
+desktop-generated state code. User profiles, devices, settings, chat history, notes, and core
+memories sync into the Supabase `nexus_*` tables defined by the web app migration.
+
 ---
 
 # ✨ Core Features & System Capabilities

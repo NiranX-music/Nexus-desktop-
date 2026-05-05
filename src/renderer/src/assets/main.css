@@ -32,6 +32,7 @@ body {
     48px 48px,
     100% 100%;
   mask-image: radial-gradient(circle at center, black, transparent 78%);
+  opacity: 0.26 !important;
 }
 
 .nexus-app-shell {
@@ -76,7 +77,7 @@ body {
   pointer-events: none;
   border-radius: 999px;
   filter: blur(88px);
-  opacity: 0.32;
+  opacity: 0.18;
   mix-blend-mode: screen;
   animation: nexusFloat 12s ease-in-out infinite alternate;
 }
@@ -102,7 +103,7 @@ body {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  opacity: 0.12;
+  opacity: 0.07;
   background: repeating-linear-gradient(
     to bottom,
     rgba(255, 255, 255, 0.08) 0,
@@ -135,8 +136,8 @@ body {
 
 .nexus-brand-core {
   display: grid;
-  width: 3.5rem;
-  height: 3.5rem;
+  width: 2.2rem;
+  height: 2.2rem;
   place-items: center;
   border: 1px solid rgba(52, 211, 153, 0.38);
   border-radius: 0.35rem;
@@ -147,7 +148,7 @@ body {
   box-shadow:
     inset 0 0 24px rgba(16, 185, 129, 0.16),
     0 0 34px rgba(16, 185, 129, 0.2);
-  font-size: 1.45rem;
+  font-size: 1rem;
 }
 
 .nexus-nav-tile {
@@ -186,29 +187,29 @@ body {
 }
 
 .nexus-command-bar {
-  min-height: 4.65rem;
+  min-height: 3.2rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 0.65rem;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
-  padding: 0.72rem 0.9rem;
+  padding: 0.42rem 0.58rem;
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.025)),
-    radial-gradient(circle at 0 0, rgba(16, 185, 129, 0.14), transparent 22rem);
+    linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.018)),
+    radial-gradient(circle at 0 0, rgba(16, 185, 129, 0.1), transparent 18rem);
   box-shadow:
-    inset 0 1px rgba(255, 255, 255, 0.08),
-    0 18px 60px rgba(0, 0, 0, 0.36);
+    inset 0 1px rgba(255, 255, 255, 0.07),
+    0 12px 36px rgba(0, 0, 0, 0.3);
 }
 
 .nexus-top-command-bar {
-  min-height: 7.35rem;
+  min-height: 4.85rem;
   align-items: stretch;
   justify-content: flex-start;
   flex-direction: column;
-  gap: 0.65rem;
-  padding: 0.65rem 0.75rem;
+  gap: 0.34rem;
+  padding: 0.4rem 0.5rem;
 }
 
 .nexus-header-main {
@@ -216,22 +217,46 @@ body {
   min-width: 0;
   align-items: center;
   justify-content: space-between;
-  gap: 0.9rem;
+  gap: 0.55rem;
 }
 
 .nexus-header-brand {
   display: flex;
-  min-width: 13rem;
+  min-width: 9.35rem;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.45rem;
   border: 1px solid rgba(52, 211, 153, 0.18);
   border-radius: 0.42rem;
-  padding: 0.35rem 0.55rem;
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.13), transparent), rgba(0, 0, 0, 0.22);
+  padding: 0.24rem 0.38rem;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), transparent), rgba(0, 0, 0, 0.2);
 }
 
 .nexus-header-title {
   flex: 1 1 auto;
+}
+
+.nexus-header-brand p,
+.nexus-header-title p {
+  font-size: 0.48rem !important;
+  letter-spacing: 0.24em !important;
+}
+
+.nexus-header-brand h1 {
+  margin-top: 0.12rem !important;
+  font-size: 0.98rem !important;
+  line-height: 1 !important;
+}
+
+.nexus-header-title h2 {
+  font-size: 1.35rem !important;
+  line-height: 1.02 !important;
+}
+
+.nexus-header-title span {
+  margin-bottom: 0 !important;
+  padding: 0.22rem 0.48rem !important;
+  font-size: 0.48rem !important;
+  letter-spacing: 0.13em !important;
 }
 
 .nexus-header-status {
@@ -239,30 +264,30 @@ body {
   flex: 0 0 auto;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 0.45rem;
+  gap: 0.32rem;
 }
 
 .nexus-header-nav {
   display: flex;
   min-width: 0;
-  gap: 0.4rem;
+  gap: 0.28rem;
   overflow-x: auto;
   border-top: 1px solid rgba(255, 255, 255, 0.075);
-  padding-top: 0.55rem;
+  padding-top: 0.32rem;
   perspective: 900px;
 }
 
 .nexus-header-tab {
   position: relative;
   display: inline-flex;
-  min-width: 7.4rem;
-  flex: 1 0 7.4rem;
+  min-width: 5.65rem;
+  flex: 1 0 5.65rem;
   align-items: center;
-  gap: 0.55rem;
+  gap: 0.38rem;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 0.38rem;
-  padding: 0.48rem 0.58rem;
+  padding: 0.32rem 0.42rem;
   color: rgba(212, 212, 216, 0.68);
   background:
     linear-gradient(145deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
@@ -314,14 +339,14 @@ body {
 
 .nexus-header-tab-icon {
   display: grid;
-  height: 2rem;
-  width: 2rem;
+  height: 1.5rem;
+  width: 1.5rem;
   flex: 0 0 auto;
   place-items: center;
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 0.3rem;
   background: rgba(0, 0, 0, 0.3);
-  font-size: 1rem;
+  font-size: 0.82rem;
 }
 
 .nexus-header-tab-copy {
@@ -339,16 +364,17 @@ body {
 }
 
 .nexus-header-tab-copy span {
-  font-size: 0.64rem;
+  font-size: 0.54rem;
   font-weight: 900;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .nexus-header-tab-copy small {
-  margin-top: 0.08rem;
+  display: none;
+  margin-top: 0;
   color: rgba(161, 161, 170, 0.72);
-  font-size: 0.48rem;
+  font-size: 0.42rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -357,14 +383,14 @@ body {
 .nexus-status-pill {
   display: inline-flex;
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.32rem;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 0.38rem;
   background: rgba(0, 0, 0, 0.32);
-  padding: 0.48rem 0.68rem;
-  font-size: 0.62rem;
+  padding: 0.32rem 0.48rem;
+  font-size: 0.54rem;
   font-weight: 900;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
 }
 
@@ -665,13 +691,13 @@ body {
 
 @media (max-height: 820px) {
   .nexus-command-bar {
-    min-height: 4.2rem;
-    padding-block: 0.55rem;
+    min-height: 2.9rem;
+    padding-block: 0.34rem;
   }
 
   .nexus-top-command-bar {
-    min-height: 6.75rem;
-    gap: 0.5rem;
+    min-height: 4.45rem;
+    gap: 0.28rem;
   }
 
   .nexus-side-dock > div:first-child {
@@ -698,7 +724,7 @@ body {
   }
 
   .nexus-header-brand {
-    min-width: 11rem;
+    min-width: 8.5rem;
   }
 
   .nexus-header-status {
@@ -707,8 +733,8 @@ body {
   }
 
   .nexus-header-tab {
-    min-width: 3.25rem;
-    flex-basis: 3.25rem;
+    min-width: 2.85rem;
+    flex-basis: 2.85rem;
     justify-content: center;
   }
 

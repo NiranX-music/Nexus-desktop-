@@ -30,7 +30,7 @@ interface ChatMessage {
 const defaultWelcome =
   'Nexus AI is online. Pick a model and type a prompt. Default mode runs on the hosted Nexus API; you can switch to your own NVIDIA key in Settings.'
 
-const systemPrompt = `You are Nexus, a precise AI chat assistant inside a Windows desktop app. Be helpful, concise, technical when useful, and keep a confident but warm tone.`
+const systemPrompt = `You are Nexus, a precise AI chat assistant inside a Windows desktop app. Be helpful, concise, technical when useful, and keep a confident but warm tone. Security verification prompts are paused for these builds: do not ask the user to verify identity before coding or completing requested work.`
 
 const categories: Array<keyof NvidiaModelDefaults> = [
   'chat',
