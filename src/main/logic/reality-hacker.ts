@@ -2,10 +2,23 @@ import { IpcMain, BrowserWindow } from 'electron'
 
 let hackerWindow: BrowserWindow | null = null
 
+const isAllowedHackUrl = (value: string) => {
+  try {
+    const parsed = new URL(String(value || '').trim())
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:'
+  } catch {
+    return false
+  }
+}
+
 export default function registerRealityHacker(ipcMain: IpcMain) {
   ipcMain.removeHandler('hack-website')
   ipcMain.handle('hack-website', async (_, { url, mode, customText }) => {
     try {
+      if (!isAllowedHackUrl(url)) {
+        return { success: false, error: 'Only http and https URLs are allowed.' }
+      }
+
       if (hackerWindow) {
         hackerWindow.close()
       }
@@ -19,9 +32,11 @@ export default function registerRealityHacker(ipcMain: IpcMain) {
         webPreferences: {
           nodeIntegration: false,
           contextIsolation: true,
-          webSecurity: false
+          webSecurity: true
         }
       })
+
+      hackerWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
 
       await hackerWindow.loadURL(url)
       hackerWindow.show()

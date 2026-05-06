@@ -31,6 +31,7 @@ const PhoneView = ({ glassPanel }: { glassPanel?: string }) => {
 
   const screenRef = useRef<HTMLImageElement>(null)
   const isStreaming = useRef(false)
+  const screenStreamTimerRef = useRef<NodeJS.Timeout | null>(null)
   const knownNotifs = useRef<string[]>([])
   const hasAutoConnected = useRef(false)
 
@@ -117,6 +118,10 @@ const PhoneView = ({ glassPanel }: { glassPanel?: string }) => {
 
   const handleDisconnect = async () => {
     isStreaming.current = false
+    if (screenStreamTimerRef.current) {
+      clearTimeout(screenStreamTimerRef.current)
+      screenStreamTimerRef.current = null
+    }
     try {
       await window.electron.ipcRenderer.invoke('adb-disconnect')
     } catch (e) {}
@@ -147,7 +152,9 @@ const PhoneView = ({ glassPanel }: { glassPanel?: string }) => {
     } catch (e) {}
 
     if (isStreaming.current) {
-      requestAnimationFrame(startScreenStream)
+      screenStreamTimerRef.current = setTimeout(() => {
+        void startScreenStream()
+      }, 900)
     }
   }
 
@@ -167,6 +174,19 @@ const PhoneView = ({ glassPanel }: { glassPanel?: string }) => {
     }
     return () => clearInterval(interval)
   }, [status])
+
+  useEffect(() => {
+    return () => {
+      isStreaming.current = false
+      if (screenStreamTimerRef.current) {
+        clearTimeout(screenStreamTimerRef.current)
+        screenStreamTimerRef.current = null
+      }
+      if (screenRef.current) {
+        screenRef.current.src = ''
+      }
+    }
+  }, [])
 
   if (status !== 'connected' && uiMode === 'history') {
     return (

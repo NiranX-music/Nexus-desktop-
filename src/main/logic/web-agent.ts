@@ -7,6 +7,35 @@ import { load } from 'cheerio'
 puppeteer.use(StealthPlugin())
 keyboard.config.autoDelayMs = 18
 
+type BrowserAccessScope = 'tab' | 'tab-group' | 'browser'
+
+interface BrowserControlAction {
+  action: string
+  detail: string
+  ok: boolean
+  error?: string
+}
+
+interface BrowserSource {
+  title: string
+  url: string
+  snippet: string
+}
+
+interface ServerlessBrowserPlan {
+  kind: 'search' | 'read'
+  value: string
+}
+
+let serverlessBrowser: any = null
+let serverlessBrowserCloseTimer: NodeJS.Timeout | null = null
+
+const SERVERLESS_BROWSER_IDLE_MS = 90_000
+const SERVERLESS_TEXT_LIMIT = 5200
+const SERVERLESS_SUMMARY_LIMIT = 950
+const SERVERLESS_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+
 const USER_BOOKMARKS: Record<string, string> = {
   instagram: 'https://instagram.com',
   reddit: 'https://reddit.com',
@@ -82,8 +111,6 @@ const normalizeUrl = (value: string) => {
 
 const getGoogleSearchUrl = (query: string) =>
   `https://www.google.com/search?q=${encodeURIComponent(query.trim())}`
-
-type BrowserAccessScope = 'tab' | 'tab-group' | 'browser'
 
 const splitBrowserPrompt = (prompt: string) =>
   prompt
@@ -326,6 +353,413 @@ const getSmartUrl = (
   return null
 }
 
+const isPrivateHostname = (hostname: string) => {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '')
+
+  if (
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host === '::1' ||
+    host.startsWith('fc') ||
+    host.startsWith('fd') ||
+    host.startsWith('fe80:')
+  ) {
+    return true
+  }
+
+  if (/^(0|10|127)\./.test(host)) return true
+  if (/^169\.254\./.test(host)) return true
+  if (/^192\.168\./.test(host)) return true
+
+  const private172 = host.match(/^172\.(\d{1,3})\./)
+  if (private172) {
+    const octet = Number(private172[1])
+    return octet >= 16 && octet <= 31
+  }
+
+  return false
+}
+
+const normalizePublicHttpUrl = (value: string) => {
+  const target = value.trim().replace(/^["']|["']$/g, '')
+  const candidate = /^https?:\/\//i.test(target) ? target : `https://${target}`
+  const url = new URL(candidate)
+
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    throw new Error('Serverless browser only supports public HTTP and HTTPS pages.')
+  }
+
+  if (isPrivateHostname(url.hostname)) {
+    throw new Error('Serverless browser blocks localhost and private-network URLs.')
+  }
+
+  url.username = ''
+  url.password = ''
+  return url.toString()
+}
+
+const looksLikeUrlTarget = (value: string) => {
+  const target = value.trim().replace(/^["']|["']$/g, '')
+  return /^https?:\/\//i.test(target) || /^[\w-]+(\.[\w-]+)+([/?#].*)?$/i.test(target)
+}
+
+const resolveDuckDuckGoUrl = (href: string) => {
+  const url = new URL(href, 'https://duckduckgo.com')
+  const uddg = url.searchParams.get('uddg')
+  return normalizePublicHttpUrl(uddg ? decodeURIComponent(uddg) : url.toString())
+}
+
+const createExtractiveSummary = (text: string, maxLength = SERVERLESS_SUMMARY_LIMIT) => {
+  const clean = text.replace(/\s+/g, ' ').trim()
+  if (clean.length <= maxLength) return clean
+
+  const sentences = clean.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [clean]
+  const selected: string[] = []
+  let total = 0
+
+  for (const sentence of sentences) {
+    const trimmed = sentence.trim()
+    if (trimmed.length < 35) continue
+    if (total + trimmed.length > maxLength) break
+    selected.push(trimmed)
+    total += trimmed.length + 1
+  }
+
+  const summary = selected.join(' ')
+  if (summary.length >= 120) return summary
+  return `${clean.slice(0, maxLength - 3).trim()}...`
+}
+
+const parseServerlessBrowserPrompt = (prompt: string): ServerlessBrowserPlan => {
+  const command = prompt.trim()
+  const searchMatch = command.match(
+    /^(?:search|google|look up|find|research|web search)\s+(?:for\s+)?(.+)$/i
+  )
+
+  if (searchMatch) {
+    return { kind: 'search', value: searchMatch[1].trim() }
+  }
+
+  const readMatch = command.match(/^(?:open|read|visit|summari[sz]e|inspect)\s+(.+)$/i)
+  if (readMatch) {
+    const target = readMatch[1].trim()
+    return looksLikeUrlTarget(target)
+      ? { kind: 'read', value: target }
+      : { kind: 'search', value: target }
+  }
+
+  return looksLikeUrlTarget(command)
+    ? { kind: 'read', value: command }
+    : { kind: 'search', value: command }
+}
+
+const scheduleServerlessBrowserClose = () => {
+  if (serverlessBrowserCloseTimer) clearTimeout(serverlessBrowserCloseTimer)
+
+  serverlessBrowserCloseTimer = setTimeout(async () => {
+    const browser = serverlessBrowser
+    serverlessBrowser = null
+    serverlessBrowserCloseTimer = null
+    if (browser) await browser.close().catch(() => undefined)
+  }, SERVERLESS_BROWSER_IDLE_MS)
+}
+
+const getServerlessBrowser = async () => {
+  if (serverlessBrowser?.isConnected?.()) {
+    scheduleServerlessBrowserClose()
+    return serverlessBrowser
+  }
+
+  serverlessBrowser = await puppeteer.launch({
+    headless: true,
+    args: [
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--disable-background-networking',
+      '--disable-default-apps',
+      '--disable-extensions',
+      '--disable-sync',
+      '--metrics-recording-only',
+      '--no-default-browser-check',
+      '--no-first-run'
+    ]
+  })
+
+  scheduleServerlessBrowserClose()
+  return serverlessBrowser
+}
+
+const prepareServerlessPage = async (page: any) => {
+  page.setDefaultTimeout(18_000)
+  page.setDefaultNavigationTimeout(18_000)
+  await page.setUserAgent(SERVERLESS_USER_AGENT)
+  await page.setViewport({ width: 1366, height: 768, deviceScaleFactor: 1 })
+  await page.setCacheEnabled(false)
+  await page.setRequestInterception(true)
+
+  page.on('request', (request: any) => {
+    const resourceType = request.resourceType()
+    if (['font', 'image', 'media', 'stylesheet'].includes(resourceType)) {
+      request.abort()
+      return
+    }
+
+    request.continue()
+  })
+}
+
+const extractSources = (
+  $: ReturnType<typeof load>,
+  baseUrl: string,
+  limit = 5
+): BrowserSource[] => {
+  const sources: BrowserSource[] = []
+
+  $('a[href]').each((_, element) => {
+    if (sources.length >= limit) return false
+
+    const title = $(element).text().replace(/\s+/g, ' ').trim()
+    const href = $(element).attr('href')
+    if (!title || !href || title.length < 4) return undefined
+
+    try {
+      const url = normalizePublicHttpUrl(new URL(href, baseUrl).toString())
+      if (sources.some((source) => source.url === url)) return undefined
+      sources.push({ title: title.slice(0, 120), url, snippet: '' })
+    } catch {
+      return undefined
+    }
+
+    return undefined
+  })
+
+  return sources
+}
+
+const readServerlessPage = async (page: any, targetUrl: string) => {
+  const url = normalizePublicHttpUrl(targetUrl)
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 18_000 })
+  await page.waitForSelector('body', { timeout: 5000 }).catch(() => undefined)
+
+  const html = await page.content()
+  const $ = load(html)
+
+  $('script, style, noscript, svg, iframe, canvas, form, button, input, select, textarea').remove()
+
+  const title =
+    $('title').first().text().replace(/\s+/g, ' ').trim() ||
+    $('h1').first().text().replace(/\s+/g, ' ').trim() ||
+    url
+  const description =
+    $('meta[name="description"]').attr('content') ||
+    $('meta[property="og:description"]').attr('content') ||
+    ''
+  const headings = $('main h1, main h2, article h1, article h2, h1, h2')
+    .map((_, element) => $(element).text().replace(/\s+/g, ' ').trim())
+    .get()
+    .filter((text) => text.length >= 6)
+    .slice(0, 8)
+  const paragraphs = $('main p, article p, p, main li, article li')
+    .map((_, element) => $(element).text().replace(/\s+/g, ' ').trim())
+    .get()
+    .filter((text) => text.length >= 45)
+    .slice(0, 18)
+
+  const readableText = [title, description, ...headings, ...paragraphs]
+    .filter(Boolean)
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .slice(0, SERVERLESS_TEXT_LIMIT)
+  const summary = createExtractiveSummary(readableText || title)
+
+  return {
+    title,
+    url,
+    summary,
+    readableText,
+    sources: extractSources($, url)
+  }
+}
+
+const searchServerlessWeb = async (page: any, query: string) => {
+  const searchUrl = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`
+  await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 18_000 })
+  await page.waitForSelector('body', { timeout: 5000 }).catch(() => undefined)
+
+  const html = await page.content()
+  const $ = load(html)
+  const sources: BrowserSource[] = []
+
+  $('.result').each((_, element) => {
+    if (sources.length >= 6) return false
+
+    const link = $(element).find('a.result__a').first()
+    const title = link.text().replace(/\s+/g, ' ').trim()
+    const href = link.attr('href')
+    const snippet = $(element).find('.result__snippet').text().replace(/\s+/g, ' ').trim()
+
+    if (!title || !href) return undefined
+
+    try {
+      const url = resolveDuckDuckGoUrl(href)
+      if (sources.some((source) => source.url === url)) return undefined
+      sources.push({ title: title.slice(0, 140), url, snippet: snippet.slice(0, 220) })
+    } catch {
+      return undefined
+    }
+
+    return undefined
+  })
+
+  if (sources.length === 0) {
+    $('a[href]').each((_, element) => {
+      if (sources.length >= 6) return false
+
+      const title = $(element).text().replace(/\s+/g, ' ').trim()
+      const href = $(element).attr('href')
+      if (!title || !href || title.length < 8) return undefined
+
+      try {
+        const url = resolveDuckDuckGoUrl(href)
+        if (url.includes('duckduckgo.com') || sources.some((source) => source.url === url)) {
+          return undefined
+        }
+        sources.push({ title: title.slice(0, 140), url, snippet: '' })
+      } catch {
+        return undefined
+      }
+
+      return undefined
+    })
+  }
+
+  return sources
+}
+
+const runServerlessBrowserPrompt = async (prompt: string, scope: BrowserAccessScope) => {
+  const actions: BrowserControlAction[] = []
+  let page: any = null
+
+  if (!prompt) {
+    return {
+      success: false,
+      summary: 'No serverless browser prompt received.',
+      scope,
+      runtime: 'serverless-chromium',
+      actions,
+      sources: []
+    }
+  }
+
+  try {
+    const plan = parseServerlessBrowserPrompt(prompt)
+    const browser = await getServerlessBrowser()
+    page = await browser.newPage()
+    await prepareServerlessPage(page)
+
+    actions.push({
+      action: `serverless_${plan.kind}`,
+      detail: plan.value,
+      ok: true
+    })
+
+    if (plan.kind === 'read') {
+      const pageResult = await readServerlessPage(page, plan.value)
+      actions.push({ action: 'read_page', detail: pageResult.url, ok: true })
+
+      return {
+        success: true,
+        summary: pageResult.summary,
+        scope,
+        runtime: 'serverless-chromium',
+        actions,
+        sources: pageResult.sources,
+        readableText: pageResult.readableText,
+        url: pageResult.url,
+        title: pageResult.title
+      }
+    }
+
+    const sources = await searchServerlessWeb(page, plan.value)
+    actions.push({
+      action: 'search_results',
+      detail: `${sources.length} public result${sources.length === 1 ? '' : 's'}`,
+      ok: sources.length > 0
+    })
+
+    if (sources.length === 0) {
+      return {
+        success: false,
+        summary: 'Serverless browser searched the web but did not find readable results.',
+        scope,
+        runtime: 'serverless-chromium',
+        actions,
+        sources: []
+      }
+    }
+
+    let pageSummary = ''
+    let readableText = ''
+    let primaryTitle = sources[0].title
+
+    try {
+      const pageResult = await readServerlessPage(page, sources[0].url)
+      pageSummary = pageResult.summary
+      readableText = pageResult.readableText
+      primaryTitle = pageResult.title || primaryTitle
+      actions.push({ action: 'read_top_result', detail: sources[0].url, ok: true })
+    } catch (error: any) {
+      actions.push({
+        action: 'read_top_result',
+        detail: sources[0].url,
+        ok: false,
+        error: error?.message || 'Top result could not be read.'
+      })
+    }
+
+    const searchSummary = sources
+      .slice(0, 3)
+      .map(
+        (source, index) =>
+          `${index + 1}. ${source.title}${source.snippet ? ` - ${source.snippet}` : ''}`
+      )
+      .join(' ')
+    const summary = pageSummary
+      ? `${primaryTitle}: ${pageSummary}`
+      : `Serverless browser found ${sources.length} results. ${createExtractiveSummary(searchSummary)}`
+
+    return {
+      success: true,
+      summary,
+      scope,
+      runtime: 'serverless-chromium',
+      actions,
+      sources,
+      readableText,
+      title: primaryTitle
+    }
+  } catch (error: any) {
+    actions.push({
+      action: 'serverless_error',
+      detail: prompt,
+      ok: false,
+      error: error?.message || 'Serverless browser failed.'
+    })
+
+    return {
+      success: false,
+      summary: error?.message || 'Serverless browser failed.',
+      scope,
+      runtime: 'serverless-chromium',
+      actions,
+      sources: []
+    }
+  } finally {
+    if (page) await page.close().catch(() => undefined)
+    scheduleServerlessBrowserClose()
+  }
+}
+
 export default function registerWebAgent(ipcMain: IpcMain) {
   ipcMain.removeHandler('browser-control:run')
   ipcMain.handle(
@@ -378,6 +812,20 @@ export default function registerWebAgent(ipcMain: IpcMain) {
     }
   )
 
+  ipcMain.removeHandler('browser-control:serverless-run')
+  ipcMain.handle(
+    'browser-control:serverless-run',
+    async (_event, payload: { prompt?: string; scope?: BrowserAccessScope } = {}) => {
+      const prompt = String(payload.prompt || '').trim()
+      const requestedScope = payload.scope || 'tab'
+      const scope: BrowserAccessScope = ['tab', 'tab-group', 'browser'].includes(requestedScope)
+        ? requestedScope
+        : 'tab'
+
+      return runServerlessBrowserPrompt(prompt, scope)
+    }
+  )
+
   ipcMain.handle('google-search', async (_event, query: string) => {
     let browser: any = null
 
@@ -395,7 +843,7 @@ export default function registerWebAgent(ipcMain: IpcMain) {
 
       browser = await puppeteer.launch({
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        args: ['--disable-dev-shm-usage']
       })
 
       const page = await browser.newPage()

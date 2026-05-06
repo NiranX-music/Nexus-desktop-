@@ -18,8 +18,10 @@ import {
 import {
   BrowserAccessScope,
   BrowserControlAction,
+  BrowserControlSource,
   BrowserControlResult,
-  runBrowserControlPrompt
+  runBrowserControlPrompt,
+  runServerlessBrowserPrompt
 } from '@renderer/functions/browser-control-api'
 
 interface BrowserEvent {
@@ -38,7 +40,7 @@ interface BrowserControlViewProps {
   sendTextCommand: (command: string) => Promise<void>
 }
 
-type BrowserExecutionMode = 'core' | 'bridge'
+type BrowserExecutionMode = 'core' | 'bridge' | 'serverless'
 
 const quickPrompts = [
   { label: 'Search', prompt: 'search Nexus AI desktop agent', icon: <RiGlobalLine /> },
@@ -78,6 +80,13 @@ const browserScopeLabels: Record<BrowserAccessScope, string> = {
   tab: 'Tab Access',
   'tab-group': 'Tab Group Access',
   browser: 'Entire Browser Access'
+}
+
+const executionModeCopy: Record<BrowserExecutionMode, string> = {
+  core: 'Core voice model routes the task through the assistant.',
+  bridge: 'Direct bridge controls the browser you already have open.',
+  serverless:
+    'Serverless Chromium runs an isolated open-source browser for web search and page reading.'
 }
 
 const buildCoreBrowserCommand = (command: string, scope: BrowserAccessScope) => `
@@ -126,6 +135,25 @@ const ActionRow = ({ action }: { action: BrowserControlAction }) => (
     >
       {action.ok ? 'done' : 'fail'}
     </span>
+  </div>
+)
+
+const SourceRow = ({ source, index }: { source: BrowserControlSource; index: number }) => (
+  <div className="border-b border-white/5 py-2 last:border-b-0">
+    <div className="flex items-center gap-2">
+      <span className="grid h-5 w-5 shrink-0 place-items-center rounded border border-emerald-300/20 bg-emerald-300/10 text-[8px] font-black text-emerald-200">
+        {index + 1}
+      </span>
+      <p className="min-w-0 truncate text-[10px] font-black uppercase tracking-[0.12em] text-zinc-200">
+        {source.title}
+      </p>
+    </div>
+    <p className="mt-1 truncate pl-7 text-[10px] font-mono text-cyan-300/65">{source.url}</p>
+    {source.snippet ? (
+      <p className="mt-1 line-clamp-2 pl-7 text-[10px] font-semibold leading-relaxed text-zinc-500">
+        {source.snippet}
+      </p>
+    ) : null}
   </div>
 )
 
@@ -213,7 +241,10 @@ export default function BrowserControlView({
     }
 
     try {
-      const result = await runBrowserControlPrompt(command, scope)
+      const result =
+        executionMode === 'serverless'
+          ? await runServerlessBrowserPrompt(command, scope)
+          : await runBrowserControlPrompt(command, scope)
       setEvents((current) => [
         ...current.slice(-9),
         {
@@ -322,6 +353,7 @@ export default function BrowserControlView({
   }
 
   const latestEvent = events[events.length - 1]
+  const latestSources = latestEvent?.result.sources || []
 
   return (
     <div className="nexus-browser-control h-full w-full overflow-hidden p-4 text-zinc-100">
@@ -368,6 +400,17 @@ export default function BrowserControlView({
               >
                 <RiTerminalBoxLine /> Direct Bridge
               </button>
+              <button
+                type="button"
+                onClick={() => setExecutionMode('serverless')}
+                className={`flex items-center gap-2 rounded-md border px-3 py-2 transition ${
+                  executionMode === 'serverless'
+                    ? 'border-lime-300/30 bg-lime-300/15 text-lime-100'
+                    : 'border-white/10 bg-white/[0.03] text-zinc-500 hover:text-zinc-200'
+                }`}
+              >
+                <RiGlobalLine /> Serverless Chromium
+              </button>
             </div>
           </div>
 
@@ -409,11 +452,13 @@ export default function BrowserControlView({
               placeholder={
                 executionMode === 'core'
                   ? 'Ask Core to control the browser...'
-                  : scope === 'tab'
-                    ? 'Active tab command...'
-                    : scope === 'tab-group'
-                      ? 'Tab group command...'
-                      : 'Entire browser command...'
+                  : executionMode === 'serverless'
+                    ? 'Search the web or read a public URL in Serverless Chromium...'
+                    : scope === 'tab'
+                      ? 'Active tab command...'
+                      : scope === 'tab-group'
+                        ? 'Tab group command...'
+                        : 'Entire browser command...'
               }
               className="min-w-0 flex-1 bg-transparent px-2 py-3 text-sm font-semibold text-white outline-none placeholder:text-zinc-600"
             />
@@ -492,14 +537,30 @@ export default function BrowserControlView({
                   </div>
                 )}
               </div>
+              {latestSources.length > 0 ? (
+                <div className="mt-4 border-t border-white/10 pt-3">
+                  <div className="mb-2 text-[9px] font-black uppercase tracking-[0.18em] text-zinc-500">
+                    Serverless Sources
+                  </div>
+                  <div className="max-h-44 overflow-y-auto pr-1 scrollbar-small">
+                    {latestSources.slice(0, 5).map((source, index) => (
+                      <SourceRow key={`${source.url}-${index}`} source={source} index={index} />
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div className="min-h-0 border border-white/10 bg-black/35 p-4">
               <div className="mb-3 flex items-center justify-between border-b border-white/10 pb-2">
                 <span className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400">
-                  {executionMode === 'core' ? 'Core Voice Model' : 'Voice'}
+                  {executionMode === 'core'
+                    ? 'Core Voice Model'
+                    : executionMode === 'serverless'
+                      ? 'Voice + Chromium'
+                      : 'Voice'}
                 </span>
-                {executionMode === 'bridge' ? (
+                {executionMode !== 'core' ? (
                   <button
                     onClick={() => setAutoRunVoice((value) => !value)}
                     className={`rounded-md border px-3 py-1.5 text-[8px] font-black uppercase tracking-[0.18em] ${
@@ -562,7 +623,7 @@ export default function BrowserControlView({
                     : voiceStatus}
                 </p>
                 <p className="max-w-xs text-center text-[10px] font-semibold leading-relaxed text-zinc-600">
-                  {executionMode === 'core' ? coreStatus : 'Local voice bridge'}
+                  {executionMode === 'core' ? coreStatus : executionModeCopy[executionMode]}
                 </p>
               </div>
             </div>
@@ -616,7 +677,11 @@ export default function BrowserControlView({
           <div className="mt-3 border-t border-white/10 pt-3">
             <div className="flex items-center gap-2 text-[9px] font-black uppercase tracking-[0.18em] text-emerald-300/70">
               {executionMode === 'core' ? <RiShieldFlashLine /> : <RiPlayFill />}
-              {executionMode === 'core' ? 'Core browser voice armed' : 'Browser bridge armed'}
+              {executionMode === 'core'
+                ? 'Core browser voice armed'
+                : executionMode === 'serverless'
+                  ? 'Serverless Chromium armed'
+                  : 'Browser bridge armed'}
             </div>
           </div>
         </aside>

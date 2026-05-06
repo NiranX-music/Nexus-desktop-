@@ -52,8 +52,9 @@ interface NetworkSnapshot {
 }
 
 let cpuLastSnapshot = os.cpus()
-const HARDWARE_CACHE_MS = 15_000
-const NETWORK_CACHE_MS = 2_000
+const HARDWARE_CACHE_MS = 30_000
+const NETWORK_CACHE_MS = 5_000
+const SYSTEM_STATS_CACHE_MS = 4_000
 
 const defaultBattery: BatterySnapshot = {
   isPresent: false,
@@ -82,6 +83,27 @@ let networkCache: NetworkSnapshot = {
 }
 
 let networkRequest: Promise<NetworkSnapshot> | null = null
+
+type SystemStatsSnapshot = {
+  cpu: string
+  memory: {
+    total: string
+    free: string
+    usedPercentage: string
+  }
+  temperature: number | null
+  battery: BatterySnapshot
+  network: NetworkSnapshot
+  os: {
+    type: string
+    release: string
+    arch: string
+    uptime: string
+  }
+}
+
+let systemStatsCache: (SystemStatsSnapshot & { updatedAt: number }) | null = null
+let systemStatsRequest: Promise<SystemStatsSnapshot> | null = null
 
 function getSystemCpuUsage() {
   const cpus = os.cpus()
@@ -290,6 +312,52 @@ function formatUptime(seconds: number): string {
   return `${(hours / 24).toFixed(1)}d`
 }
 
+async function getSystemStatsSnapshot(): Promise<SystemStatsSnapshot> {
+  const now = Date.now()
+  if (systemStatsCache && now - systemStatsCache.updatedAt < SYSTEM_STATS_CACHE_MS) {
+    const { updatedAt: _updatedAt, ...snapshot } = systemStatsCache
+    return snapshot
+  }
+
+  if (systemStatsRequest) return systemStatsRequest
+
+  systemStatsRequest = Promise.all([getHardwareSnapshot(), getNetworkSnapshot()])
+    .then(([hardware, network]) => {
+      const totalMem = os.totalmem()
+      const freeMem = os.freemem()
+
+      const snapshot: SystemStatsSnapshot = {
+        cpu: getSystemCpuUsage(),
+        memory: {
+          total: (totalMem / 1024 ** 3).toFixed(1) + ' GB',
+          free: (freeMem / 1024 ** 3).toFixed(1) + ' GB',
+          usedPercentage: (((totalMem - freeMem) / totalMem) * 100).toFixed(1)
+        },
+        temperature: hardware.temperature,
+        battery: hardware.battery,
+        network,
+        os: {
+          type: hardware.osCaption || `${os.type()} ${os.release()}`,
+          release: os.release(),
+          arch: os.arch(),
+          uptime: formatUptime(os.uptime())
+        }
+      }
+
+      systemStatsCache = {
+        ...snapshot,
+        updatedAt: Date.now()
+      }
+
+      return snapshot
+    })
+    .finally(() => {
+      systemStatsRequest = null
+    })
+
+  return systemStatsRequest
+}
+
 export default function registerSystemHandlers(ipcMain: IpcMain) {
   ipcMain.removeHandler('get-installed-apps')
   ipcMain.handle('get-installed-apps', async () => {
@@ -325,26 +393,7 @@ export default function registerSystemHandlers(ipcMain: IpcMain) {
 
   ipcMain.removeHandler('get-system-stats')
   ipcMain.handle('get-system-stats', async () => {
-    const [hardware, network] = await Promise.all([getHardwareSnapshot(), getNetworkSnapshot()])
-    const totalMem = os.totalmem()
-    const freeMem = os.freemem()
-    return {
-      cpu: getSystemCpuUsage(),
-      memory: {
-        total: (totalMem / 1024 ** 3).toFixed(1) + ' GB',
-        free: (freeMem / 1024 ** 3).toFixed(1) + ' GB',
-        usedPercentage: (((totalMem - freeMem) / totalMem) * 100).toFixed(1)
-      },
-      temperature: hardware.temperature,
-      battery: hardware.battery,
-      network,
-      os: {
-        type: hardware.osCaption || `${os.type()} ${os.release()}`,
-        release: os.release(),
-        arch: os.arch(),
-        uptime: formatUptime(os.uptime())
-      }
-    }
+    return getSystemStatsSnapshot()
   })
 
   ipcMain.removeHandler('get-drives')

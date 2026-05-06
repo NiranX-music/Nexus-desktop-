@@ -29,6 +29,19 @@ type CloudNoteValue = {
 const createNoteKey = (title: string) => title.replace(/[^a-z0-9]/gi, '_').toLowerCase()
 
 const MarkdownComponents = {
+  a({ href, children, ...props }: any) {
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer noopener"
+        className="text-emerald-300 underline decoration-emerald-500/40 underline-offset-3 hover:text-emerald-100"
+        {...props}
+      >
+        {children}
+      </a>
+    )
+  },
   code({ node, inline, className, children, ...props }: any) {
     return !inline ? (
       <div className="bg-black/50 rounded-lg p-3 my-2 border border-white/10 font-mono text-xs overflow-x-auto">

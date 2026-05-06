@@ -26,6 +26,33 @@ interface ParsedEmail {
   attachments: Attachment[]
 }
 
+const sanitizeEmailHtml = (value: string) =>
+  String(value || '')
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/\son\w+=(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/\s(href|src)=("|')javascript:[^"']*\2/gi, ' $1="#"')
+    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
+
+const buildEmailSrcDoc = (rawHtml: string) => `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src data: https: http: cid:; style-src 'unsafe-inline' https: http: data:; font-src data: https: http:; media-src data: https: http:; script-src 'none'; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none';"
+    />
+    <style>
+      html, body { margin: 0; padding: 0; background: white; color: #111827; font-family: Arial, sans-serif; }
+      body { padding: 16px; line-height: 1.6; word-break: break-word; }
+      img { max-width: 100%; height: auto; }
+      pre, code { white-space: pre-wrap; word-break: break-word; }
+      table { max-width: 100%; border-collapse: collapse; }
+      a { color: #0f766e; }
+    </style>
+  </head>
+  <body>${sanitizeEmailHtml(rawHtml)}</body>
+</html>`
+
 export default function EmailWidget() {
   const [isVisible, setIsVisible] = useState(false)
   const [emails, setEmails] = useState<ParsedEmail[]>([])
@@ -215,9 +242,10 @@ export default function EmailWidget() {
                 <div className="flex-1 p-6 bg-white overflow-hidden">
                   <iframe
                     title="email-body"
-                    srcDoc={selectedEmail.body}
+                    srcDoc={buildEmailSrcDoc(selectedEmail.body)}
                     className="w-full h-full bg-white rounded-lg border-0"
-                    sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin"
+                    sandbox="allow-popups"
+                    referrerPolicy="no-referrer"
                   />
                 </div>
               </motion.div>

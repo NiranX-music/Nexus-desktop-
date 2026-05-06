@@ -26,6 +26,7 @@ import TitleBar from './components/Titlebar'
 import { useAuthStore } from './store/auth-store'
 
 export type VisionMode = 'camera' | 'screen' | 'none'
+export type AssistantVisualState = 'offline' | 'running' | 'speaking'
 
 interface MandatoryUpdateStatus {
   success: boolean
@@ -199,6 +200,7 @@ const IndexRoot = () => {
   const navigate = useNavigate()
   const logout = useAuthStore((state) => state.logout)
   const [isOverlay, setIsOverlay] = useState(false)
+  const [assistantVisualState, setAssistantVisualState] = useState<AssistantVisualState>('offline')
 
   const [isSystemActive, setIsSystemActive] = useState(false)
   const [isSystemStarting, setIsSystemStarting] = useState(false)
@@ -212,14 +214,21 @@ const IndexRoot = () => {
   const aiIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
   useEffect(() => {
-    const prewarmTimer = setTimeout(() => {
-      nexusService.prewarm()
-    }, 700)
+    void window.electron.ipcRenderer
+      .invoke('overlay-mode:get')
+      .then((mode) => setIsOverlay(Boolean(mode)))
+      .catch(() => {})
 
-    window.electron.ipcRenderer.on('overlay-mode', (_e, mode) => setIsOverlay(mode))
+    const unsubscribeStatus = nexusService.subscribeStatus((status) => {
+      setAssistantVisualState(
+        status.isConnected ? (status.isSpeaking ? 'speaking' : 'running') : 'offline'
+      )
+    })
+
+    window.electron.ipcRenderer.on('overlay-mode', (_e, mode) => setIsOverlay(Boolean(mode)))
     return () => {
-      clearTimeout(prewarmTimer)
       window.electron.ipcRenderer.removeAllListeners('overlay-mode')
+      unsubscribeStatus()
     }
   }, [])
 
@@ -230,7 +239,7 @@ const IndexRoot = () => {
         setIsMicMuted(true)
         stopVision()
       }
-    }, 1000)
+    }, 2500)
     return () => clearInterval(watchdog)
   }, [isSystemActive, isSystemStarting])
 
@@ -423,8 +432,9 @@ const IndexRoot = () => {
   if (isOverlay) {
     return (
       <MandatoryUpdateGate>
-        <div className="w-screen h-screen overflow-hidden flex items-center justify-center bg-transparent">
+        <div className="flex h-screen w-screen items-start justify-center overflow-hidden bg-transparent">
           <MiniOverlay
+            assistantVisualState={assistantVisualState}
             isSystemActive={isSystemActive}
             isSystemStarting={isSystemStarting}
             toggleSystem={toggleSystem}
@@ -447,6 +457,7 @@ const IndexRoot = () => {
         <TitleBar />
         <div className="min-h-0 flex-1 relative">
           <Nexus
+            assistantVisualState={assistantVisualState}
             isSystemActive={isSystemActive}
             isSystemStarting={isSystemStarting}
             toggleSystem={toggleSystem}

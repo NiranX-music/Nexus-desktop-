@@ -14,7 +14,8 @@ import {
   RiImageLine,
   RiChatSmile3Line,
   RiGlobalLine,
-  RiLogoutBoxRLine
+  RiLogoutBoxRLine,
+  RiPulseLine
 } from 'react-icons/ri'
 import { getSystemStatus } from '@renderer/services/system-info'
 import type { SystemStats } from '@renderer/services/system-info'
@@ -23,7 +24,7 @@ import ViewSkeleton from '@renderer/components/ViewSkelrton'
 
 import DashboardView from '../views/Dashboard'
 import PhoneView from '../views/Phone'
-import { VisionMode } from '@renderer/IndexRoot'
+import type { AssistantVisualState, VisionMode } from '@renderer/IndexRoot'
 
 const AppsView = lazy(() => import('../views/APP'))
 const WorkFlowEditorView = lazy(() => import('../views/WorkFlowEditor'))
@@ -34,6 +35,7 @@ const GalleryView = lazy(() => import('../views/Gallery'))
 const AiChatView = lazy(() => import('../views/AiChat'))
 
 interface NexusProps {
+  assistantVisualState: AssistantVisualState
   isSystemActive: boolean
   isSystemStarting: boolean
   toggleSystem: () => void
@@ -100,12 +102,13 @@ const Nexus = (props: NexusProps) => {
     let cancelled = false
 
     const refreshStats = async () => {
+      if (document.hidden) return
       const nextStats = await getSystemStatus()
       if (!cancelled) setStats(nextStats)
     }
 
     refreshStats()
-    const timer = setInterval(refreshStats, 2000)
+    const timer = setInterval(refreshStats, 5000)
     return () => {
       cancelled = true
       clearInterval(timer)
@@ -113,14 +116,23 @@ const Nexus = (props: NexusProps) => {
   }, [])
 
   useEffect(() => {
+    if (activeTab !== 'DASHBOARD') return
+
+    let cancelled = false
+
     const fetchHistory = async () => {
+      if (document.hidden) return
       const history = await getHistory()
-      if (Array.isArray(history)) setChatHistory(history.slice(-15))
+      if (!cancelled && Array.isArray(history)) setChatHistory(history.slice(-15))
     }
+
     fetchHistory()
-    const interval = setInterval(fetchHistory, 500)
-    return () => clearInterval(interval)
-  }, [])
+    const interval = setInterval(fetchHistory, 4000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [activeTab])
 
   const handleVisionClick = () => {
     if (props.isVideoOn) {
@@ -136,11 +148,31 @@ const Nexus = (props: NexusProps) => {
   const batteryTone =
     stats?.battery?.isPresent && stats.battery.isOnBattery ? 'text-cyan-200' : 'text-emerald-300'
   const networkLabel = formatBytesPerSecond(stats?.network?.totalBytesPerSecond ?? 0)
+  const assistantStateLabel =
+    props.assistantVisualState === 'speaking'
+      ? 'Speaking'
+      : props.assistantVisualState === 'running'
+        ? 'Running'
+        : props.isSystemStarting
+          ? 'Booting'
+          : 'Standby'
+  const assistantStateTone =
+    props.assistantVisualState === 'speaking'
+      ? 'text-fuchsia-100'
+      : props.assistantVisualState === 'running'
+        ? 'text-emerald-200'
+        : props.isSystemStarting
+          ? 'text-amber-100'
+          : 'text-zinc-300'
 
   return (
-    <div className="nexus-app-shell h-full w-full overflow-hidden select-none text-zinc-100">
+    <div
+      className={`nexus-app-shell nexus-agent-${props.assistantVisualState} h-full w-full overflow-hidden select-none text-zinc-100`}
+    >
       <div className="nexus-liquid-orb nexus-liquid-orb-one" />
       <div className="nexus-liquid-orb nexus-liquid-orb-two" />
+      <div className="nexus-runtime-aura" />
+      <div className="nexus-runtime-sweep" />
       <div className="nexus-radar-grid absolute inset-0 opacity-45" />
       <div className="nexus-scanline" />
 
@@ -177,6 +209,9 @@ const Nexus = (props: NexusProps) => {
               </div>
 
               <div className="nexus-header-status">
+                <span className={`nexus-status-pill ${assistantStateTone}`} title="Assistant state">
+                  <RiPulseLine /> {assistantStateLabel}
+                </span>
                 <span
                   className="nexus-status-pill text-emerald-300"
                   title="Live network throughput"
@@ -219,22 +254,24 @@ const Nexus = (props: NexusProps) => {
           </header>
 
           <section className="nexus-content-stage relative min-h-0 flex-1 overflow-hidden">
-            <div
-              className={`absolute inset-0 overflow-y-auto scrollbar-small ${activeTab === 'DASHBOARD' ? 'block' : 'hidden'}`}
-            >
-              <DashboardView
-                props={props}
-                stats={stats}
-                chatHistory={chatHistory}
-                onVisionClick={handleVisionClick}
-              />
-            </div>
+            {activeTab === 'DASHBOARD' && (
+              <div className="absolute inset-0 overflow-y-auto scrollbar-small">
+                <DashboardView
+                  props={props}
+                  stats={stats}
+                  chatHistory={chatHistory}
+                  onVisionClick={handleVisionClick}
+                  assistantVisualState={props.assistantVisualState}
+                  isActive={true}
+                />
+              </div>
+            )}
 
-            <div
-              className={`absolute inset-0 overflow-y-auto scrollbar-small ${activeTab === 'PHONE' ? 'block' : 'hidden'}`}
-            >
-              <PhoneView glassPanel={glassPanel} />
-            </div>
+            {activeTab === 'PHONE' && (
+              <div className="absolute inset-0 overflow-y-auto scrollbar-small">
+                <PhoneView glassPanel={glassPanel} />
+              </div>
+            )}
 
             <Suspense fallback={<ViewSkeleton />}>
               {activeTab !== 'DASHBOARD' && activeTab !== 'PHONE' && (

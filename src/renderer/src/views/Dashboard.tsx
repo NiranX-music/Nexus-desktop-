@@ -28,7 +28,7 @@ import { FaMemory } from 'react-icons/fa6'
 import { GiTinker } from 'react-icons/gi'
 import { HiComputerDesktop } from 'react-icons/hi2'
 import * as faceapi from 'face-api.js'
-import { VisionMode } from '@renderer/IndexRoot'
+import type { AssistantVisualState, VisionMode } from '@renderer/IndexRoot'
 import {
   controlMediaSession,
   getMediaSessions,
@@ -37,6 +37,7 @@ import {
 import type { SystemStats } from '@renderer/services/system-info'
 
 interface NexusProps {
+  assistantVisualState: AssistantVisualState
   isSystemActive: boolean
   isSystemStarting: boolean
   toggleSystem: () => void
@@ -55,6 +56,8 @@ interface DashboardViewProps {
   stats: SystemStats | null
   chatHistory: any[]
   onVisionClick: () => void
+  assistantVisualState: AssistantVisualState
+  isActive: boolean
 }
 
 const glassPanel = 'nexus-glass-card'
@@ -89,9 +92,12 @@ export default function DashboardView({
   props,
   stats,
   chatHistory,
-  onVisionClick
+  onVisionClick,
+  assistantVisualState,
+  isActive
 }: DashboardViewProps) {
   const {
+    assistantVisualState: propAssistantVisualState,
     isSystemActive,
     isVideoOn,
     visionMode,
@@ -103,6 +109,7 @@ export default function DashboardView({
     isSystemStarting,
     sendTextCommand
   } = props
+  const resolvedAssistantVisualState = assistantVisualState || propAssistantVisualState
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const videoElementRef = useRef<HTMLVideoElement | null>(null)
@@ -150,10 +157,16 @@ export default function DashboardView({
   }, [])
 
   useEffect(() => {
+    if (!isActive) return
+
     refreshMediaSessions()
-    const timer = setInterval(refreshMediaSessions, 3000)
+    const timer = setInterval(() => {
+      if (!document.hidden) {
+        void refreshMediaSessions()
+      }
+    }, 10000)
     return () => clearInterval(timer)
-  }, [refreshMediaSessions])
+  }, [isActive, refreshMediaSessions])
 
   const handleMediaControl = async (
     session: MediaSessionItem,
@@ -166,6 +179,8 @@ export default function DashboardView({
   }
 
   useEffect(() => {
+    if (!isActive || !isVideoOn || visionMode !== 'camera' || modelsLoaded) return
+
     const loadModels = async () => {
       try {
         const MODEL_URL = './models'
@@ -177,11 +192,12 @@ export default function DashboardView({
         setModelsLoaded(true)
       } catch (e) {}
     }
-    loadModels()
-  }, [])
+    void loadModels()
+  }, [isActive, isVideoOn, visionMode, modelsLoaded])
 
   useEffect(() => {
     if (
+      isActive &&
       isVideoOn &&
       visionMode === 'camera' &&
       modelsLoaded &&
@@ -259,7 +275,7 @@ export default function DashboardView({
             ctx.fillText('SCANNING OPTICS...', 20, 30)
           }
         } catch (e) {}
-      }, 250)
+      }, 650)
     } else {
       if (faceScanInterval.current) clearInterval(faceScanInterval.current)
       const ctx = canvasRef.current?.getContext('2d')
@@ -269,7 +285,7 @@ export default function DashboardView({
     return () => {
       if (faceScanInterval.current) clearInterval(faceScanInterval.current)
     }
-  }, [isVideoOn, visionMode, modelsLoaded])
+  }, [isActive, isVideoOn, visionMode, modelsLoaded])
 
   const setVideoRef = useCallback(
     (node: HTMLVideoElement | null) => {
@@ -329,14 +345,28 @@ export default function DashboardView({
     featuredMedia && featuredMedia.durationMs > 0
       ? metricPercent((featuredMedia.positionMs / featuredMedia.durationMs) * 100)
       : 0
+  const assistantStateLabel =
+    resolvedAssistantVisualState === 'speaking'
+      ? 'Speaking'
+      : resolvedAssistantVisualState === 'running'
+        ? 'Online'
+        : isSystemStarting
+          ? 'Booting'
+          : 'Standby'
+  const runtimeRibbonLabel =
+    resolvedAssistantVisualState === 'speaking'
+      ? 'VOICE RESPONSE ACTIVE'
+      : resolvedAssistantVisualState === 'running'
+        ? 'SYSTEM MONITORING'
+        : 'STANDBY MODE'
 
   const systemMetrics = [
     {
       icon: <RiCpuLine />,
       bgIcon: <RiCpuLine size={140} />,
       label: 'CPU LOAD',
-      val: isSystemActive && stats ? `${stats.cpu}%` : '--',
-      raw: isSystemActive && stats ? metricPercent(stats.cpu) : 0,
+      val: stats ? `${stats.cpu}%` : '--',
+      raw: stats ? metricPercent(stats.cpu) : 0,
       colorClass: 'text-emerald-400',
       bgClass: 'bg-emerald-500',
       glowClass: 'via-emerald-500/50',
@@ -349,8 +379,8 @@ export default function DashboardView({
       icon: <FaMemory />,
       bgIcon: <FaMemory size={140} />,
       label: 'RAM USAGE',
-      val: isSystemActive && stats ? `${stats.memory.usedPercentage}%` : '--',
-      raw: isSystemActive && stats ? metricPercent(stats.memory.usedPercentage) : 0,
+      val: stats ? `${stats.memory.usedPercentage}%` : '--',
+      raw: stats ? metricPercent(stats.memory.usedPercentage) : 0,
       colorClass: 'text-cyan-400',
       bgClass: 'bg-cyan-500',
       glowClass: 'via-cyan-500/50',
@@ -362,8 +392,8 @@ export default function DashboardView({
       icon: <RiBatteryChargeLine />,
       bgIcon: <RiBatteryChargeLine size={140} />,
       label: 'BATTERY',
-      val: isSystemActive && stats ? batteryValue : '--',
-      raw: isSystemActive && batteryPercent !== null ? batteryPercent : 0,
+      val: stats ? batteryValue : '--',
+      raw: batteryPercent !== null ? batteryPercent : 0,
       colorClass: 'text-lime-300',
       bgClass: 'bg-lime-400',
       glowClass: 'via-lime-400/50',
@@ -377,8 +407,8 @@ export default function DashboardView({
       icon: <GiTinker />,
       bgIcon: <GiTinker size={140} />,
       label: 'TEMP',
-      val: isSystemActive && stats ? temperatureValue : '--',
-      raw: isSystemActive ? temperatureRaw : 0,
+      val: stats ? temperatureValue : '--',
+      raw: stats ? temperatureRaw : 0,
       colorClass: 'text-orange-400',
       bgClass: 'bg-orange-500',
       glowClass: 'via-orange-500/50',
@@ -392,7 +422,7 @@ export default function DashboardView({
       icon: <HiComputerDesktop />,
       bgIcon: <HiComputerDesktop size={140} />,
       label: 'OS',
-      val: isSystemActive && stats ? `${stats.os.type}` : '--',
+      val: stats ? `${stats.os.type}` : '--',
       raw: 0,
       colorClass: 'text-purple-400',
       bgClass: 'bg-purple-500',
@@ -408,7 +438,7 @@ export default function DashboardView({
       icon: <RiTimeLine />,
       bgIcon: <RiTimeLine size={140} />,
       label: 'UPTIME',
-      val: isSystemActive && stats ? `${stats.os.uptime}` : '--',
+      val: stats ? `${stats.os.uptime}` : '--',
       raw: 0,
       colorClass: 'text-sky-300',
       bgClass: 'bg-sky-400',
@@ -421,9 +451,27 @@ export default function DashboardView({
   ]
 
   const agentStages = [
-    { label: 'Voice Layer', value: isMicMuted ? 'Muted' : 'Listening', tone: 'text-emerald-300' },
+    {
+      label: 'Voice Layer',
+      value: isMicMuted
+        ? 'Muted'
+        : resolvedAssistantVisualState === 'speaking'
+          ? 'Speaking'
+          : 'Listening',
+      tone:
+        resolvedAssistantVisualState === 'speaking' ? 'text-fuchsia-200' : 'text-emerald-300'
+    },
     { label: 'NVIDIA Build', value: 'Ready', tone: 'text-cyan-300' },
-    { label: 'Local Actions', value: isSystemActive ? 'Armed' : 'Standby', tone: 'text-orange-200' }
+    {
+      label: 'Local Actions',
+      value:
+        resolvedAssistantVisualState === 'speaking'
+          ? 'Executing'
+          : isSystemActive
+            ? 'Armed'
+            : 'Standby',
+      tone: 'text-orange-200'
+    }
   ]
 
   return (
@@ -431,7 +479,7 @@ export default function DashboardView({
       <div className="pointer-events-none absolute inset-x-4 top-2 z-0 flex items-center justify-between rounded-lg border border-emerald-300/15 bg-black/35 px-4 py-1.5 text-[8px] font-black tracking-[0.26em] text-zinc-500 backdrop-blur-xl">
         <span>COMMAND KERNEL STREAM</span>
         <span className={isSystemActive ? 'text-emerald-300' : 'text-orange-200/70'}>
-          {isSystemActive ? 'AUTONOMY ACTIVE' : 'STANDBY MODE'}
+          {runtimeRibbonLabel}
         </span>
       </div>
       <div className="hidden lg:flex col-span-3 flex-col gap-2 h-full min-h-0 z-40">
@@ -552,27 +600,23 @@ export default function DashboardView({
                 ADAPTERS
               </span>
               <span className="mt-1 text-[11px] font-bold text-emerald-50 font-mono flex items-center gap-1.5 transition-all">
-                <RiWifiLine className={isSystemActive ? 'text-emerald-400' : 'text-zinc-600'} />
-                {isSystemActive && stats ? liveNetwork.activeInterfaces : '--'}
+                <RiWifiLine className={stats ? 'text-emerald-400' : 'text-zinc-600'} />
+                {stats ? liveNetwork.activeInterfaces : '--'}
               </span>
             </div>
 
             <div className="border border-white/5 bg-black/25 p-2">
               <span className="text-[7px] text-zinc-500 font-mono tracking-[0.18em]">DOWNLINK</span>
               <span className="mt-1 block text-[11px] font-bold text-emerald-50 font-mono transition-all">
-                {isSystemActive && stats
-                  ? formatBytesPerSecond(liveNetwork.rxBytesPerSecond)
-                  : '--'}
+                {stats ? formatBytesPerSecond(liveNetwork.rxBytesPerSecond) : '--'}
               </span>
             </div>
 
             <div className="border border-white/5 bg-black/25 p-2">
               <span className="text-[7px] text-zinc-500 font-mono tracking-[0.18em]">UPLINK</span>
               <span className="mt-1 text-[11px] font-bold text-emerald-50 font-mono flex items-center gap-1.5">
-                {isSystemActive && stats
-                  ? formatBytesPerSecond(liveNetwork.txBytesPerSecond)
-                  : '--'}
-                {isSystemActive ? (
+                {stats ? formatBytesPerSecond(liveNetwork.txBytesPerSecond) : '--'}
+                {stats ? (
                   <RiEarthLine className="text-cyan-400" />
                 ) : (
                   <RiServerLine className="text-zinc-500" />
@@ -587,7 +631,7 @@ export default function DashboardView({
               <div className="flex-1 h-1.5 bg-black/60 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-emerald-500 shadow-[0_0_8px_#10b981] transition-all duration-300 ease-out"
-                  style={{ width: `${isSystemActive ? txRatio : 0}%` }}
+                  style={{ width: `${stats ? txRatio : 0}%` }}
                 />
               </div>
             </div>
@@ -596,7 +640,7 @@ export default function DashboardView({
               <div className="flex-1 h-1.5 bg-black/60 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-cyan-500 shadow-[0_0_8px_#06b6d4] transition-all duration-300 ease-out delay-75"
-                  style={{ width: `${isSystemActive ? rxRatio : 0}%` }}
+                  style={{ width: `${stats ? rxRatio : 0}%` }}
                 />
               </div>
             </div>
@@ -642,7 +686,7 @@ export default function DashboardView({
 
                 <div className="relative z-10 flex min-w-0 flex-col gap-1 mt-1.5">
                   <span
-                    className="max-w-full truncate text-right text-[12px] font-bold text-white font-mono tracking-wider drop-shadow-md"
+                    className="max-w-full truncate text-right text-[15px] font-black text-white font-mono tracking-[0.08em] drop-shadow-md"
                     title={String(m.val)}
                   >
                     {m.val}
@@ -657,7 +701,7 @@ export default function DashboardView({
                     <div className="w-full h-1 bg-black/40 rounded-full overflow-hidden backdrop-blur-sm border border-white/5">
                       <div
                         className={`h-full ${m.bgClass} ${m.shadowClass} transition-all duration-700 ease-out`}
-                        style={{ width: isSystemActive ? `${m.raw}%` : '0%' }}
+                        style={{ width: `${m.raw}%` }}
                       />
                     </div>
                   )}
@@ -674,8 +718,16 @@ export default function DashboardView({
             <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">
               Agent State
             </p>
-            <p className="mt-1 text-sm font-black uppercase text-emerald-200">
-              {isSystemActive ? 'Online' : 'Standby'}
+            <p
+              className={`mt-1 text-sm font-black uppercase ${
+                resolvedAssistantVisualState === 'speaking'
+                  ? 'text-fuchsia-100'
+                  : resolvedAssistantVisualState === 'running'
+                    ? 'text-emerald-200'
+                    : 'text-zinc-300'
+              }`}
+            >
+              {assistantStateLabel}
             </p>
           </div>
           <div className={`${glassPanel} p-3`}>

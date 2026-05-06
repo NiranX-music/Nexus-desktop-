@@ -80,7 +80,6 @@ AxiosInstance.interceptors.response.use(
         }
 
         const newAccessToken = data.session.access_token
-        localStorage.setItem('nexus_cloud_token', data.session.refresh_token)
 
         useAuthStore.getState().setAccessToken(newAccessToken)
 
@@ -94,7 +93,6 @@ AxiosInstance.interceptors.response.use(
         processQueue(err, null)
 
         useAuthStore.getState().logout()
-        localStorage.removeItem('nexus_cloud_token')
         window.location.hash = '#/login'
 
         return Promise.reject(err)

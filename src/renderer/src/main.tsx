@@ -57,7 +57,6 @@ window.addEventListener('nexus-auth-logout', () => {
 const activateCloudSession = async (payload: any) => {
   const session = await completeCloudSession(payload)
   localStorage.removeItem('nexus_email_session')
-  localStorage.setItem('nexus_cloud_token', session.refresh_token)
   useAuthStore.getState().setAccessToken(session.access_token)
   await bootstrapCloudAccount()
   await syncLocalSettingsToCloud()
@@ -122,8 +121,17 @@ const ProtectedRoute = ({ children }: { children: JSX.Element }) => {
 const PublicRoute = ({ children }: { children: JSX.Element }) => {
   if (SECURITY_VERIFICATIONS_PAUSED) return <Navigate to="/" replace />
 
-  const accessToken =
-    useAuthStore((state) => state.accessToken) || localStorage.getItem('nexus_cloud_token')
+  const accessToken = useAuthStore((state) => state.accessToken)
+  const isAuthInitialized = useAuthStore((state) => state.isAuthInitialized)
+
+  if (!isAuthInitialized) {
+    return (
+      <div className="h-screen w-screen bg-[#050505] flex items-center justify-center text-[#10b981] font-mono text-sm tracking-widest uppercase">
+        Loading Nexus...
+      </div>
+    )
+  }
+
   return accessToken ? <Navigate to="/" replace /> : children
 }
 

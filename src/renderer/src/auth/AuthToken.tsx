@@ -29,7 +29,6 @@ export default function AuthInitializer() {
         }
 
         setAccessToken(session.access_token)
-        localStorage.setItem('nexus_cloud_token', session.refresh_token)
         await bootstrapCloudAccount()
         await syncLocalSettingsToCloud()
       } catch (err) {

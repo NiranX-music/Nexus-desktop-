@@ -17,7 +17,7 @@ const readAnalyserVolume = (dataArray: Uint8Array<ArrayBuffer>) => {
   return sum / len / 128
 }
 
-const CustomParticleSphere = ({ count = 3000 }) => {
+const CustomParticleSphere = ({ count = 1800 }) => {
   const mesh = useRef<THREE.Points>(null)
   const smoothedVolume = useRef(0)
 
@@ -173,9 +173,9 @@ const Sphere = () => {
   return (
     <Canvas
       camera={{ position: [0, 0, 4.5] }}
-      dpr={[1, 1.5]}
+      dpr={[1, 1.2]}
       performance={{ min: 0.5 }}
-      gl={{ antialias: false, powerPreference: 'high-performance' }}
+      gl={{ antialias: false, powerPreference: 'default' }}
     >
       <ambientLight intensity={0.6} />
       <SpeakingHalo />

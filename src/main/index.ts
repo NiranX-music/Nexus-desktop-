@@ -8,7 +8,11 @@ import {
   screen,
   session,
   safeStorage,
-  systemPreferences
+  systemPreferences,
+  Tray,
+  Menu,
+  nativeImage,
+  WebContents
 } from 'electron'
 import path, { join } from 'path'
 import fs from 'fs'
@@ -69,7 +73,10 @@ if (!gotTheLock) {
 }
 
 let mainWindow: BrowserWindow | null = null
+let tray: Tray | null = null
 let isOverlayMode = false
+let isOverlayDockExpanded = false
+let isQuitting = false
 let updateDownloadPromise: Promise<Array<string>> | null = null
 let downloadedUpdateInfo: { version: string; releaseNotes: string } | null = null
 let pendingCloudAuthState = ''
@@ -90,6 +97,22 @@ const NEXUS_WEB_APP_URL = (
   process.env.NEXUS_WEB_APP_URL || 'https://niranx-nexus-agent.vercel.app'
 ).replace(/\/+$/, '')
 const NEXUS_DESKTOP_AUTH_API_URL = `${NEXUS_WEB_APP_URL}/api/desktop-auth`
+const NEXUS_WEB_APP_ORIGIN = (() => {
+  try {
+    return new URL(NEXUS_WEB_APP_URL).origin
+  } catch {
+    return ''
+  }
+})()
+const DEV_RENDERER_ORIGIN = (() => {
+  try {
+    return process.env['ELECTRON_RENDERER_URL']
+      ? new URL(process.env['ELECTRON_RENDERER_URL']).origin
+      : ''
+  } catch {
+    return ''
+  }
+})()
 
 const NVIDIA_API_KEY_ENV_NAMES = ['NVIDIA_API_KEY', 'NVIDIA_BUILD_API_KEY', 'NVIDIA_NIM_API_KEY']
 const PLACEHOLDER_NVIDIA_KEY_RE =
@@ -116,21 +139,30 @@ const getLaunchNvidiaApiKey = () => {
 }
 
 const encryptSecureValue = (value = '') => {
+  if (!value) return ''
+
   if (safeStorage.isEncryptionAvailable()) {
-    return safeStorage.encryptString(value).toString('base64')
+    return `safe:${safeStorage.encryptString(value).toString('base64')}`
   }
 
-  return Buffer.from(value).toString('base64')
+  throw new Error(
+    'OS secure storage is not available. Nexus refused to persist API keys insecurely.'
+  )
 }
 
 const decryptSecureValue = (value = '') => {
   if (!value) return ''
 
+  if (value.startsWith('safe:')) {
+    if (!safeStorage.isEncryptionAvailable()) return ''
+    return safeStorage.decryptString(Buffer.from(value.slice(5), 'base64'))
+  }
+
   if (safeStorage.isEncryptionAvailable()) {
     return safeStorage.decryptString(Buffer.from(value, 'base64'))
   }
 
-  return Buffer.from(value, 'base64').toString('utf8')
+  return ''
 }
 
 const readSecureKeysFromDisk = () => {
@@ -165,7 +197,11 @@ const writeSecureKeysToDisk = ({
     nvidia: encryptSecureValue(normalizeNvidiaApiKey(nvidiaKey))
   }
 
-  fs.writeFileSync(secureConfigPath, JSON.stringify(secureData))
+  fs.mkdirSync(path.dirname(secureConfigPath), { recursive: true })
+  fs.writeFileSync(secureConfigPath, JSON.stringify(secureData), { mode: 0o600 })
+  try {
+    fs.chmodSync(secureConfigPath, 0o600)
+  } catch {}
 }
 
 const seedLaunchNvidiaKey = () => {
@@ -179,10 +215,12 @@ const seedLaunchNvidiaKey = () => {
   const existingKeys = readSecureKeysFromDisk()
   if (normalizeNvidiaApiKey(existingKeys.nvidiaKey)) return
 
-  writeSecureKeysToDisk({
-    ...existingKeys,
-    nvidiaKey: launchNvidiaKey
-  })
+  try {
+    writeSecureKeysToDisk({
+      ...existingKeys,
+      nvidiaKey: launchNvidiaKey
+    })
+  } catch {}
 }
 
 const getUpdaterErrorMessage = (error: unknown) => {
@@ -265,6 +303,218 @@ const getInstallerOnlyUpdateGuardMessage = (action: string) =>
 const canUseUpdaterForRequest = (action: string) => {
   if (!is.dev || process.env.NEXUS_ALLOW_DEV_UPDATES === 'true') return ''
   return getInstallerOnlyUpdateGuardMessage(action)
+}
+
+const parseUrlSafely = (value = '') => {
+  try {
+    return new URL(value)
+  } catch {
+    return null
+  }
+}
+
+const isLoopbackHost = (hostname = '') =>
+  hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]'
+
+const isTrustedRendererUrl = (value = '') => {
+  if (!value) return false
+  if (value.startsWith('file://')) return true
+
+  const parsed = parseUrlSafely(value)
+  if (!parsed) return false
+
+  return Boolean(DEV_RENDERER_ORIGIN && parsed.origin === DEV_RENDERER_ORIGIN)
+}
+
+const isAllowedExternalUrl = (
+  value = '',
+  {
+    allowedOrigins = [],
+    allowHttpLoopback = is.dev
+  }: { allowedOrigins?: string[]; allowHttpLoopback?: boolean } = {}
+) => {
+  const parsed = parseUrlSafely(value)
+  if (!parsed) return false
+
+  const isHttps = parsed.protocol === 'https:'
+  const isAllowedLoopbackHttp =
+    parsed.protocol === 'http:' && allowHttpLoopback && isLoopbackHost(parsed.hostname)
+
+  if (!isHttps && !isAllowedLoopbackHttp) return false
+  if (!allowedOrigins.length) return true
+
+  return allowedOrigins.includes(parsed.origin)
+}
+
+const openExternalIfAllowed = (
+  value: string,
+  options?: { allowedOrigins?: string[]; allowHttpLoopback?: boolean }
+) => {
+  if (!isAllowedExternalUrl(value, options)) return false
+
+  void shell.openExternal(value)
+  return true
+}
+
+const isTrustedPermissionRequest = (webContents: WebContents | null) =>
+  Boolean(webContents && isTrustedRendererUrl(webContents.getURL()))
+
+const buildRendererContentSecurityPolicy = () => {
+  const scriptSource = is.dev ? "'self' 'unsafe-eval'" : "'self'"
+
+  return [
+    "default-src 'self'",
+    `script-src ${scriptSource}`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: file: https:",
+    "media-src 'self' data: blob:",
+    "font-src 'self' data:",
+    "connect-src 'self' https: ws: wss: http://localhost:* http://127.0.0.1:*",
+    "frame-src 'none'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'"
+  ].join('; ')
+}
+
+const registerRendererSecurityHeaders = () => {
+  const csp = buildRendererContentSecurityPolicy()
+
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    if (!isTrustedRendererUrl(details.url)) {
+      callback({ responseHeaders: details.responseHeaders })
+      return
+    }
+
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [csp],
+        'X-Content-Type-Options': ['nosniff'],
+        'Referrer-Policy': ['no-referrer']
+      }
+    })
+  })
+}
+
+const shouldUsePersistentDock = () => !is.dev || process.env.NEXUS_FORCE_DOCK === 'true'
+
+const getCommandBounds = () => ({ width: 1160, height: 760 })
+
+const getDockBounds = (expanded = isOverlayDockExpanded) => {
+  const primaryDisplay = screen.getPrimaryDisplay()
+  const { width, height } = primaryDisplay.workAreaSize
+  const dockWidth = Math.min(expanded ? 800 : 210, width - 12)
+  const dockHeight = expanded ? 112 : 32
+  const topInset = Math.max(6, Math.round(height * 0.007))
+
+  return {
+    width: dockWidth,
+    height: dockHeight,
+    x: Math.floor(width / 2 - dockWidth / 2),
+    y: topInset
+  }
+}
+
+const setOverlayDockExpanded = (expanded: boolean) => {
+  if (!mainWindow || !isOverlayMode) return
+
+  isOverlayDockExpanded = expanded
+  mainWindow.setBounds(getDockBounds(expanded))
+}
+
+const sendOverlayMode = () => {
+  mainWindow?.webContents.send('overlay-mode', isOverlayMode)
+}
+
+const updateTrayMenu = () => {
+  if (!tray) return
+
+  tray.setToolTip(isOverlayMode ? 'Nexus AI - Dock active' : 'Nexus AI - Command console')
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      {
+        label: 'Open Nexus Console',
+        click: () => {
+          exitOverlayMode()
+        }
+      },
+      {
+        label: 'Show Floating Dock',
+        click: () => {
+          enterOverlayMode()
+        }
+      },
+      { type: 'separator' },
+      {
+        label: 'Exit Nexus AI',
+        click: () => {
+          isQuitting = true
+          app.quit()
+        }
+      }
+    ])
+  )
+}
+
+function enterOverlayMode() {
+  if (!mainWindow) return
+
+  isOverlayDockExpanded = false
+  const bounds = getDockBounds(false)
+  isOverlayMode = true
+  mainWindow.setAlwaysOnTop(true, 'screen-saver')
+  mainWindow.setResizable(false)
+  mainWindow.setSkipTaskbar(true)
+  mainWindow.setBounds(bounds)
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.showInactive()
+  sendOverlayMode()
+  updateTrayMenu()
+}
+
+function exitOverlayMode() {
+  if (!mainWindow) return
+
+  const bounds = getCommandBounds()
+  isOverlayMode = false
+  isOverlayDockExpanded = false
+  mainWindow.setResizable(true)
+  mainWindow.setAlwaysOnTop(false)
+  mainWindow.setSkipTaskbar(false)
+  mainWindow.setBounds(bounds)
+  mainWindow.center()
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+  sendOverlayMode()
+  updateTrayMenu()
+}
+
+function toggleOverlayMode() {
+  if (isOverlayMode) {
+    exitOverlayMode()
+  } else {
+    enterOverlayMode()
+  }
+}
+
+const createTray = () => {
+  if (tray) return
+
+  const trayIcon = nativeImage.createFromPath(icon)
+  const resolvedIcon = trayIcon.isEmpty()
+    ? icon
+    : process.platform === 'win32'
+      ? trayIcon.resize({ width: 18, height: 18 })
+      : trayIcon
+
+  tray = new Tray(resolvedIcon)
+  tray.on('click', () => {
+    if (!mainWindow) return
+    exitOverlayMode()
+  })
+  updateTrayMenu()
 }
 
 type DesktopAuthApiResponse = {
@@ -409,26 +659,80 @@ function createWindow(): void {
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
       sandbox: false,
-      backgroundThrottling: false,
-      webSecurity: false
+      backgroundThrottling: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false,
+      devTools: is.dev
     }
   })
 
   mainWindow.on('ready-to-show', () => {
-    if (mainWindow) mainWindow.show()
+    if (!mainWindow) return
+
+    if (shouldUsePersistentDock()) {
+      enterOverlayMode()
+      return
+    }
+
+    mainWindow.show()
   })
 
-  ipcMain.on('window-min', () => mainWindow?.minimize())
-  ipcMain.on('window-close', () => mainWindow?.close())
+  mainWindow.on('close', (event) => {
+    if (!shouldUsePersistentDock() || isQuitting || !mainWindow) return
+
+    event.preventDefault()
+    enterOverlayMode()
+  })
+
+  mainWindow.on('closed', () => {
+    mainWindow = null
+  })
+
+  ipcMain.on('window-min', () => {
+    if (!mainWindow) return
+
+    if (shouldUsePersistentDock()) {
+      enterOverlayMode()
+      return
+    }
+
+    mainWindow.minimize()
+  })
+  ipcMain.on('window-close', () => {
+    if (!mainWindow) return
+
+    if (shouldUsePersistentDock()) {
+      enterOverlayMode()
+      return
+    }
+
+    mainWindow.close()
+  })
   ipcMain.on('window-max', () => {
     if (mainWindow?.isMaximized()) mainWindow.unmaximize()
     else mainWindow?.maximize()
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    openExternalIfAllowed(details.url)
     return { action: 'deny' }
+  })
+
+  const guardExternalNavigation = (event: Electron.Event, targetUrl: string) => {
+    if (isTrustedRendererUrl(targetUrl)) return
+
+    event.preventDefault()
+    openExternalIfAllowed(targetUrl)
+  }
+
+  mainWindow.webContents.on('will-navigate', guardExternalNavigation)
+  mainWindow.webContents.on('will-redirect', guardExternalNavigation)
+  mainWindow.webContents.on('will-attach-webview', (event) => {
+    event.preventDefault()
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -451,12 +755,16 @@ const handleProtocolUrl = (url: string) => {
 
     if (isCloudAuthProtocolUrl(parsed)) {
       const state = parsed.searchParams.get('state') || ''
-      const isValidState =
+      const isValidLegacyState =
         pendingCloudAuthState &&
         state === pendingCloudAuthState &&
         Date.now() < pendingCloudAuthExpiresAt
+      const isValidDesktopRequest =
+        pendingCloudAuthRequest &&
+        state === pendingCloudAuthRequest.requestId &&
+        Date.now() < pendingCloudAuthRequest.expiresAt
 
-      if (!isValidState) {
+      if (!isValidLegacyState && !isValidDesktopRequest) {
         mainWindow.webContents.send('cloud-auth-callback', {
           ok: false,
           error: 'The website authorization code expired. Start login again from Nexus AI.'
@@ -489,6 +797,7 @@ app.on('second-instance', (event, commandLine) => {
   }
   if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore()
+    if (isOverlayMode) exitOverlayMode()
     mainWindow.focus()
     const url = commandLine.find((arg) => arg.startsWith('nexus://'))
     if (url) {
@@ -497,40 +806,12 @@ app.on('second-instance', (event, commandLine) => {
   }
 })
 
-function toggleOverlayMode() {
-  if (!mainWindow) return
-
-  const primaryDisplay = screen.getPrimaryDisplay()
-  const { width, height } = primaryDisplay.workAreaSize
-  const dockWidth = 760
-  const dockHeight = 82
-  const cameraClearance = Math.max(38, Math.round(height * 0.055))
-
-  if (isOverlayMode) {
-    mainWindow.setResizable(true)
-    mainWindow.setAlwaysOnTop(false)
-    mainWindow.setSkipTaskbar(false)
-    mainWindow.setBounds({ width: 950, height: 670 })
-    mainWindow.center()
-    mainWindow.webContents.send('overlay-mode', false)
-  } else {
-    mainWindow.setBounds({
-      width: dockWidth,
-      height: dockHeight,
-      x: Math.floor(width / 2 - dockWidth / 2),
-      y: cameraClearance
-    })
-    mainWindow.setAlwaysOnTop(true, 'screen-saver')
-    mainWindow.setResizable(false)
-    mainWindow.setSkipTaskbar(true)
-    mainWindow.webContents.send('overlay-mode', true)
-  }
-  isOverlayMode = !isOverlayMode
-}
+const getLaunchProtocolUrl = () => process.argv.find((arg) => arg.startsWith('nexus://')) || ''
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.electron')
   seedLaunchNvidiaKey()
+  registerRendererSecurityHeaders()
 
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
@@ -580,7 +861,7 @@ app.whenReady().then(() => {
     sendUpdaterEvent('error', {}, getUpdaterErrorMessage(error))
   })
 
-  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
     const allowedPermissions = [
       'media',
       'audioCapture',
@@ -589,14 +870,14 @@ app.whenReady().then(() => {
       'microphone',
       'camera'
     ]
-    if (allowedPermissions.includes(permission)) {
+    if (allowedPermissions.includes(permission) && isTrustedPermissionRequest(webContents)) {
       callback(true)
     } else {
       callback(false)
     }
   })
 
-  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
     const allowedPermissions = [
       'media',
       'audioCapture',
@@ -605,7 +886,7 @@ app.whenReady().then(() => {
       'microphone',
       'camera'
     ]
-    return allowedPermissions.includes(permission)
+    return allowedPermissions.includes(permission) && isTrustedPermissionRequest(webContents)
   })
 
   if (process.platform === 'darwin') {
@@ -645,6 +926,7 @@ app.whenReady().then(() => {
   ipcMain.handle('get-app-version', () => app.getVersion())
 
   ipcMain.handle('get-update-feed-url', () => NEXUS_UPDATE_FEED_URL)
+  ipcMain.handle('overlay-mode:get', () => isOverlayMode)
 
   ipcMain.handle('cloud-auth:start', async () => {
     try {
@@ -670,6 +952,15 @@ app.whenReady().then(() => {
         deviceCode: authRequest.deviceCode,
         userCode: authRequest.userCode,
         expiresAt: Number.isFinite(expiresAt) ? expiresAt : Date.now() + 1000 * 60 * 10
+      }
+
+      if (
+        !isAllowedExternalUrl(authRequest.verificationUri, {
+          allowedOrigins: NEXUS_WEB_APP_ORIGIN ? [NEXUS_WEB_APP_ORIGIN] : [],
+          allowHttpLoopback: is.dev
+        })
+      ) {
+        throw new Error('The desktop authorization URL is not trusted.')
       }
 
       await shell.openExternal(authRequest.verificationUri)
@@ -808,6 +1099,7 @@ app.whenReady().then(() => {
       }
 
       setImmediate(() => {
+        isQuitting = true
         app.removeAllListeners('window-all-closed')
         autoUpdater.quitAndInstall(false, true)
       })
@@ -817,18 +1109,6 @@ app.whenReady().then(() => {
       sendUpdaterEvent('error', {}, message)
       return { success: false, error: message }
     }
-  })
-
-  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    const responseHeaders = { ...details.responseHeaders }
-    delete responseHeaders['content-security-policy']
-    delete responseHeaders['x-content-security-policy']
-    delete responseHeaders['access-control-allow-origin']
-
-    callback({
-      responseHeaders,
-      statusLine: details.statusLine
-    })
   })
 
   app.on('browser-window-created', (_, window) => {
@@ -882,10 +1162,18 @@ app.whenReady().then(() => {
   })
 
   createWindow()
+  createTray()
+  const launchProtocolUrl = getLaunchProtocolUrl()
+  if (launchProtocolUrl) {
+    setTimeout(() => handleProtocolUrl(launchProtocolUrl), 1000)
+  }
 
   globalShortcut.register('CommandOrControl+Shift+I', () => toggleOverlayMode())
   globalShortcut.register('Super+Shift+N', () => toggleOverlayMode())
   ipcMain.on('toggle-overlay', () => toggleOverlayMode())
+  ipcMain.on('overlay-dock:set-expanded', (_event, expanded: boolean) => {
+    setOverlayDockExpanded(Boolean(expanded))
+  })
 
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -893,7 +1181,13 @@ app.whenReady().then(() => {
 })
 
 app.on('will-quit', () => {
+  tray?.destroy()
+  tray = null
   globalShortcut.unregisterAll()
+})
+
+app.on('before-quit', () => {
+  isQuitting = true
 })
 
 app.on('window-all-closed', () => {

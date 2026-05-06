@@ -66,11 +66,19 @@ import { runBrowserControlPrompt } from '@renderer/functions/browser-control-api
 
 const MIC_CHUNK_TARGET_SAMPLES = 2048
 const MAX_AUDIO_SOCKET_BACKLOG_BYTES = 768 * 1024
-const APP_WATCHER_INTERVAL_MS = 15000
+const APP_WATCHER_INTERVAL_MS = 45000
 const APP_WATCHER_IDLE_GUARD_MS = 2500
 const CONTEXT_TIMEOUT_MS = 450
 const MAX_CONTEXT_HISTORY_TURNS = 6
 const MAX_CONTEXT_HISTORY_CHARS = 420
+
+export interface NexusRuntimeStatus {
+  isConnected: boolean
+  isSpeaking: boolean
+  isMicMuted: boolean
+}
+
+type NexusStatusListener = (status: NexusRuntimeStatus) => void
 
 const withTimeout = async <T,>(task: Promise<T>, fallback: T, timeoutMs = CONTEXT_TIMEOUT_MS) => {
   try {
@@ -120,13 +128,58 @@ export class GeminiLiveService {
   private lastResponseAudioAt: number = 0
   private isAudioEngineReady: boolean = false
   private cachedGeminiKey: string = ''
+  private analyserOutputConnected: boolean = false
+  private speechReleaseTimer: ReturnType<typeof setTimeout> | null = null
+  private statusListeners = new Set<NexusStatusListener>()
 
   constructor() {
     this.apiKey = ''
   }
 
+  private getRuntimeStatus(): NexusRuntimeStatus {
+    return {
+      isConnected: this.isConnected,
+      isSpeaking: this.activeAudioNodes.length > 0,
+      isMicMuted: this.isMicMuted
+    }
+  }
+
+  private emitRuntimeStatus() {
+    const status = this.getRuntimeStatus()
+    this.statusListeners.forEach((listener) => {
+      try {
+        listener(status)
+      } catch {}
+    })
+  }
+
+  subscribeStatus(listener: NexusStatusListener) {
+    this.statusListeners.add(listener)
+    listener(this.getRuntimeStatus())
+
+    return () => {
+      this.statusListeners.delete(listener)
+    }
+  }
+
+  private scheduleSpeakingRelease(delayMs = 160) {
+    if (this.speechReleaseTimer) {
+      clearTimeout(this.speechReleaseTimer)
+      this.speechReleaseTimer = null
+    }
+
+    if (this.activeAudioNodes.length > 0) return
+
+    this.speechReleaseTimer = setTimeout(() => {
+      if (this.activeAudioNodes.length === 0) {
+        this.emitRuntimeStatus()
+      }
+    }, delayMs)
+  }
+
   setMute(muted: boolean) {
     this.isMicMuted = muted
+    this.emitRuntimeStatus()
   }
 
   async prewarm(): Promise<void> {
@@ -188,6 +241,11 @@ export class GeminiLiveService {
   }
 
   private stopAllAudio() {
+    if (this.speechReleaseTimer) {
+      clearTimeout(this.speechReleaseTimer)
+      this.speechReleaseTimer = null
+    }
+
     this.activeAudioNodes.forEach((node) => {
       try {
         node.stop()
@@ -196,6 +254,7 @@ export class GeminiLiveService {
     })
     this.activeAudioNodes = []
     this.nextStartTime = 0
+    this.emitRuntimeStatus()
   }
 
   async connect(): Promise<void> {
@@ -352,6 +411,7 @@ ${nvidiaDefaultSummary}
       this.rawAudioBufferLength = 0
       this.lastUserAudioSentAt = 0
       this.lastResponseAudioAt = 0
+      this.emitRuntimeStatus()
       const setupMsg = {
         setup: {
           model: this.model,
@@ -1783,7 +1843,10 @@ ${nvidiaDefaultSummary}
     source.buffer = buffer
 
     source.connect(this.analyser)
-    this.analyser.connect(this.audioContext.destination)
+    if (!this.analyserOutputConnected) {
+      this.analyser.connect(this.audioContext.destination)
+      this.analyserOutputConnected = true
+    }
 
     const currentTime = this.audioContext.currentTime
     if (this.nextStartTime < currentTime) this.nextStartTime = currentTime + 0.02
@@ -1791,9 +1854,15 @@ ${nvidiaDefaultSummary}
     source.start(this.nextStartTime)
     this.nextStartTime += buffer.duration
 
+    if (this.speechReleaseTimer) {
+      clearTimeout(this.speechReleaseTimer)
+      this.speechReleaseTimer = null
+    }
     this.activeAudioNodes.push(source)
+    this.emitRuntimeStatus()
     source.onended = () => {
       this.activeAudioNodes = this.activeAudioNodes.filter((n) => n !== source)
+      this.scheduleSpeakingRelease()
     }
   }
 
@@ -1865,6 +1934,8 @@ ${nvidiaDefaultSummary}
       this.analyser.disconnect()
       this.analyser = null
     }
+    this.analyserOutputConnected = false
+    this.emitRuntimeStatus()
   }
 }
 

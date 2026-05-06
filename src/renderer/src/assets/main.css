@@ -37,6 +37,7 @@ body {
 
 .nexus-app-shell {
   position: relative;
+  isolation: isolate;
   background:
     linear-gradient(90deg, rgba(16, 185, 129, 0.08) 1px, transparent 1px),
     linear-gradient(rgba(16, 185, 129, 0.055) 1px, transparent 1px),
@@ -70,6 +71,95 @@ body {
       rgba(249, 115, 22, 0.065) 68% 68.11%,
       transparent 68.11%
     );
+}
+
+.nexus-runtime-aura,
+.nexus-runtime-sweep {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition:
+    opacity 240ms ease,
+    transform 420ms ease,
+    filter 240ms ease;
+}
+
+.nexus-runtime-aura {
+  inset: -10%;
+  z-index: 0;
+  filter: blur(68px) saturate(1.08);
+  mix-blend-mode: screen;
+  background:
+    radial-gradient(circle at 16% 52%, rgba(34, 197, 94, 0.28), transparent 22rem),
+    radial-gradient(circle at 48% 18%, rgba(59, 130, 246, 0.24), transparent 20rem),
+    radial-gradient(circle at 84% 42%, rgba(249, 115, 22, 0.24), transparent 21rem),
+    radial-gradient(circle at 58% 84%, rgba(168, 85, 247, 0.22), transparent 18rem);
+  animation: nexusAuraDrift 11s ease-in-out infinite alternate;
+}
+
+.nexus-runtime-sweep {
+  z-index: 1;
+  background:
+    linear-gradient(
+      112deg,
+      transparent 0 16%,
+      rgba(103, 232, 249, 0.08) 28%,
+      transparent 42%,
+      rgba(16, 185, 129, 0.08) 60%,
+      transparent 72%
+    ),
+    radial-gradient(circle at 50% -5%, rgba(16, 185, 129, 0.1), transparent 45%);
+  mix-blend-mode: screen;
+  transform: translate3d(-12%, 0, 0);
+}
+
+.nexus-agent-running .nexus-runtime-aura {
+  opacity: 0.34;
+}
+
+.nexus-agent-running .nexus-runtime-sweep {
+  opacity: 0.3;
+  animation: nexusScreenSweep 8s linear infinite;
+}
+
+.nexus-agent-speaking .nexus-runtime-aura {
+  opacity: 0.62;
+  filter: blur(54px) saturate(1.28);
+  animation-duration: 4s;
+}
+
+.nexus-agent-speaking .nexus-runtime-sweep {
+  opacity: 0.58;
+  animation: nexusScreenSweep 2.8s linear infinite;
+}
+
+.nexus-agent-running .nexus-liquid-orb,
+.nexus-agent-speaking .nexus-liquid-orb {
+  opacity: 0.24;
+}
+
+.nexus-agent-speaking .nexus-liquid-orb-one {
+  background: rgba(59, 130, 246, 0.28);
+}
+
+.nexus-agent-speaking .nexus-liquid-orb-two {
+  background: rgba(249, 115, 22, 0.24);
+}
+
+.nexus-agent-speaking .nexus-content-stage {
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.06),
+    inset 0 0 82px rgba(59, 130, 246, 0.08),
+    0 0 44px rgba(168, 85, 247, 0.14),
+    0 28px 90px rgba(0, 0, 0, 0.42);
+}
+
+.nexus-agent-running .nexus-content-stage {
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.05),
+    inset 0 0 76px rgba(16, 185, 129, 0.06),
+    0 28px 90px rgba(0, 0, 0, 0.42);
 }
 
 .nexus-liquid-orb {
@@ -204,12 +294,12 @@ body {
 }
 
 .nexus-top-command-bar {
-  min-height: 4.85rem;
+  min-height: 4.35rem;
   align-items: stretch;
   justify-content: flex-start;
   flex-direction: column;
-  gap: 0.34rem;
-  padding: 0.4rem 0.5rem;
+  gap: 0.28rem;
+  padding: 0.36rem 0.46rem;
 }
 
 .nexus-header-main {
@@ -222,12 +312,12 @@ body {
 
 .nexus-header-brand {
   display: flex;
-  min-width: 9.35rem;
+  min-width: 8.9rem;
   align-items: center;
   gap: 0.45rem;
   border: 1px solid rgba(52, 211, 153, 0.18);
   border-radius: 0.42rem;
-  padding: 0.24rem 0.38rem;
+  padding: 0.22rem 0.34rem;
   background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), transparent), rgba(0, 0, 0, 0.2);
 }
 
@@ -248,13 +338,13 @@ body {
 }
 
 .nexus-header-title h2 {
-  font-size: 1.35rem !important;
-  line-height: 1.02 !important;
+  font-size: 1.18rem !important;
+  line-height: 1 !important;
 }
 
 .nexus-header-title span {
   margin-bottom: 0 !important;
-  padding: 0.22rem 0.48rem !important;
+  padding: 0.18rem 0.42rem !important;
   font-size: 0.48rem !important;
   letter-spacing: 0.13em !important;
 }
@@ -273,21 +363,21 @@ body {
   gap: 0.28rem;
   overflow-x: auto;
   border-top: 1px solid rgba(255, 255, 255, 0.075);
-  padding-top: 0.32rem;
+  padding-top: 0.26rem;
   perspective: 900px;
 }
 
 .nexus-header-tab {
   position: relative;
   display: inline-flex;
-  min-width: 5.65rem;
-  flex: 1 0 5.65rem;
+  min-width: 5.25rem;
+  flex: 1 0 5.25rem;
   align-items: center;
   gap: 0.38rem;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 0.38rem;
-  padding: 0.32rem 0.42rem;
+  padding: 0.28rem 0.38rem;
   color: rgba(212, 212, 216, 0.68);
   background:
     linear-gradient(145deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
@@ -387,8 +477,8 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 0.38rem;
   background: rgba(0, 0, 0, 0.32);
-  padding: 0.32rem 0.48rem;
-  font-size: 0.54rem;
+  padding: 0.28rem 0.42rem;
+  font-size: 0.5rem;
   font-weight: 900;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -579,6 +669,238 @@ body {
     radial-gradient(circle at 82% 70%, rgba(249, 115, 22, 0.08), transparent 22rem);
 }
 
+.nexus-dock-shell {
+  position: relative;
+  overflow: hidden;
+  justify-content: center;
+  gap: 0;
+  border: 1px solid rgba(110, 231, 183, 0.28);
+  background:
+    linear-gradient(180deg, rgba(2, 8, 7, 0.92), rgba(2, 4, 4, 0.82)),
+    radial-gradient(circle at 50% 0%, rgba(16, 185, 129, 0.12), transparent 13rem);
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.38),
+    0 0 20px rgba(16, 185, 129, 0.12);
+  transform: translate3d(var(--dock-pan-x, 0px), var(--dock-lift-y, 0px), 0)
+    rotateX(var(--dock-tilt-x, 0deg)) rotateY(var(--dock-tilt-y, 0deg));
+  transform-origin: top center;
+  transition:
+    width 220ms ease,
+    min-height 220ms ease,
+    padding 220ms ease,
+    gap 220ms ease,
+    border-color 180ms ease,
+    background 220ms ease,
+    box-shadow 220ms ease,
+    transform 160ms ease;
+  will-change: transform, width, min-height;
+}
+
+.nexus-dock-shell.is-collapsed {
+  width: min(176px, calc(100vw - 14px));
+  min-height: 28px;
+  padding: 0.2rem 0.55rem 0.24rem;
+  border-radius: 999px;
+}
+
+.nexus-dock-shell.is-expanded {
+  width: min(760px, calc(100vw - 14px));
+  min-height: 94px;
+  padding: 0.55rem 0.8rem;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-color: rgba(167, 243, 208, 0.42);
+  box-shadow:
+    0 20px 70px rgba(0, 0, 0, 0.5),
+    0 0 28px rgba(16, 185, 129, 0.18);
+}
+
+.nexus-dock-shell::before {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 42%),
+    linear-gradient(90deg, rgba(16, 185, 129, 0.12), transparent 32%, rgba(56, 189, 248, 0.06));
+  opacity: 0.92;
+}
+
+.nexus-dock-cursor-glow {
+  position: absolute;
+  inset: -34%;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 180ms ease;
+  background:
+    radial-gradient(
+      circle at var(--dock-cursor-x, 50%) var(--dock-cursor-y, 18%),
+      rgba(52, 211, 153, 0.28),
+      transparent 22%
+    ),
+    radial-gradient(
+      circle at calc(var(--dock-cursor-x, 50%) + 12%) 8%,
+      rgba(56, 189, 248, 0.18),
+      transparent 18%
+    );
+  filter: blur(20px);
+}
+
+.nexus-dock-shell.is-expanded .nexus-dock-cursor-glow {
+  opacity: 1;
+}
+
+.nexus-dock-core {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.nexus-dock-core::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6.2rem;
+  height: 1px;
+  transform: translate(-50%, -50%);
+  background: linear-gradient(90deg, transparent, rgba(110, 231, 183, 0.45), transparent);
+  opacity: 0.74;
+  transition:
+    opacity 200ms ease,
+    width 200ms ease;
+}
+
+.nexus-dock-shell.is-expanded .nexus-dock-core::after {
+  width: 0;
+  opacity: 0;
+}
+
+.nexus-dock-core-copy {
+  max-width: 12rem;
+  transition:
+    opacity 180ms ease,
+    max-width 220ms ease,
+    transform 220ms ease;
+}
+
+.nexus-dock-shell.is-collapsed .nexus-dock-core-copy {
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  transform: translateX(-0.25rem);
+}
+
+.nexus-dock-expanded-content {
+  z-index: 1;
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.7rem;
+  transition:
+    opacity 180ms ease,
+    max-width 220ms ease,
+    transform 220ms ease;
+}
+
+.nexus-dock-shell.is-collapsed .nexus-dock-expanded-content {
+  flex: 0 0 0;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transform: translateY(-0.35rem) scale(0.98);
+}
+
+.nexus-dock-shell.is-expanded .nexus-dock-expanded-content {
+  max-width: 640px;
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.nexus-dock-text-command {
+  width: 15rem;
+}
+
+.nexus-dock-text-command.is-active,
+.nexus-dock-text-command:focus-within {
+  width: 18rem;
+}
+
+.nexus-dock-spectrum,
+.nexus-dock-scan {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 220ms ease;
+}
+
+.nexus-dock-spectrum {
+  inset: -18%;
+  filter: blur(34px) saturate(1.16);
+  background:
+    radial-gradient(circle at 18% 55%, rgba(34, 197, 94, 0.28), transparent 18rem),
+    radial-gradient(circle at 48% 20%, rgba(59, 130, 246, 0.24), transparent 16rem),
+    radial-gradient(circle at 82% 45%, rgba(249, 115, 22, 0.22), transparent 16rem),
+    radial-gradient(circle at 58% 90%, rgba(168, 85, 247, 0.2), transparent 14rem);
+  mix-blend-mode: screen;
+  animation: nexusAuraDrift 7s ease-in-out infinite alternate;
+}
+
+.nexus-dock-scan {
+  background: linear-gradient(
+    110deg,
+    transparent 0 12%,
+    rgba(255, 255, 255, 0.06) 24%,
+    rgba(103, 232, 249, 0.08) 34%,
+    transparent 46%,
+    rgba(16, 185, 129, 0.08) 60%,
+    transparent 70%
+  );
+}
+
+.nexus-dock-shell.is-running .nexus-dock-spectrum,
+.nexus-dock-shell.is-running .nexus-dock-scan {
+  opacity: 0.34;
+}
+
+.nexus-dock-shell.is-running .nexus-dock-scan {
+  animation: nexusScreenSweep 7s linear infinite;
+}
+
+.nexus-dock-shell.is-speaking .nexus-dock-spectrum {
+  opacity: 0.7;
+  animation-duration: 2.6s;
+}
+
+.nexus-dock-shell.is-speaking .nexus-dock-scan {
+  opacity: 0.6;
+  animation: nexusScreenSweep 2.2s linear infinite;
+}
+
+.nexus-dock-shell.is-speaking {
+  box-shadow:
+    0 20px 70px rgba(0, 0, 0, 0.55),
+    0 0 18px rgba(59, 130, 246, 0.28),
+    0 0 30px rgba(168, 85, 247, 0.18),
+    0 0 40px rgba(249, 115, 22, 0.16);
+}
+
+.nexus-dock-shell.is-collapsed.is-speaking {
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.4),
+    0 0 12px rgba(59, 130, 246, 0.22),
+    0 0 18px rgba(16, 185, 129, 0.24);
+}
+
 .nexus-manual-control-rail {
   position: relative;
   display: flex;
@@ -759,6 +1081,24 @@ body {
   }
   100% {
     transform: translateX(120%);
+  }
+}
+
+@keyframes nexusAuraDrift {
+  from {
+    transform: translate3d(-1rem, 0.5rem, 0) scale(0.98);
+  }
+  to {
+    transform: translate3d(1.25rem, -0.75rem, 0) scale(1.06);
+  }
+}
+
+@keyframes nexusScreenSweep {
+  0% {
+    transform: translate3d(-18%, 0, 0);
+  }
+  100% {
+    transform: translate3d(18%, 0, 0);
   }
 }
 

@@ -5,11 +5,26 @@ export interface ChatMessage {
   parts: [{ text: string }]
 }
 
+const HISTORY_CACHE_MS = 4_000
+let historyCache: ChatMessage[] = []
+let historyCacheUpdatedAt = 0
+
+const primeHistoryCache = (history: ChatMessage[]) => {
+  historyCache = Array.isArray(history) ? history.slice(-20) : []
+  historyCacheUpdatedAt = Date.now()
+}
+
 export const saveMessage = async (role: 'user' | 'model' | 'nexus', text: string) => {
   try {
     if (!text) return
 
     const safeRole = role === 'nexus' ? 'model' : role
+    const nextMessage: ChatMessage = {
+      role: safeRole,
+      parts: [{ text }]
+    }
+
+    primeHistoryCache([...historyCache, nextMessage])
 
     await window.electron.ipcRenderer.invoke('add-message', {
       role: safeRole,
@@ -25,17 +40,30 @@ export const saveMessage = async (role: 'user' | 'model' | 'nexus', text: string
 
 export const getHistory = async (): Promise<ChatMessage[]> => {
   try {
+    if (Date.now() - historyCacheUpdatedAt < HISTORY_CACHE_MS && historyCache.length > 0) {
+      return historyCache
+    }
+
     const history = await window.electron.ipcRenderer.invoke('get-history')
-    if (history?.length) return history
+    if (history?.length) {
+      primeHistoryCache(history)
+      return historyCache
+    }
+
+    if (Date.now() - historyCacheUpdatedAt < HISTORY_CACHE_MS) {
+      return historyCache
+    }
 
     const cloudRows = await listCloudData<{ role?: string; text?: string }>('chat_history')
-    return cloudRows
+    const nextHistory: ChatMessage[] = cloudRows
       .slice(0, 20)
       .reverse()
       .map((row) => ({
-        role: row.value?.role === 'user' ? 'user' : 'model',
+        role: row.value?.role === 'user' ? ('user' as const) : ('model' as const),
         parts: [{ text: row.value?.text || '' }]
       }))
+    primeHistoryCache(nextHistory)
+    return historyCache
   } catch (e) {
     return []
   }
