@@ -305,7 +305,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#050505] p-4 font-sans text-emerald-50 selection:bg-emerald-500/30 selection:text-emerald-100 lg:p-8">
+    <div className="relative flex min-h-screen items-start justify-center overflow-x-hidden overflow-y-auto bg-[#050505] px-4 py-6 font-sans text-emerald-50 selection:bg-emerald-500/30 selection:text-emerald-100 lg:items-center lg:px-6 lg:py-8">
       <div className="pointer-events-none absolute top-[-10%] left-[-5%] h-125 w-125 animate-pulse rounded-full bg-emerald-600/10 blur-[150px]" />
       <div className="pointer-events-none absolute right-[-5%] bottom-[-10%] h-125 w-125 rounded-full bg-cyan-900/10 blur-[150px]" />
 
@@ -315,11 +315,11 @@ export default function LoginPage() {
         variants={containerVariants}
         initial="hidden"
         animate="show"
-        className="relative z-10 grid w-full max-w-7xl grid-cols-1 items-center gap-8 lg:grid-cols-12"
+        className="relative z-10 grid w-full max-w-7xl grid-cols-1 items-start gap-6 lg:grid-cols-12 lg:items-start xl:items-center"
       >
         <motion.div
           variants={panelVariants}
-          className="relative col-span-3 hidden h-125 flex-col overflow-hidden rounded-2xl border border-white/5 bg-black/40 p-5 shadow-2xl backdrop-blur-md lg:flex"
+          className="relative col-span-3 hidden max-h-[calc(100vh-5rem)] min-h-[28rem] flex-col overflow-hidden rounded-2xl border border-white/5 bg-black/40 p-5 shadow-2xl backdrop-blur-md lg:flex"
         >
           <div className="mb-4 flex items-center gap-3 border-b border-white/10 pb-4">
             <TerminalSquare className="h-5 w-5 text-emerald-500" />
@@ -356,7 +356,7 @@ export default function LoginPage() {
           variants={cardVariants}
           className="col-span-1 flex flex-col items-center justify-center lg:col-span-6"
         >
-          <div className="mb-10 flex flex-col items-center text-center">
+          <div className="mb-6 flex flex-col items-center text-center lg:mb-8">
             <div className="relative mb-6 inline-flex h-20 w-20 items-center justify-center overflow-hidden rounded-2xl border border-emerald-500/30 bg-black shadow-[0_0_40px_rgba(16,185,129,0.15)]">
               <motion.div
                 className="absolute left-0 h-0.5 w-full bg-emerald-400 shadow-[0_0_15px_#34d399]"
@@ -374,7 +374,7 @@ export default function LoginPage() {
             </p>
           </div>
 
-          <div className="relative w-full max-w-2xl rounded-3xl border border-white/10 bg-black/60 p-8 shadow-2xl backdrop-blur-xl">
+          <div className="relative w-full max-w-2xl rounded-3xl border border-white/10 bg-black/60 p-6 shadow-2xl backdrop-blur-xl sm:p-8">
             <div className="absolute top-0 left-0 h-1 w-full bg-linear-to-r from-transparent via-emerald-500 to-transparent opacity-40" />
 
             <div className="mb-6 grid grid-cols-2 gap-3 rounded-2xl border border-white/10 bg-black/45 p-2">
@@ -629,7 +629,7 @@ export default function LoginPage() {
 
         <motion.div
           variants={rightPanelVariants}
-          className="col-span-3 hidden h-125 flex-col rounded-2xl border border-white/5 bg-black/40 p-5 shadow-2xl backdrop-blur-md lg:flex"
+          className="col-span-3 hidden max-h-[calc(100vh-5rem)] min-h-[28rem] flex-col rounded-2xl border border-white/5 bg-black/40 p-5 shadow-2xl backdrop-blur-md lg:flex"
         >
           <div className="mb-6 flex items-center gap-3 border-b border-white/10 pb-4">
             <Activity className="h-5 w-5 text-emerald-500" />

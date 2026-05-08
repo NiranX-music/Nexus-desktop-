@@ -402,7 +402,23 @@ const registerRendererSecurityHeaders = () => {
 
 const shouldUsePersistentDock = () => !is.dev || process.env.NEXUS_FORCE_DOCK === 'true'
 
-const getCommandBounds = () => ({ width: 1160, height: 760 })
+const getCommandBounds = () => {
+  const primaryDisplay = screen.getPrimaryDisplay()
+  const { x, y, width, height } = primaryDisplay.workArea
+  const horizontalInset = Math.max(14, Math.round(width * 0.018))
+  const verticalInset = Math.max(14, Math.round(height * 0.02))
+  const maxWidth = Math.max(760, width - horizontalInset * 2)
+  const maxHeight = Math.max(560, height - verticalInset * 2)
+  const boundedWidth = Math.min(1160, maxWidth)
+  const boundedHeight = Math.min(760, maxHeight)
+
+  return {
+    width: boundedWidth,
+    height: boundedHeight,
+    x: Math.floor(x + (width - boundedWidth) / 2),
+    y: Math.floor(y + (height - boundedHeight) / 2)
+  }
+}
 
 const getDockBounds = (expanded = isOverlayDockExpanded) => {
   const primaryDisplay = screen.getPrimaryDisplay()
@@ -482,11 +498,11 @@ function exitOverlayMode() {
   const bounds = getCommandBounds()
   isOverlayMode = false
   isOverlayDockExpanded = false
+  mainWindow.setFullScreen(false)
   mainWindow.setResizable(true)
   mainWindow.setAlwaysOnTop(false)
   mainWindow.setSkipTaskbar(false)
   mainWindow.setBounds(bounds)
-  mainWindow.center()
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
@@ -677,11 +693,11 @@ const downloadCheckedUpdate = async () => {
 }
 
 function createWindow(): void {
+  const commandBounds = getCommandBounds()
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 720,
+    ...commandBounds,
     show: false,
-    fullscreen: true,
+    fullscreen: false,
     autoHideMenuBar: true,
     frame: false,
     transparent: true,
