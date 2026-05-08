@@ -359,7 +359,7 @@ export default function BrowserControlView({
     <div className="nexus-browser-control h-full w-full overflow-hidden p-4 text-zinc-100">
       <div className="grid h-full min-h-0 grid-cols-12 gap-3">
         <section className="col-span-12 flex min-h-0 flex-col gap-3 xl:col-span-8">
-          <div className="nexus-browser-hero flex shrink-0 items-center justify-between gap-4 overflow-hidden border border-emerald-300/15 bg-black/35 p-4">
+          <div className="nexus-browser-hero flex shrink-0 flex-wrap items-center justify-between gap-4 overflow-hidden border border-emerald-300/15 bg-black/35 p-4">
             <div className="flex min-w-0 items-center gap-4">
               <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg border border-emerald-300/25 bg-emerald-300/10 text-2xl text-emerald-200">
                 <RiGlobalLine />
@@ -368,8 +368,11 @@ export default function BrowserControlView({
                 <h2 className="truncate text-xl font-black uppercase tracking-[0.14em] text-white">
                   Browser Control
                 </h2>
-                <p className="mt-1 truncate text-[10px] font-black uppercase tracking-[0.2em] text-emerald-300/70">
+                <p className="mt-1 text-[10px] font-black uppercase tracking-[0.2em] text-emerald-300/70">
                   Scoped local browser execution
+                </p>
+                <p className="mt-2 max-w-2xl text-[11px] leading-relaxed text-zinc-500">
+                  One command rail for browser voice, text, and autonomous page actions with clear access boundaries.
                 </p>
               </div>
             </div>
@@ -414,7 +417,7 @@ export default function BrowserControlView({
             </div>
           </div>
 
-          <div className="grid shrink-0 grid-cols-1 gap-2 lg:grid-cols-3">
+          <div className="grid shrink-0 grid-cols-1 gap-3 lg:grid-cols-3">
             {accessScopes.map((item) => (
               <button
                 key={item.id}
@@ -444,7 +447,7 @@ export default function BrowserControlView({
 
           <form
             onSubmit={submitPrompt}
-            className="flex shrink-0 items-center gap-2 border border-emerald-300/15 bg-black/50 p-3"
+            className="flex shrink-0 flex-wrap items-center gap-2 border border-emerald-300/15 bg-black/50 p-3"
           >
             <input
               value={prompt}

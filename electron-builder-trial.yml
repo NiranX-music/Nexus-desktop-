@@ -1,0 +1,20 @@
+extends: ./electron-builder.yml
+
+appId: com.nexustech.nexus.trial
+productName: Nexus AI Trial
+
+directories:
+  buildResources: build
+  output: dist-trial
+
+win:
+  executableName: nexus-ai-trial
+
+nsis:
+  artifactName: nexus-ai-trial-${version}-setup.${ext}
+  shortcutName: Nexus AI Trial
+  uninstallDisplayName: Nexus AI Trial
+
+publish:
+  provider: generic
+  url: https://niranx-nexus-agent.vercel.app/updates/win

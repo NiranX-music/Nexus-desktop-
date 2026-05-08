@@ -36,12 +36,7 @@ import {
   NVIDIA_MODEL_CATEGORIES,
   NvidiaModelDefaults
 } from '@renderer/config/nvidia-models'
-import {
-  bootstrapCloudAccount,
-  loadCloudSettings,
-  saveCloudSetting,
-  syncLocalSettingsToCloud
-} from '@renderer/services/cloud-data'
+import { IS_TRIAL_BUILD } from '@renderer/config/app-mode'
 
 interface SettingsProps {
   isSystemActive: boolean
@@ -83,6 +78,8 @@ const readCloudString = (value: unknown) => {
   if (typeof value === 'object' && 'value' in value) return String((value as any).value || '')
   return ''
 }
+
+const loadCloudDataModule = () => import('@renderer/services/cloud-data')
 
 const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const [activeTab, setActiveTab] = useState<TabType>('updates')
@@ -132,12 +129,25 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const [aboutAdminPass, setAboutAdminPass] = useState('')
   const [isAboutAdminUnlocked, setIsAboutAdminUnlocked] = useState(false)
   const [aboutStatus, setAboutStatus] = useState('')
-  const [cloudSyncStatus, setCloudSyncStatus] = useState('Cloud sync pending.')
+  const [cloudSyncStatus, setCloudSyncStatus] = useState(
+    IS_TRIAL_BUILD
+      ? 'Trial build active. Settings stay local on this PC and do not require Supabase login.'
+      : 'Cloud sync pending.'
+  )
 
   useEffect(() => {
     setNvidiaDefaults(getStoredNvidiaModelDefaults())
 
     const hydrateCloudSettings = async () => {
+      if (IS_TRIAL_BUILD) {
+        setCloudSyncStatus(
+          'Trial build active. Settings stay local on this PC and do not require Supabase login.'
+        )
+        return
+      }
+
+      const { bootstrapCloudAccount, loadCloudSettings, syncLocalSettingsToCloud } =
+        await loadCloudDataModule()
       const boot = await bootstrapCloudAccount()
       if (!boot.ok) {
         setCloudSyncStatus(boot.error || 'Cloud account is not connected.')
@@ -246,6 +256,33 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
     }
   }, [])
 
+  const saveCloudSettingIfAvailable = async (
+    key: string,
+    value: Record<string, unknown>,
+    successMessage: string
+  ) => {
+    if (IS_TRIAL_BUILD) {
+      setCloudSyncStatus('Trial build stores this setting locally on the current PC only.')
+      return { ok: true, localOnly: true }
+    }
+
+    const { saveCloudSetting } = await loadCloudDataModule()
+    const result = await saveCloudSetting(key, value)
+    setCloudSyncStatus(result.ok ? successMessage : result.error || 'Cloud sync failed.')
+    return result
+  }
+
+  const syncCloudSettingsIfAvailable = async (statusMessage = 'Manual cloud sync complete.') => {
+    if (IS_TRIAL_BUILD) {
+      setCloudSyncStatus('Trial build keeps settings local, so there is nothing to sync upstream.')
+      return
+    }
+
+    const { syncLocalSettingsToCloud } = await loadCloudDataModule()
+    await syncLocalSettingsToCloud()
+    setCloudSyncStatus(statusMessage)
+  }
+
   const checkAndDownloadUpdate = async () => {
     if (!window.electron?.ipcRenderer) return
     setIsInstallPromptOpen(false)
@@ -314,9 +351,11 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
     if (isSystemActive) return
     setVoice(v)
     localStorage.setItem('nexus_voice_profile', v)
-    saveCloudSetting('nexus_voice_profile', { value: v }).then((result) => {
-      setCloudSyncStatus(result.ok ? 'Voice profile synced to Supabase.' : result.error || 'Cloud sync failed.')
-    })
+    void saveCloudSettingIfAvailable(
+      'nexus_voice_profile',
+      { value: v },
+      'Voice profile synced to Supabase.'
+    )
   }
 
   const handlePersonalityChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -331,16 +370,22 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const savePersonality = async () => {
     if (window.electron?.ipcRenderer) {
       await window.electron.ipcRenderer.invoke('set-personality', personality)
-      await saveCloudSetting('nexus_personality', { value: personality })
-      setCloudSyncStatus('Personality matrix synced to Supabase.')
+      await saveCloudSettingIfAvailable(
+        'nexus_personality',
+        { value: personality },
+        'Personality matrix synced to Supabase.'
+      )
       alert('Personality Matrix Saved Securely to OS.')
     }
   }
 
   const saveUserName = async () => {
     localStorage.setItem('nexus_user_name', userName)
-    const result = await saveCloudSetting('nexus_user_name', { value: userName })
-    setCloudSyncStatus(result.ok ? 'User designation synced to Supabase.' : result.error || 'Cloud sync failed.')
+    await saveCloudSettingIfAvailable(
+      'nexus_user_name',
+      { value: userName },
+      'User designation synced to Supabase.'
+    )
     alert('User Designation Saved.')
   }
 
@@ -364,17 +409,25 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
         })
       } catch (e) {}
     }
-    await Promise.all([
-      saveCloudSetting(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY, { value: aiProviderMode }),
-      saveCloudSetting('nexus_key_status', {
-        gemini: Boolean(geminiKey),
-        groq: Boolean(groqKey),
-        hf: Boolean(hfKey),
-        tavily: Boolean(tailvyKey),
-        nvidia: Boolean(cleanNvidiaKey)
-      })
-    ])
-    setCloudSyncStatus('AI routing preferences synced. Secret API values remain in the OS vault.')
+    if (IS_TRIAL_BUILD) {
+      setCloudSyncStatus('Trial build saved API routing preferences locally in the OS vault only.')
+    } else {
+      const { saveCloudSetting } = await loadCloudDataModule()
+      await Promise.all([
+        saveCloudSetting(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY, { value: aiProviderMode }),
+        saveCloudSetting('nexus_key_status', {
+          gemini: Boolean(geminiKey),
+          groq: Boolean(groqKey),
+          hf: Boolean(hfKey),
+          tavily: Boolean(tailvyKey),
+          nvidia: Boolean(cleanNvidiaKey)
+        })
+      ])
+      setCloudSyncStatus(
+        'AI routing preferences synced. Secret API values remain in the OS vault.'
+      )
+    }
+
     alert(
       'Neural uplinks saved. AI Chat will use the selected Nexus Server / Own API routing mode.'
     )
@@ -382,10 +435,11 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
 
   const saveNvidiaDefaults = async () => {
     localStorage.setItem(NVIDIA_DEFAULTS_STORAGE_KEY, JSON.stringify(nvidiaDefaults))
-    const result = await saveCloudSetting(NVIDIA_DEFAULTS_STORAGE_KEY, {
-      value: JSON.stringify(nvidiaDefaults)
-    })
-    setCloudSyncStatus(result.ok ? 'NVIDIA model defaults synced to Supabase.' : result.error || 'Cloud sync failed.')
+    await saveCloudSettingIfAvailable(
+      NVIDIA_DEFAULTS_STORAGE_KEY,
+      { value: JSON.stringify(nvidiaDefaults) },
+      'NVIDIA model defaults synced to Supabase.'
+    )
     alert('NVIDIA Build model defaults saved.')
   }
 
@@ -784,18 +838,20 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                 <div className={`${cardClass} md:col-span-2`}>
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <span className={titleClass}>
-                      <RiCloudLine className="text-cyan-300" size={18} /> Nexus 2.0 Cloud Data
+                      <RiCloudLine className="text-cyan-300" size={18} />{' '}
+                      {IS_TRIAL_BUILD ? 'Trial Storage Mode' : 'Nexus 2.0 Cloud Data'}
                     </span>
-                    <button
-                      onClick={async () => {
-                        setCloudSyncStatus('Syncing local Nexus settings to Supabase...')
-                        await syncLocalSettingsToCloud()
-                        setCloudSyncStatus('Manual cloud sync complete.')
-                      }}
-                      className="inline-flex items-center gap-2 rounded-lg border border-cyan-500/25 bg-cyan-500/10 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-cyan-200 transition-colors hover:bg-cyan-500/20"
-                    >
-                      <RiRefreshLine size={14} /> Sync Now
-                    </button>
+                    {!IS_TRIAL_BUILD && (
+                      <button
+                        onClick={async () => {
+                          setCloudSyncStatus('Syncing local Nexus settings to Supabase...')
+                          await syncCloudSettingsIfAvailable('Manual cloud sync complete.')
+                        }}
+                        className="inline-flex items-center gap-2 rounded-lg border border-cyan-500/25 bg-cyan-500/10 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-cyan-200 transition-colors hover:bg-cyan-500/20"
+                      >
+                        <RiRefreshLine size={14} /> Sync Now
+                      </button>
+                    )}
                   </div>
                   <p className="rounded-lg border border-white/10 bg-black/30 px-4 py-3 text-xs leading-relaxed text-zinc-300">
                     {cloudSyncStatus}

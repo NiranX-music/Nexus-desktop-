@@ -187,12 +187,12 @@ export default function AiChatView() {
   }
 
   return (
-    <div className="h-full w-full bg-black p-5 text-zinc-100 overflow-hidden">
-      <div className="h-full grid grid-cols-12 gap-4">
+    <div className="h-full w-full overflow-hidden p-4 text-zinc-100">
+      <div className="grid h-full min-h-0 grid-cols-12 gap-3">
         <motion.aside
           initial={{ opacity: 0, x: -18 }}
           animate={{ opacity: 1, x: 0 }}
-          className="col-span-12 lg:col-span-4 xl:col-span-3 rounded-3xl border border-emerald-500/15 bg-zinc-950/70 p-5 overflow-hidden flex flex-col gap-4 shadow-[0_0_45px_rgba(16,185,129,0.08)]"
+          className="col-span-12 flex min-h-0 flex-col gap-4 overflow-hidden rounded-2xl border border-emerald-500/15 bg-[linear-gradient(180deg,rgba(12,20,18,0.95),rgba(4,8,8,0.82))] p-4 shadow-[0_0_45px_rgba(16,185,129,0.08)] lg:col-span-4 xl:col-span-3"
         >
           <div className="border-b border-white/10 pb-4">
             <div className="flex items-center gap-3">
@@ -217,7 +217,7 @@ export default function AiChatView() {
                 <button
                   key={item}
                   onClick={() => handleCategoryChange(item)}
-                  className={`rounded-xl border px-3 py-2 text-[10px] font-bold uppercase tracking-widest transition-all ${
+                  className={`rounded-lg border px-3 py-2 text-[10px] font-bold uppercase tracking-widest transition-all ${
                     category === item
                       ? 'border-emerald-400/50 bg-emerald-500/15 text-emerald-200'
                       : 'border-white/10 bg-black/50 text-zinc-500 hover:text-zinc-200'
@@ -236,7 +236,7 @@ export default function AiChatView() {
             <select
               value={selectedModel}
               onChange={(event) => setSelectedModel(event.target.value)}
-              className="w-full rounded-xl border border-white/10 bg-black px-3 py-3 text-xs font-mono text-zinc-100 outline-none focus:border-emerald-500/50"
+              className="w-full rounded-lg border border-white/10 bg-black px-3 py-3 text-xs font-mono text-zinc-100 outline-none focus:border-emerald-500/50"
             >
               {models.map((model) => (
                 <option key={model.id} value={model.id}>
@@ -244,19 +244,19 @@ export default function AiChatView() {
                 </option>
               ))}
             </select>
-            <p className="min-h-14 rounded-xl border border-white/5 bg-black/40 p-3 text-[11px] leading-relaxed text-zinc-400">
+            <p className="min-h-14 rounded-lg border border-white/5 bg-black/40 p-3 text-[11px] leading-relaxed text-zinc-400">
               {activeModel?.description || 'Live NVIDIA model selected.'}
             </p>
           </div>
 
-          <div className="mt-auto space-y-3 rounded-2xl border border-white/5 bg-black/40 p-4">
+          <div className="mt-auto space-y-3 rounded-xl border border-white/5 bg-black/40 p-4">
             <button
               onClick={() => {
                 const next = !voiceReplies
                 setVoiceReplies(next)
                 localStorage.setItem('nexus_nvidia_voice_replies', String(next))
               }}
-              className={`flex w-full items-center justify-center gap-2 rounded-xl border px-4 py-3 text-[10px] font-black tracking-widest transition-all ${
+              className={`flex w-full items-center justify-center gap-2 rounded-lg border px-4 py-3 text-[10px] font-black tracking-widest transition-all ${
                 voiceReplies
                   ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-300'
                   : 'border-white/10 bg-zinc-950 text-zinc-500 hover:text-white'
@@ -266,7 +266,7 @@ export default function AiChatView() {
             </button>
             <button
               onClick={stopSpeaking}
-              className="flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-zinc-950 px-4 py-3 text-[10px] font-black tracking-widest text-zinc-500 transition-all hover:text-red-300 hover:border-red-500/30"
+              className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-zinc-950 px-4 py-3 text-[10px] font-black tracking-widest text-zinc-500 transition-all hover:border-red-500/30 hover:text-red-300"
             >
               <RiStopCircleLine size={16} /> STOP VOICE
             </button>
@@ -276,37 +276,41 @@ export default function AiChatView() {
         <motion.main
           initial={{ opacity: 0, scale: 0.985 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="col-span-12 lg:col-span-8 xl:col-span-9 rounded-3xl border border-white/10 bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.12),transparent_35%),linear-gradient(180deg,rgba(24,24,27,0.85),rgba(0,0,0,0.92))] overflow-hidden flex flex-col"
+          className="col-span-12 flex min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.12),transparent_35%),linear-gradient(180deg,rgba(24,24,27,0.85),rgba(0,0,0,0.92))] lg:col-span-8 xl:col-span-9"
         >
-          <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-5 py-4">
             <div>
-                <p className="flex items-center gap-2 text-[10px] font-mono font-bold uppercase tracking-[0.24em] text-emerald-400">
-                <RiBrainLine /> {providerMode === 'own-key' ? 'Personal NVIDIA Key' : 'Hosted Nexus API'}
+              <p className="flex items-center gap-2 text-[10px] font-mono font-bold uppercase tracking-[0.24em] text-emerald-400">
+                <RiBrainLine />{' '}
+                {providerMode === 'own-key' ? 'Personal NVIDIA Key' : 'Hosted Nexus API'}
               </p>
-              <h3 className="mt-1 text-sm font-bold text-white">
+              <h3 className="mt-1 text-base font-bold text-white">
                 {selectedModel}
                 <span className="ml-3 rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-[10px] uppercase tracking-widest text-emerald-200">
                   {providerMode === 'own-key' ? 'Own API' : 'Nexus API'}
                 </span>
               </h3>
+              <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
+                Text prompt in, voice response out. Model state and playback controls stay in one lane.
+              </p>
             </div>
             <button
               onClick={() => setMessages([{ role: 'assistant', content: defaultWelcome }])}
-              className="rounded-xl border border-white/10 bg-black/50 p-3 text-zinc-500 transition-all hover:text-white"
+              className="rounded-lg border border-white/10 bg-black/50 p-3 text-zinc-500 transition-all hover:text-white"
               title="Reset chat"
             >
               <RiRefreshLine />
             </button>
           </div>
 
-          <div ref={scrollRef} className="flex-1 overflow-y-auto p-5 space-y-4 scrollbar-small">
+          <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto p-5 scrollbar-small">
             {messages.map((message, index) => (
               <div
                 key={`${message.role}-${index}`}
                 className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
               >
                 <div
-                  className={`max-w-[82%] rounded-2xl border px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap ${
+                  className={`max-w-[78%] rounded-xl border px-4 py-3 text-[13px] leading-relaxed whitespace-pre-wrap ${
                     message.role === 'user'
                       ? 'rounded-br-sm border-emerald-500/25 bg-emerald-500/10 text-emerald-50'
                       : 'rounded-bl-sm border-white/10 bg-black/45 text-zinc-200'
@@ -353,7 +357,7 @@ export default function AiChatView() {
                 Voice Reply {voiceReplies ? 'On' : 'Off'}
               </span>
             </div>
-            <div className="flex items-end gap-3 rounded-2xl border border-white/10 bg-black/60 p-3 focus-within:border-emerald-500/40">
+            <div className="flex items-end gap-3 rounded-xl border border-white/10 bg-black/60 p-3 focus-within:border-emerald-500/40">
               <textarea
                 value={input}
                 onChange={(event) => setInput(event.target.value)}

@@ -1,47 +1,56 @@
 import { useEffect } from 'react'
 import { useAuthStore } from '../store/auth-store'
 import { SECURITY_VERIFICATIONS_PAUSED } from '../config/security-flags'
-import { bootstrapCloudAccount, syncLocalSettingsToCloud } from '@renderer/services/cloud-data'
-import { getCloudSession, getVerifiedCloudUser } from '@renderer/lib/supabase'
+import { IS_TRIAL_BUILD } from '../config/app-mode'
+import { clearDesktopAuthArtifacts, resolvePreferredDesktopAuthSession } from '../services/auth-session'
 
 export default function AuthInitializer() {
   const setAccessToken = useAuthStore((s) => s.setAccessToken)
+  const setAuthSession = useAuthStore((s) => s.setAuthSession)
   const setIsAuthInitialized = useAuthStore((s: any) => s.setIsAuthInitialized)
 
   useEffect(() => {
     const init = async () => {
-      if (SECURITY_VERIFICATIONS_PAUSED) {
-        localStorage.removeItem('nexus_cloud_token')
-        localStorage.removeItem('nexus_email_session')
-        localStorage.removeItem('nexus_user_name')
+      if (SECURITY_VERIFICATIONS_PAUSED || IS_TRIAL_BUILD) {
+        clearDesktopAuthArtifacts()
         setAccessToken(null)
         if (setIsAuthInitialized) setIsAuthInitialized(true)
         return
       }
 
       try {
-        const session = await getCloudSession()
-        const user = await getVerifiedCloudUser()
+        const session = await resolvePreferredDesktopAuthSession()
 
-        if (!session || !user) {
+        if (!session) {
+          clearDesktopAuthArtifacts()
           setAccessToken(null)
           return
         }
 
-        setAccessToken(session.access_token)
-        await bootstrapCloudAccount()
-        await syncLocalSettingsToCloud()
+        setAuthSession({
+          token: session.accessToken,
+          mode: session.mode,
+          user: session.user
+        })
+        localStorage.setItem('nexus_user_name', session.user.name)
+
+        if (session.mode === 'cloud') {
+          const { bootstrapCloudAccount, syncLocalSettingsToCloud } = await import(
+            '@renderer/services/cloud-data'
+          )
+          await bootstrapCloudAccount()
+          await syncLocalSettingsToCloud()
+        }
       } catch (err) {
+        clearDesktopAuthArtifacts()
         setAccessToken(null)
-        localStorage.removeItem('nexus_cloud_token')
-        localStorage.removeItem('nexus_email_session')
       } finally {
         if (setIsAuthInitialized) setIsAuthInitialized(true)
       }
     }
 
     init()
-  }, [setAccessToken, setIsAuthInitialized])
+  }, [setAccessToken, setAuthSession, setIsAuthInitialized])
 
   return null
 }

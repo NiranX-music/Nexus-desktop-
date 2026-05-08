@@ -198,6 +198,7 @@ function Editor() {
   const [isSaved, setIsSaved] = useState(false)
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
+  const totalTools = ALL_TOOLS.length
 
   const openParameterEditor = useCallback((nodeId: string) => setSelectedNodeId(nodeId), [])
 
@@ -403,14 +404,19 @@ function Editor() {
     <div className="nexus-macro-editor flex h-full w-full bg-[#09090b] relative overflow-hidden">
       <aside
         className={`nexus-macro-library h-full shrink-0 bg-[#111113]/95 border-r border-[#27272a] flex flex-col gap-1 transition-all duration-300 ease-in-out z-30 scrollbar-small overflow-auto ${
-          isSidebarOpen ? 'w-72 p-4 opacity-100' : 'w-0 p-0 opacity-0'
+          isSidebarOpen ? 'w-64 p-4 opacity-100' : 'w-0 p-0 opacity-0'
         }`}
       >
         {isSidebarOpen && (
           <>
-            <h2 className="text-[10px] font-black tracking-[0.2em] text-emerald-500 mb-6 flex items-center gap-2 border-b border-[#27272a] pb-2 uppercase">
-              MODULE LIBRARY
-            </h2>
+            <div className="mb-4 border-b border-[#27272a] pb-3">
+              <h2 className="flex items-center gap-2 text-[10px] font-black tracking-[0.2em] text-emerald-500 uppercase">
+                MODULE LIBRARY
+              </h2>
+              <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">
+                Drag tools into the canvas and wire a macro flow visually.
+              </p>
+            </div>
 
             {Object.entries(CATEGORIZED_TOOLS).map(([category, tools]) => (
               <div key={category} className="mb-6">
@@ -444,22 +450,47 @@ function Editor() {
         )}
       </aside>
 
-      <button
-        onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-        className={`absolute top-1/2 z-40 -translate-y-1/2 bg-[#111113] border border-[#27272a] border-l-0 p-2 rounded-r-lg text-zinc-600 hover:text-emerald-500 transition-all duration-300 ${
-          isSidebarOpen ? 'left-72' : 'left-0'
-        }`}
-      >
-        {isSidebarOpen ? <RiLayoutColumnLine size={18} /> : <RiLayoutColumnFill size={18} />}
-      </button>
-
       <div
         className="min-w-0 grow flex flex-col relative transition-all duration-300 ease-in-out"
         onDrop={onDrop}
         onDragOver={onDragOver}
       >
-        <div className="absolute inset-x-4 top-4 z-20 flex items-center justify-end gap-3 pointer-events-none">
-          <div className="pointer-events-auto flex max-w-full items-center gap-3 overflow-x-auto rounded-lg border border-[#27272a] bg-[#0f1110]/90 p-2 shadow-2xl backdrop-blur-xl scrollbar-small">
+        <div className="shrink-0 border-b border-[#202323] bg-[#0c0f0f]/92 px-4 py-3 shadow-[0_14px_38px_rgba(0,0,0,0.22)] backdrop-blur-xl">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                className="grid h-10 w-10 place-items-center rounded-lg border border-[#27272a] bg-[#111113] text-zinc-600 transition-all hover:border-emerald-500/35 hover:text-emerald-400"
+              >
+                {isSidebarOpen ? <RiLayoutColumnLine size={18} /> : <RiLayoutColumnFill size={18} />}
+              </button>
+              <div>
+                <h2 className="text-sm font-black uppercase tracking-[0.18em] text-zinc-100">
+                  Macro Flow Editor
+                </h2>
+                <p className="mt-1 text-[10px] font-mono uppercase tracking-[0.18em] text-zinc-500">
+                  {nodes.length} nodes / {edges.length} links / {totalTools} tools available
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 text-[9px] font-black uppercase tracking-[0.16em]">
+              <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-zinc-500">
+                {description}
+              </span>
+              <span
+                className={`rounded-full border px-3 py-1 ${
+                  isSaved
+                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                    : 'border-amber-500/25 bg-amber-500/10 text-amber-200'
+                }`}
+              >
+                {isSaved ? 'Saved' : 'Unsaved'}
+              </span>
+            </div>
+          </div>
+
+          <div className="mt-3 flex max-w-full flex-wrap items-center gap-3 overflow-x-auto rounded-lg border border-[#27272a] bg-[#0f1110]/90 p-2 shadow-2xl scrollbar-small">
             <button
               onClick={resetCanvas}
               className="p-3 rounded-lg bg-[#18181b] border border-[#27272a] text-zinc-600 hover:text-emerald-500 hover:border-emerald-500/50 transition-colors cursor-pointer"
@@ -475,7 +506,7 @@ function Editor() {
               type="text"
               value={workflowName}
               onChange={(e) => setWorkflowName(e.target.value)}
-              className="bg-[#18181b] border border-[#27272a] px-4 py-2 rounded-lg text-sm text-white outline-none focus:border-emerald-500 font-bold tracking-wide w-[min(20rem,30vw)] min-w-48 shadow-inner"
+              className="min-w-48 w-[min(20rem,34vw)] rounded-lg border border-[#27272a] bg-[#18181b] px-4 py-2 text-sm font-bold tracking-wide text-white outline-none shadow-inner focus:border-emerald-500"
             />
 
             <button
@@ -494,18 +525,22 @@ function Editor() {
           </div>
         </div>
 
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
-          nodeTypes={nodeTypes}
-          className="bg-[#09090b]"
-        >
-          <Background color="#27272a" gap={20} size={1} />
-          <Controls className="react-flow__controls" />
-        </ReactFlow>
+        <div className="min-h-0 flex-1 p-3">
+          <div className="h-full overflow-hidden rounded-xl border border-[#1b2321] bg-[#09090b] shadow-[inset_0_1px_rgba(255,255,255,0.04)]">
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={onConnect}
+              nodeTypes={nodeTypes}
+              className="bg-[#09090b]"
+            >
+              <Background color="#27272a" gap={20} size={1} />
+              <Controls className="react-flow__controls" />
+            </ReactFlow>
+          </div>
+        </div>
 
         <Tooltip
           id="global-tooltip"

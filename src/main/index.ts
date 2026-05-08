@@ -46,6 +46,7 @@ import registerPermanentMemory from './logic/permanent-memory'
 import registerWormhole from './services/wormhole'
 import registerOracle from './services/RAG-oracle'
 import registerDeepResearch from './services/deep-research'
+import registerIssueReporter from './services/issue-reporter'
 import registerNvidiaAI from './services/nvidia-ai'
 import registerWidgetMaker from './auto/widget-manager'
 import registerWebsiteBuilder from './auto/website-builder'
@@ -54,6 +55,7 @@ import registerDropZoneControl from './handlers/SmartDropZone-Handler'
 import registerScreenPeeler from './handlers/ScreenPeeler-handler'
 import registerPhantomKeyboard from './handlers/PhantomControl-handler'
 import registerSecurityVault from './security/Security'
+import registerEmailAuth from './security/email-auth'
 import registerLockSystem from './security/lock-system'
 import { autoUpdater } from 'electron-updater'
 
@@ -87,6 +89,7 @@ let pendingCloudAuthRequest: {
   userCode: string
   expiresAt: number
 } | null = null
+let pendingRendererCloudAuthPayload: Record<string, unknown> | null = null
 let pendingCloudAuthPollTimer: ReturnType<typeof setInterval> | null = null
 let isCloudAuthClaimInFlight = false
 
@@ -530,10 +533,12 @@ type DesktopAuthApiResponse = {
   refreshToken?: string
   userId?: string
   email?: string
+  supabaseUrl?: string
+  supabasePublishableKey?: string
 }
 
 const postDesktopAuth = async (
-  endpoint: 'start' | 'claim',
+  endpoint: 'start' | 'claim' | 'redeem',
   body: Record<string, unknown>
 ): Promise<DesktopAuthApiResponse> => {
   const response = await fetch(`${NEXUS_DESKTOP_AUTH_API_URL}/${endpoint}`, {
@@ -570,8 +575,30 @@ const clearPendingCloudAuth = () => {
   pendingCloudAuthRequest = null
 }
 
+const revealMainWindowForAuth = () => {
+  if (!mainWindow) return
+
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  if (isOverlayMode) exitOverlayMode()
+  if (!mainWindow.isVisible()) mainWindow.show()
+  mainWindow.focus()
+}
+
 const sendCloudAuthCallback = (payload: Record<string, unknown>) => {
-  mainWindow?.webContents.send('cloud-auth-callback', payload)
+  pendingRendererCloudAuthPayload = payload
+  revealMainWindowForAuth()
+
+  if (!mainWindow || mainWindow.webContents.isDestroyed()) return
+
+  if (mainWindow.webContents.isLoadingMainFrame()) {
+    mainWindow.webContents.once('did-finish-load', () => {
+      if (!mainWindow || mainWindow.webContents.isDestroyed()) return
+      mainWindow.webContents.send('cloud-auth-callback', payload)
+    })
+    return
+  }
+
+  mainWindow.webContents.send('cloud-auth-callback', payload)
 }
 
 const pollPendingCloudAuth = async () => {
@@ -604,7 +631,9 @@ const pollPendingCloudAuth = async () => {
       refreshToken: result.refreshToken || '',
       expiresAt: result.expiresAt || '',
       userId: result.userId || '',
-      email: result.email || ''
+      email: result.email || '',
+      supabaseUrl: result.supabaseUrl || '',
+      supabasePublishableKey: result.supabasePublishableKey || ''
     })
   } catch (error) {
     const status = (error as Error & { status?: number }).status || 0
@@ -765,7 +794,7 @@ const handleProtocolUrl = (url: string) => {
         Date.now() < pendingCloudAuthRequest.expiresAt
 
       if (!isValidLegacyState && !isValidDesktopRequest) {
-        mainWindow.webContents.send('cloud-auth-callback', {
+        sendCloudAuthCallback({
           ok: false,
           error: 'The website authorization code expired. Start login again from Nexus AI.'
         })
@@ -776,14 +805,16 @@ const handleProtocolUrl = (url: string) => {
       pendingCloudAuthState = ''
       pendingCloudAuthExpiresAt = 0
       pendingCloudAuthRequest = null
-      mainWindow.webContents.send('cloud-auth-callback', {
+      sendCloudAuthCallback({
         ok: true,
         state,
         accessToken: parsed.searchParams.get('access_token') || '',
         refreshToken: parsed.searchParams.get('refresh_token') || '',
         expiresAt: parsed.searchParams.get('expires_at') || '',
         userId: parsed.searchParams.get('user_id') || '',
-        email: parsed.searchParams.get('email') || ''
+        email: parsed.searchParams.get('email') || '',
+        supabaseUrl: parsed.searchParams.get('supabase_url') || '',
+        supabasePublishableKey: parsed.searchParams.get('supabase_publishable_key') || ''
       })
       return
     }
@@ -812,6 +843,12 @@ app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.electron')
   seedLaunchNvidiaKey()
   registerRendererSecurityHeaders()
+  registerIssueReporter({
+    ipcMain,
+    app,
+    getMainWindow: () => mainWindow,
+    webAppUrl: NEXUS_WEB_APP_URL
+  })
 
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
@@ -927,10 +964,58 @@ app.whenReady().then(() => {
 
   ipcMain.handle('get-update-feed-url', () => NEXUS_UPDATE_FEED_URL)
   ipcMain.handle('overlay-mode:get', () => isOverlayMode)
+  ipcMain.handle('cloud-auth:consume-pending', () => {
+    const payload = pendingRendererCloudAuthPayload
+    pendingRendererCloudAuthPayload = null
+    return payload
+  })
+  ipcMain.handle('cloud-auth:open-login', async () => {
+    const loginUrl = `${NEXUS_WEB_APP_URL}/auth=desktop?desktop=1`
+
+    if (
+      !isAllowedExternalUrl(loginUrl, {
+        allowedOrigins: NEXUS_WEB_APP_ORIGIN ? [NEXUS_WEB_APP_ORIGIN] : [],
+        allowHttpLoopback: is.dev
+      })
+    ) {
+      return { ok: false, error: 'The Nexus website login URL is not trusted.' }
+    }
+
+    await shell.openExternal(loginUrl)
+    return { ok: true, loginUrl }
+  })
+  ipcMain.handle('cloud-auth:redeem-code', async (_event, payload) => {
+    const userCode = String(payload?.userCode || payload?.code || '').trim().toUpperCase()
+
+    if (!userCode) {
+      return { ok: false, error: 'Enter the Nexus desktop code from the website.' }
+    }
+
+    try {
+      const result = await postDesktopAuth('redeem', { userCode })
+      return {
+        ok: true,
+        accessToken: result.accessToken || '',
+        refreshToken: result.refreshToken || '',
+        expiresAt: result.expiresAt || '',
+        userId: result.userId || '',
+        email: result.email || '',
+        supabaseUrl: result.supabaseUrl || '',
+        supabasePublishableKey: result.supabasePublishableKey || ''
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        error:
+          error instanceof Error ? error.message : 'Unable to verify the Nexus desktop code.'
+      }
+    }
+  })
 
   ipcMain.handle('cloud-auth:start', async () => {
     try {
       clearPendingCloudAuth()
+      pendingRendererCloudAuthPayload = null
       const authRequest = await postDesktopAuth('start', {
         version: app.getVersion(),
         deviceName: `${app.getName()} ${process.platform}`
@@ -1121,6 +1206,7 @@ app.whenReady().then(() => {
   })
 
   registerLockSystem()
+  registerEmailAuth()
   registerSecurityVault()
   registerPhantomKeyboard()
   registerScreenPeeler()

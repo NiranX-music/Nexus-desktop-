@@ -13,6 +13,7 @@ import {
 } from 'react-icons/ri'
 import { GiPowerButton } from 'react-icons/gi'
 import type { AssistantVisualState, VisionMode } from '@renderer/IndexRoot'
+import { IS_TRIAL_BUILD } from '@renderer/config/app-mode'
 
 interface OverlayProps {
   assistantVisualState: AssistantVisualState
@@ -194,10 +195,16 @@ const MiniOverlay = ({
 
         <div className="nexus-dock-core-copy min-w-0 pr-1">
           <p className="truncate text-[10px] font-black uppercase tracking-[0.18em] text-emerald-200">
-            Nexus Dock
+            {IS_TRIAL_BUILD ? 'Nexus Trial Dock' : 'Nexus Dock'}
           </p>
           <p className="mt-0.5 truncate text-[8px] font-bold uppercase tracking-[0.16em] text-zinc-500">
-            {isSpeaking ? 'Voice live' : isRunning ? 'Always ready' : 'Win+Shift+N'}
+            {IS_TRIAL_BUILD
+              ? 'Local core controls'
+              : isSpeaking
+                ? 'Voice live'
+                : isRunning
+                  ? 'Always ready'
+                  : 'Win+Shift+N'}
           </p>
         </div>
       </div>

@@ -18,9 +18,9 @@ const AxiosInstance = axios.create({
 AxiosInstance.interceptors.request.use((config) => {
   if (SECURITY_VERIFICATIONS_PAUSED) return config
 
-  const accessToken = useAuthStore.getState().accessToken
+  const { accessToken, authMode } = useAuthStore.getState()
 
-  if (accessToken) {
+  if (accessToken && authMode === 'cloud') {
     config.headers = config.headers || {}
     config.headers.Authorization = `Bearer ${accessToken}`
   }
@@ -51,6 +51,7 @@ AxiosInstance.interceptors.response.use(
 
     if (
       error.response?.status === 401 &&
+      useAuthStore.getState().authMode === 'cloud' &&
       !originalRequest?._retry &&
       !originalRequest?.url?.includes('/refresh-token') &&
       !originalRequest?.url?.includes('/users/login')

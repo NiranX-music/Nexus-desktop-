@@ -12,7 +12,6 @@ import {
   RiHistoryLine,
   RiPulseLine,
   RiWifiLine,
-  RiServerLine,
   RiEarthLine,
   RiSendPlane2Line,
   RiBatteryChargeLine,
@@ -22,7 +21,8 @@ import {
   RiPlayFill,
   RiRefreshLine,
   RiSkipBackFill,
-  RiSkipForwardFill
+  RiSkipForwardFill,
+  RiComputerLine
 } from 'react-icons/ri'
 import { FaMemory } from 'react-icons/fa6'
 import { GiTinker } from 'react-icons/gi'
@@ -298,16 +298,6 @@ export default function DashboardView({
     [activeStream, isVideoOn, visionMode]
   )
 
-  const setMobileVideoRef = useCallback(
-    (node: HTMLVideoElement | null) => {
-      if (node && activeStream && isVideoOn) {
-        node.srcObject = activeStream
-        node.onloadedmetadata = () => node.play().catch(() => {})
-      }
-    },
-    [activeStream, isVideoOn, visionMode]
-  )
-
   const toggleSource = () => {
     if (!isSystemActive) return
     const nextMode = visionMode === 'camera' ? 'screen' : 'camera'
@@ -321,6 +311,7 @@ export default function DashboardView({
     activeInterfaces: 0,
     updatedAt: 0
   }
+  const networkLabel = formatBytesPerSecond(liveNetwork.totalBytesPerSecond)
   const txRatio = metricPercent((liveNetwork.txBytesPerSecond / (5 * 1024 * 1024)) * 100)
   const rxRatio = metricPercent((liveNetwork.rxBytesPerSecond / (5 * 1024 * 1024)) * 100)
   const batteryPercent =
@@ -474,446 +465,546 @@ export default function DashboardView({
     }
   ]
 
-  return (
-    <div className="nexus-dashboard-arena flex-1 p-2 grid grid-cols-12 gap-2 min-h-0 h-full overflow-hidden relative animate-in fade-in zoom-in duration-300 w-full">
-      <div className="pointer-events-none absolute inset-x-4 top-2 z-0 flex items-center justify-between rounded-lg border border-emerald-300/15 bg-black/35 px-4 py-1.5 text-[8px] font-black tracking-[0.26em] text-zinc-500 backdrop-blur-xl">
-        <span>COMMAND KERNEL STREAM</span>
-        <span className={isSystemActive ? 'text-emerald-300' : 'text-orange-200/70'}>
-          {runtimeRibbonLabel}
-        </span>
-      </div>
-      <div className="hidden lg:flex col-span-3 flex-col gap-2 h-full min-h-0 z-40">
-        <div
-          className={`${glassPanel} h-[clamp(10rem,25vh,14rem)] shrink-0 flex flex-col p-3 overflow-hidden relative group`}
-        >
-          <div className="flex items-center justify-between border-b border-white/10 pb-2">
-            <span className="flex items-center gap-1 text-[10px] font-bold tracking-widest text-zinc-400">
-              <RiMusic2Line className="text-emerald-400" /> MEDIA PREVIEW
-            </span>
-            <button
-              onClick={refreshMediaSessions}
-              className="grid h-6 w-6 place-items-center rounded-md border border-white/10 bg-black/35 text-zinc-500 transition hover:border-emerald-300/35 hover:text-emerald-200"
-              title="Refresh media sessions"
-            >
-              <RiRefreshLine size={13} />
-            </button>
-          </div>
+  const statusOverview = [
+    {
+      label: 'Runtime',
+      value: assistantStateLabel,
+      detail: runtimeRibbonLabel,
+      tone:
+        resolvedAssistantVisualState === 'speaking'
+          ? 'text-fuchsia-100'
+          : resolvedAssistantVisualState === 'running'
+            ? 'text-emerald-200'
+            : isSystemStarting
+              ? 'text-amber-100'
+              : 'text-zinc-200'
+    },
+    {
+      label: 'Vision',
+      value: isVideoOn ? (visionMode === 'camera' ? 'Camera' : 'Screen') : 'Offline',
+      detail: isVideoOn ? 'Live input armed' : 'Select a source',
+      tone: 'text-cyan-200'
+    },
+    {
+      label: 'Voice',
+      value: isMicMuted ? 'Muted' : 'Open',
+      detail: isMicMuted ? 'Responses paused' : 'Listening live',
+      tone: 'text-orange-100'
+    },
+    {
+      label: 'Battery',
+      value: batteryValue,
+      detail: batteryDetail,
+      tone: batteryPercent !== null ? 'text-lime-200' : 'text-zinc-200'
+    }
+  ]
 
-          {featuredMedia ? (
-            <div className="min-h-0 flex-1 pt-3">
-              <div className="flex min-w-0 items-center gap-3">
-                <div className="grid h-12 w-12 shrink-0 place-items-center rounded-lg border border-emerald-300/20 bg-emerald-300/10 text-xl text-emerald-200">
-                  <RiMusic2Line />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-black text-white" title={featuredMedia.title}>
-                    {featuredMedia.title}
+  return (
+    <div className="nexus-dashboard-arena relative h-full w-full flex-1 animate-in fade-in zoom-in duration-300 overflow-hidden p-3 lg:p-4">
+      <div className="grid h-full min-h-0 grid-cols-12 gap-3">
+        <section className="col-span-12 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {statusOverview.map((item) => (
+            <div key={item.label} className={`${glassPanel} p-3`}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[8px] font-black uppercase tracking-[0.22em] text-zinc-500">
+                    {item.label}
                   </p>
-                  <p className="mt-1 truncate text-[10px] font-semibold text-zinc-500">
-                    {featuredMedia.artist || featuredMedia.source || 'System media'}
-                  </p>
+                  <p className={`mt-2 text-base font-black uppercase ${item.tone}`}>{item.value}</p>
                 </div>
+                <span
+                  className={`mt-1 h-2.5 w-2.5 rounded-full ${
+                    item.label === 'Runtime' && resolvedAssistantVisualState === 'speaking'
+                      ? 'bg-fuchsia-300 shadow-[0_0_12px_rgba(244,114,182,0.8)]'
+                      : item.label === 'Runtime' && resolvedAssistantVisualState === 'running'
+                        ? 'bg-emerald-300 shadow-[0_0_12px_rgba(52,211,153,0.8)]'
+                        : 'bg-white/15'
+                  }`}
+                />
               </div>
-              <div className="mt-3 flex items-center gap-2 text-[8px] font-mono text-zinc-500">
-                <span>{formatMediaTime(featuredMedia.positionMs)}</span>
-                <div className="h-1 flex-1 overflow-hidden rounded-full bg-black/55">
-                  <div
-                    className="h-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]"
-                    style={{ width: `${featuredProgress}%` }}
+              <p className="mt-2 truncate text-[9px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+                {item.detail}
+              </p>
+            </div>
+          ))}
+        </section>
+
+        <aside className="col-span-12 flex min-h-0 flex-col gap-3 xl:col-span-3 xl:overflow-y-auto xl:pr-1 scrollbar-small">
+          <div className={`${glassPanel} shrink-0 p-3`}>
+            <div className="flex items-center justify-between border-b border-white/10 pb-2">
+              <span className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-zinc-400">
+                <RiCameraLine className="text-cyan-300" /> Vision Feed
+              </span>
+              <span className="rounded-md border border-white/10 bg-black/35 px-2 py-1 text-[8px] font-black uppercase tracking-[0.16em] text-zinc-500">
+                {isVideoOn ? (visionMode === 'camera' ? 'Camera' : 'Screen') : 'Offline'}
+              </span>
+            </div>
+
+            <div className="mt-3 overflow-hidden border border-white/10 bg-black/35 aspect-video">
+              {isVideoOn ? (
+                <div className="relative h-full w-full">
+                  <video
+                    ref={setVideoRef}
+                    className={`h-full w-full object-cover ${
+                      visionMode === 'camera' ? '-scale-x-100' : ''
+                    }`}
+                    autoPlay
+                    playsInline
+                    muted
                   />
+                  {visionMode === 'camera' ? (
+                    <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 h-full w-full" />
+                  ) : null}
                 </div>
-                <span>{formatMediaTime(featuredMedia.durationMs)}</span>
-              </div>
-              <div className="mt-3 grid grid-cols-4 gap-2">
-                <button
-                  onClick={() => handleMediaControl(featuredMedia, 'previous')}
-                  className="grid h-8 place-items-center border border-white/10 bg-black/35 text-zinc-300 transition hover:border-emerald-300/35 hover:text-emerald-200"
-                  title="Previous"
-                >
-                  <RiSkipBackFill />
-                </button>
-                <button
-                  onClick={() => handleMediaControl(featuredMedia, 'toggle')}
-                  className="grid h-8 place-items-center border border-emerald-300/25 bg-emerald-300/15 text-emerald-100 transition hover:bg-emerald-300 hover:text-black"
-                  title="Play or pause"
-                >
-                  {featuredMedia.status === 'Playing' ? <RiPauseFill /> : <RiPlayFill />}
-                </button>
-                <button
-                  onClick={() => handleMediaControl(featuredMedia, 'next')}
-                  className="grid h-8 place-items-center border border-white/10 bg-black/35 text-zinc-300 transition hover:border-emerald-300/35 hover:text-emerald-200"
-                  title="Next"
-                >
-                  <RiSkipForwardFill />
-                </button>
-                <span className="grid h-8 place-items-center border border-white/10 bg-black/35 text-[8px] font-black uppercase tracking-[0.12em] text-zinc-500">
-                  {featuredMedia.status}
-                </span>
-              </div>
-              {prioritizedMediaSessions.length > 1 && (
-                <div className="mt-2 flex gap-1 overflow-x-auto scrollbar-small">
-                  {prioritizedMediaSessions.slice(1, 5).map((session) => (
-                    <button
-                      key={`${session.source}-${session.index}`}
-                      onClick={() => handleMediaControl(session, 'toggle')}
-                      className="max-w-[7rem] shrink-0 truncate border border-white/10 bg-white/[0.03] px-2 py-1.5 text-left text-[9px] font-semibold text-zinc-500 transition hover:border-emerald-300/25 hover:text-zinc-200"
-                      title={`${session.title} - ${session.status}`}
-                    >
-                      {session.title}
-                    </button>
-                  ))}
+              ) : (
+                <div className="grid h-full place-items-center text-center">
+                  <div className="space-y-2 text-zinc-700">
+                    <RiCameraLine className="mx-auto text-2xl" />
+                    <p className="text-[9px] font-black uppercase tracking-[0.22em]">
+                      Awaiting source
+                    </p>
+                  </div>
                 </div>
               )}
             </div>
-          ) : (
-            <div className="grid min-h-0 flex-1 place-items-center text-center">
-              <div className="space-y-2 text-zinc-700">
-                <RiMusic2Line className="mx-auto text-2xl" />
-                <p className="text-[9px] font-black uppercase tracking-[0.22em]">{mediaStatus}</p>
-              </div>
-            </div>
-          )}
-        </div>
 
-        <div
-          className={`${glassPanel} h-[8.35rem] shrink-0 p-3 flex flex-col justify-between relative overflow-hidden`}
-        >
-          <div
-            className={`absolute inset-0 bg-linear-to-r from-emerald-500/5 to-transparent transition-opacity duration-1000 ${isSystemActive ? 'opacity-100' : 'opacity-0'}`}
-          />
-
-          <div className="flex items-center justify-between border-b border-white/10 pb-2 relative z-10">
-            <span className="text-[10px] font-bold tracking-widest text-zinc-400 flex items-center gap-1">
-              <RiPulseLine className={isSystemActive ? 'text-emerald-500 animate-pulse' : ''} />{' '}
-              NETWORK TELEMETRY
-            </span>
-            <span
-              className={`text-[8px] px-2 py-0.5 rounded-full font-mono font-bold border ${isSystemActive ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-zinc-600 border-zinc-800 bg-zinc-900'}`}
-            >
-              {isSystemActive ? 'SECURE UPLINK' : 'STANDBY'}
-            </span>
-          </div>
-
-          <div className="grid grid-cols-3 gap-1.5 mt-2 relative z-10">
-            <div className="border border-white/5 bg-black/25 p-2">
-              <span className="text-[7px] text-zinc-500 font-mono tracking-[0.18em] flex items-center gap-1">
-                ADAPTERS
-              </span>
-              <span className="mt-1 text-[11px] font-bold text-emerald-50 font-mono flex items-center gap-1.5 transition-all">
-                <RiWifiLine className={stats ? 'text-emerald-400' : 'text-zinc-600'} />
-                {stats ? liveNetwork.activeInterfaces : '--'}
-              </span>
-            </div>
-
-            <div className="border border-white/5 bg-black/25 p-2">
-              <span className="text-[7px] text-zinc-500 font-mono tracking-[0.18em]">DOWNLINK</span>
-              <span className="mt-1 block text-[11px] font-bold text-emerald-50 font-mono transition-all">
-                {stats ? formatBytesPerSecond(liveNetwork.rxBytesPerSecond) : '--'}
-              </span>
-            </div>
-
-            <div className="border border-white/5 bg-black/25 p-2">
-              <span className="text-[7px] text-zinc-500 font-mono tracking-[0.18em]">UPLINK</span>
-              <span className="mt-1 text-[11px] font-bold text-emerald-50 font-mono flex items-center gap-1.5">
-                {stats ? formatBytesPerSecond(liveNetwork.txBytesPerSecond) : '--'}
-                {stats ? (
-                  <RiEarthLine className="text-cyan-400" />
-                ) : (
-                  <RiServerLine className="text-zinc-500" />
-                )}
-              </span>
-            </div>
-          </div>
-
-          <div className="w-full grid grid-cols-2 gap-2 mt-2 relative z-10">
-            <div className="flex items-center gap-2">
-              <span className="text-[7px] font-mono text-zinc-500 w-4">TX</span>
-              <div className="flex-1 h-1.5 bg-black/60 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-emerald-500 shadow-[0_0_8px_#10b981] transition-all duration-300 ease-out"
-                  style={{ width: `${stats ? txRatio : 0}%` }}
-                />
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[7px] font-mono text-zinc-500 w-4">RX</span>
-              <div className="flex-1 h-1.5 bg-black/60 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-cyan-500 shadow-[0_0_8px_#06b6d4] transition-all duration-300 ease-out delay-75"
-                  style={{ width: `${stats ? rxRatio : 0}%` }}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className={`${glassPanel} min-h-0 flex-1 p-3 flex flex-col gap-2`}>
-          <div className="flex items-center justify-between border-b border-white/10 pb-2">
-            <span className="text-[10px] font-bold tracking-widest text-zinc-400">
-              <RiLayoutGridLine className="inline mr-1" /> CORE METRICS
-            </span>
-          </div>
-          <div className="grid grid-cols-2 auto-rows-fr gap-2 h-full min-h-0 pb-1">
-            {systemMetrics.map((m, i) => (
-              <div
-                key={i}
-                className={`cursor-pointer relative rounded-xl p-2 flex flex-col justify-between border border-white/5 overflow-hidden group hover:border-white/10 transition-all duration-300 bg-linear-to-br ${m.bgGradient}`}
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button
+                onClick={onVisionClick}
+                className="flex items-center justify-center gap-2 border border-white/10 bg-black/35 px-3 py-2 text-[10px] font-black uppercase tracking-[0.16em] text-zinc-200 transition hover:border-cyan-300/35 hover:text-cyan-100"
               >
-                <div
-                  className={`absolute inset-0 ${m.pattern} opacity-30 group-hover:opacity-60 transition-opacity duration-500 pointer-events-none`}
-                />
-
-                <div
-                  className={`absolute -bottom-8 -right-8 opacity-[0.03] group-hover:opacity-[0.08] transition-all duration-500 transform group-hover:scale-110 pointer-events-none ${m.colorClass}`}
-                >
-                  {m.bgIcon}
-                </div>
-
-                <div
-                  className={`absolute top-0 left-0 w-full h-px bg-linear-to-r from-transparent ${m.glowClass} to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500`}
-                />
-
-                <div className="relative z-10 flex justify-between items-start text-zinc-500">
-                  <span
-                    className={`text-base ${m.colorClass} opacity-70 group-hover:opacity-100 transition-opacity`}
-                  >
-                    {m.icon}
-                  </span>
-                  <span className="text-[8px] font-mono tracking-widest uppercase opacity-70 group-hover:opacity-100 transition-opacity text-zinc-300">
-                    {m.label}
-                  </span>
-                </div>
-
-                <div className="relative z-10 flex min-w-0 flex-col gap-1 mt-1.5">
-                  <span
-                    className="max-w-full truncate text-right text-[15px] font-black text-white font-mono tracking-[0.08em] drop-shadow-md"
-                    title={String(m.val)}
-                  >
-                    {m.val}
-                  </span>
-                  {'detail' in m && m.detail && (
-                    <span className="max-w-full truncate text-right text-[7px] font-black uppercase tracking-[0.16em] text-zinc-500">
-                      {m.detail}
-                    </span>
-                  )}
-
-                  {!m.hideBar && (
-                    <div className="w-full h-1 bg-black/40 rounded-full overflow-hidden backdrop-blur-sm border border-white/5">
-                      <div
-                        className={`h-full ${m.bgClass} ${m.shadowClass} transition-all duration-700 ease-out`}
-                        style={{ width: `${m.raw}%` }}
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="col-span-12 lg:col-span-6 relative z-30 flex min-h-0 flex-col gap-2">
-        <div className="grid grid-cols-3 gap-2">
-          <div className={`${glassPanel} p-3`}>
-            <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">
-              Agent State
-            </p>
-            <p
-              className={`mt-1 text-sm font-black uppercase ${
-                resolvedAssistantVisualState === 'speaking'
-                  ? 'text-fuchsia-100'
-                  : resolvedAssistantVisualState === 'running'
-                    ? 'text-emerald-200'
-                    : 'text-zinc-300'
-              }`}
-            >
-              {assistantStateLabel}
-            </p>
-          </div>
-          <div className={`${glassPanel} p-3`}>
-            <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">Vision</p>
-            <p className="mt-1 text-sm font-black uppercase text-cyan-200">
-              {isVideoOn ? visionMode : 'Offline'}
-            </p>
-          </div>
-          <div className={`${glassPanel} p-3`}>
-            <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">Voice</p>
-            <p className="mt-1 text-sm font-black uppercase text-orange-100">
-              {isMicMuted ? 'Muted' : 'Open'}
-            </p>
-          </div>
-        </div>
-
-        <div className={`${glassPanel} flex min-h-0 flex-1 flex-col p-3`}>
-          <div className="flex items-center justify-between border-b border-white/10 pb-2">
-            <span className="text-[10px] font-black uppercase tracking-[0.22em] text-emerald-300">
-              Agent Core
-            </span>
-            <span className="text-[8px] font-mono uppercase tracking-[0.18em] text-zinc-500">
-              {isSystemStarting ? 'Starting low-latency link' : 'Compact Command Matrix'}
-            </span>
-          </div>
-
-          <div className="grid min-h-0 flex-1 grid-cols-5 gap-2 pt-3">
-            <div className="relative col-span-3 flex min-h-0 items-center justify-center overflow-hidden border border-emerald-300/15 bg-black/35">
-              <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(16,185,129,0.08)_1px,transparent_1px),linear-gradient(rgba(16,185,129,0.08)_1px,transparent_1px)] bg-[size:22px_22px]" />
-              <div className="absolute inset-x-0 top-0 h-12 bg-linear-to-b from-emerald-300/10 to-transparent" />
-              <div className="absolute bottom-3 left-3 z-10 border border-emerald-300/20 bg-black/70 px-2 py-1 text-[8px] font-black uppercase tracking-[0.18em] text-emerald-200">
-                Neural Kernel
-              </div>
-              <div
-                className={`relative z-10 aspect-square h-[36vh] min-h-[11rem] max-h-[21rem] transition-all duration-700 ${isSystemActive ? 'opacity-100 scale-100' : 'opacity-80 scale-95 grayscale'}`}
+                {isVideoOn ? <RiSwapBoxLine /> : <RiCameraLine />}
+                {isVideoOn ? 'Switch feed' : 'Start vision'}
+              </button>
+              <button
+                onClick={toggleSource}
+                disabled={!isSystemActive || !isVideoOn}
+                className="flex items-center justify-center gap-2 border border-emerald-300/25 bg-emerald-300/12 px-3 py-2 text-[10px] font-black uppercase tracking-[0.16em] text-emerald-100 transition hover:bg-emerald-300 hover:text-black disabled:cursor-not-allowed disabled:opacity-35"
               >
-                <Sphere />
-              </div>
-            </div>
-
-            <div className="col-span-2 flex min-h-0 flex-col gap-2">
-              {agentStages.map((stage) => (
-                <div key={stage.label} className="border border-white/10 bg-white/[0.03] p-3">
-                  <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">
-                    {stage.label}
-                  </p>
-                  <p className={`mt-2 text-lg font-black uppercase ${stage.tone}`}>{stage.value}</p>
-                </div>
-              ))}
-              <div className="min-h-0 flex-1 border border-white/10 bg-black/30 p-3">
-                <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">
-                  Command Intent
-                </p>
-                <p className="mt-2 text-xs leading-relaxed text-zinc-300">
-                  Local-first control layer with chat, voice, optics, macros, notes, and device
-                  uplink in one Nexus console.
-                </p>
-              </div>
+                <RiComputerLine />
+                Swap source
+              </button>
             </div>
           </div>
 
-          <form
-            onSubmit={submitTextCommand}
-            className="mt-3 flex shrink-0 items-center gap-2 border border-emerald-300/15 bg-black/45 p-2"
-          >
-            <input
-              value={textCommand}
-              onChange={(event) => setTextCommand(event.target.value)}
-              placeholder="Type command, Nexus replies in voice..."
-              className="min-w-0 flex-1 bg-transparent px-2 py-2 text-xs font-semibold text-white outline-none placeholder:text-zinc-600"
-            />
-            <button
-              type="submit"
-              disabled={!textCommand.trim() || isSendingTextCommand}
-              className="grid h-10 w-10 shrink-0 place-items-center border border-emerald-300/25 bg-emerald-400/15 text-emerald-200 transition hover:bg-emerald-400 hover:text-black disabled:cursor-not-allowed disabled:opacity-35"
-              title="Send text command with voice response"
-            >
-              <RiSendPlane2Line size={18} />
-            </button>
-            {textCommandStatus && (
-              <span className="hidden max-w-[8rem] truncate text-[8px] font-black uppercase tracking-[0.18em] text-emerald-300/70 xl:block">
-                {textCommandStatus}
+          <div className={`${glassPanel} shrink-0 p-3`}>
+            <div className="flex items-center justify-between border-b border-white/10 pb-2">
+              <span className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-zinc-400">
+                <RiMusic2Line className="text-emerald-400" /> Current Media
               </span>
-            )}
-          </form>
-        </div>
+              <button
+                onClick={refreshMediaSessions}
+                className="grid h-6 w-6 place-items-center rounded-md border border-white/10 bg-black/35 text-zinc-500 transition hover:border-emerald-300/35 hover:text-emerald-200"
+                title="Refresh media sessions"
+              >
+                <RiRefreshLine size={13} />
+              </button>
+            </div>
 
-        <div
-          className={`lg:hidden absolute top-24 right-4 w-32 h-24 ${glassPanel} z-50 overflow-hidden ${isVideoOn ? 'block' : 'hidden'}`}
-        >
-          <video
-            ref={setMobileVideoRef}
-            className={`w-full h-full object-cover ${visionMode === 'camera' ? '-scale-x-100' : ''}`}
-            autoPlay
-            playsInline
-            muted
-          />
-        </div>
-
-        <div className="nexus-manual-control-rail z-50">
-          <div className="flex min-w-0 flex-col">
-            <span className="text-[9px] font-black uppercase tracking-[0.28em] text-emerald-300/70">
-              Manual Controls
-            </span>
-            <span className="mt-1 text-[8px] font-mono uppercase tracking-[0.18em] text-zinc-500">
-              Tactical override bus
-            </span>
-          </div>
-          <div className="flex min-w-0 items-center gap-2">
-            <button
-              onClick={onVisionClick}
-              className={`nexus-control-switch ${isVideoOn ? 'is-danger' : 'is-idle'}`}
-            >
-              <span className="nexus-control-icon">
-                {isVideoOn ? <RiSwapBoxLine size={17} /> : <RiCameraLine size={17} />}
-              </span>
-              <span>
-                <span className="block text-[10px]">Vision</span>
-                <span className="block text-[7px] opacity-55">
-                  {isVideoOn ? 'Switch feed' : 'Optics'}
-                </span>
-              </span>
-            </button>
-            <button
-              onClick={toggleSystem}
-              disabled={isSystemStarting}
-              className={`nexus-control-switch ${isSystemActive ? 'is-active' : isSystemStarting ? 'is-idle' : 'is-danger'}`}
-            >
-              <span className="nexus-control-icon">
-                <RiPhoneFill size={17} />
-              </span>
-              <span>
-                <span className="block text-[10px]">Core</span>
-                <span className="block text-[7px] opacity-55">
-                  {isSystemActive ? 'Online' : isSystemStarting ? 'Starting' : 'Standby'}
-                </span>
-              </span>
-            </button>
-            <button
-              onClick={toggleMic}
-              className={`nexus-control-switch ${isMicMuted ? 'is-danger' : 'is-active'}`}
-            >
-              <span className="nexus-control-icon">
-                {isMicMuted ? <RiMicOffLine size={17} /> : <RiMicLine size={17} />}
-              </span>
-              <span>
-                <span className="block text-[10px]">Voice</span>
-                <span className="block text-[7px] opacity-55">{isMicMuted ? 'Muted' : 'Live'}</span>
-              </span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div className="hidden lg:flex col-span-3 flex-col overflow-hidden h-full z-40">
-        <div className={`${glassPanel} h-full p-3 flex flex-col`}>
-          <div className="flex items-center justify-between border-b border-white/10 pb-2 mb-2">
-            <span className="text-[10px] font-bold tracking-widest text-zinc-400">
-              <RiTerminalBoxLine className="inline mr-1" /> TRANSCRIPT
-            </span>
-            <span className="text-[8px] font-mono text-emerald-500/50">LIVE-LOG</span>
-          </div>
-          <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-3 pr-2 scrollbar-small">
-            {chatHistory.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-zinc-700 gap-2 opacity-50">
-                <RiHistoryLine size={24} />
-                <span className="text-[9px] tracking-widest uppercase font-mono">
-                  No Data Stream
-                </span>
-              </div>
-            ) : (
-              chatHistory.map((msg, idx) => (
-                <div
-                  key={idx}
-                  className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
-                >
-                  <div
-                    className={`max-w-[95%] py-2 px-3 rounded-lg text-[11px] leading-relaxed border font-mono font-semibold ${msg.role === 'user' ? 'bg-emerald-900/20 border-emerald-500/20 text-emerald-100/90 rounded-br-none' : 'bg-zinc-900/50 border-white/5 text-zinc-400 rounded-bl-none'}`}
-                  >
-                    {msg.parts && msg.parts[0] ? msg.parts[0].text : msg.content}
+            {featuredMedia ? (
+              <div className="min-h-0 pt-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="grid h-12 w-12 shrink-0 place-items-center rounded-lg border border-emerald-300/20 bg-emerald-300/10 text-xl text-emerald-200">
+                    <RiMusic2Line />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-black text-white" title={featuredMedia.title}>
+                      {featuredMedia.title}
+                    </p>
+                    <p className="mt-1 truncate text-[10px] font-semibold text-zinc-500">
+                      {featuredMedia.artist || featuredMedia.source || 'System media'}
+                    </p>
                   </div>
                 </div>
-              ))
+                <div className="mt-3 flex items-center gap-2 text-[8px] font-mono text-zinc-500">
+                  <span>{formatMediaTime(featuredMedia.positionMs)}</span>
+                  <div className="h-1 flex-1 overflow-hidden rounded-full bg-black/55">
+                    <div
+                      className="h-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]"
+                      style={{ width: `${featuredProgress}%` }}
+                    />
+                  </div>
+                  <span>{formatMediaTime(featuredMedia.durationMs)}</span>
+                </div>
+                <div className="mt-3 grid grid-cols-4 gap-2">
+                  <button
+                    onClick={() => handleMediaControl(featuredMedia, 'previous')}
+                    className="grid h-8 place-items-center border border-white/10 bg-black/35 text-zinc-300 transition hover:border-emerald-300/35 hover:text-emerald-200"
+                    title="Previous"
+                  >
+                    <RiSkipBackFill />
+                  </button>
+                  <button
+                    onClick={() => handleMediaControl(featuredMedia, 'toggle')}
+                    className="grid h-8 place-items-center border border-emerald-300/25 bg-emerald-300/15 text-emerald-100 transition hover:bg-emerald-300 hover:text-black"
+                    title="Play or pause"
+                  >
+                    {featuredMedia.status === 'Playing' ? <RiPauseFill /> : <RiPlayFill />}
+                  </button>
+                  <button
+                    onClick={() => handleMediaControl(featuredMedia, 'next')}
+                    className="grid h-8 place-items-center border border-white/10 bg-black/35 text-zinc-300 transition hover:border-emerald-300/35 hover:text-emerald-200"
+                    title="Next"
+                  >
+                    <RiSkipForwardFill />
+                  </button>
+                  <span className="grid h-8 place-items-center border border-white/10 bg-black/35 text-[8px] font-black uppercase tracking-[0.12em] text-zinc-500">
+                    {featuredMedia.status}
+                  </span>
+                </div>
+                {prioritizedMediaSessions.length > 1 ? (
+                  <div className="mt-2 flex gap-1 overflow-x-auto scrollbar-small">
+                    {prioritizedMediaSessions.slice(1, 5).map((session) => (
+                      <button
+                        key={`${session.source}-${session.index}`}
+                        onClick={() => handleMediaControl(session, 'toggle')}
+                        className="max-w-[7rem] shrink-0 truncate border border-white/10 bg-white/[0.03] px-2 py-1.5 text-left text-[9px] font-semibold text-zinc-500 transition hover:border-emerald-300/25 hover:text-zinc-200"
+                        title={`${session.title} - ${session.status}`}
+                      >
+                        {session.title}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="grid min-h-[9rem] place-items-center text-center">
+                <div className="space-y-2 text-zinc-700">
+                  <RiMusic2Line className="mx-auto text-2xl" />
+                  <p className="text-[9px] font-black uppercase tracking-[0.22em]">{mediaStatus}</p>
+                </div>
+              </div>
             )}
           </div>
-        </div>
+
+          <div className={`${glassPanel} shrink-0 p-3`}>
+            <div className="flex items-center justify-between border-b border-white/10 pb-2">
+              <span className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-zinc-400">
+                <RiPulseLine className={isSystemActive ? 'animate-pulse text-emerald-500' : ''} />
+                Network Telemetry
+              </span>
+              <span
+                className={`rounded-md border px-2 py-1 text-[8px] font-black uppercase tracking-[0.14em] ${
+                  isSystemActive
+                    ? 'border-emerald-300/25 bg-emerald-300/10 text-emerald-300'
+                    : 'border-white/10 bg-black/30 text-zinc-500'
+                }`}
+              >
+                {isSystemActive ? 'Secure uplink' : 'Standby'}
+              </span>
+            </div>
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              <div className="border border-white/5 bg-black/25 p-2">
+                <span className="text-[7px] font-mono tracking-[0.18em] text-zinc-500">LINKS</span>
+                <span className="mt-1 flex items-center gap-1.5 text-[11px] font-bold text-emerald-50 font-mono">
+                  <RiWifiLine className={stats ? 'text-emerald-400' : 'text-zinc-600'} />
+                  {stats ? liveNetwork.activeInterfaces : '--'}
+                </span>
+              </div>
+              <div className="border border-white/5 bg-black/25 p-2">
+                <span className="text-[7px] font-mono tracking-[0.18em] text-zinc-500">RX</span>
+                <span className="mt-1 block text-[11px] font-bold text-emerald-50 font-mono">
+                  {stats ? formatBytesPerSecond(liveNetwork.rxBytesPerSecond) : '--'}
+                </span>
+              </div>
+              <div className="border border-white/5 bg-black/25 p-2">
+                <span className="text-[7px] font-mono tracking-[0.18em] text-zinc-500">TX</span>
+                <span className="mt-1 flex items-center gap-1.5 text-[11px] font-bold text-emerald-50 font-mono">
+                  {stats ? formatBytesPerSecond(liveNetwork.txBytesPerSecond) : '--'}
+                  <RiEarthLine className={stats ? 'text-cyan-400' : 'text-zinc-600'} />
+                </span>
+              </div>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <div className="flex items-center gap-2">
+                <span className="w-5 text-[7px] font-mono text-zinc-500">TX</span>
+                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-black/60">
+                  <div
+                    className="h-full bg-emerald-500 shadow-[0_0_8px_#10b981] transition-all duration-300 ease-out"
+                    style={{ width: `${stats ? txRatio : 0}%` }}
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-5 text-[7px] font-mono text-zinc-500">RX</span>
+                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-black/60">
+                  <div
+                    className="h-full bg-cyan-500 shadow-[0_0_8px_#06b6d4] transition-all duration-300 ease-out delay-75"
+                    style={{ width: `${stats ? rxRatio : 0}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className={`${glassPanel} min-h-0 flex-1 p-3`}>
+            <div className="flex items-center justify-between border-b border-white/10 pb-2">
+              <span className="text-[10px] font-black uppercase tracking-[0.18em] text-zinc-400">
+                <RiLayoutGridLine className="mr-1 inline" /> System Snapshot
+              </span>
+              <span className="text-[8px] font-mono uppercase tracking-[0.16em] text-zinc-500">
+                Live sensors
+              </span>
+            </div>
+            <div className="mt-3 grid h-full min-h-0 grid-cols-2 gap-2">
+              {systemMetrics.map((m, i) => (
+                <div
+                  key={i}
+                  className={`group relative flex flex-col justify-between overflow-hidden border border-white/5 bg-linear-to-br ${m.bgGradient} p-2 transition-all duration-300 hover:border-white/10`}
+                >
+                  <div
+                    className={`pointer-events-none absolute inset-0 ${m.pattern} opacity-30 transition-opacity duration-500 group-hover:opacity-60`}
+                  />
+                  <div
+                    className={`pointer-events-none absolute -bottom-8 -right-8 opacity-[0.03] transition-all duration-500 group-hover:scale-110 group-hover:opacity-[0.08] ${m.colorClass}`}
+                  >
+                    {m.bgIcon}
+                  </div>
+                  <div
+                    className={`pointer-events-none absolute left-0 top-0 h-px w-full bg-linear-to-r from-transparent ${m.glowClass} to-transparent opacity-0 transition-opacity duration-500 group-hover:opacity-100`}
+                  />
+
+                  <div className="relative z-10 flex items-start justify-between text-zinc-500">
+                    <span className={`text-base ${m.colorClass} opacity-70 transition-opacity group-hover:opacity-100`}>
+                      {m.icon}
+                    </span>
+                    <span className="text-[8px] font-mono uppercase tracking-widest text-zinc-300 opacity-70 transition-opacity group-hover:opacity-100">
+                      {m.label}
+                    </span>
+                  </div>
+
+                  <div className="relative z-10 mt-2 flex min-w-0 flex-col gap-1">
+                    <span
+                      className="max-w-full truncate text-right font-mono text-[15px] font-black tracking-[0.08em] text-white drop-shadow-md"
+                      title={String(m.val)}
+                    >
+                      {m.val}
+                    </span>
+                    {'detail' in m && m.detail ? (
+                      <span className="max-w-full truncate text-right text-[7px] font-black uppercase tracking-[0.16em] text-zinc-500">
+                        {m.detail}
+                      </span>
+                    ) : null}
+
+                    {!m.hideBar ? (
+                      <div className="h-1 overflow-hidden rounded-full border border-white/5 bg-black/40 backdrop-blur-sm">
+                        <div
+                          className={`h-full ${m.bgClass} ${m.shadowClass} transition-all duration-700 ease-out`}
+                          style={{ width: `${m.raw}%` }}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </aside>
+
+        <section className="col-span-12 flex min-h-0 flex-col gap-3 xl:col-span-6">
+          <div className={`${glassPanel} flex min-h-0 flex-1 flex-col p-4`}>
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-3">
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-[0.22em] text-emerald-300">
+                  Agent Core
+                </span>
+                <p className="mt-2 text-sm font-semibold leading-relaxed text-zinc-400">
+                  One surface for live voice, optics, device actions, and text-to-voice command flow.
+                </p>
+              </div>
+              <span className="rounded-md border border-white/10 bg-black/35 px-3 py-1.5 text-[8px] font-black uppercase tracking-[0.18em] text-zinc-500">
+                {isSystemStarting ? 'Starting low-latency link' : runtimeRibbonLabel}
+              </span>
+            </div>
+
+            <div className="grid min-h-0 flex-1 gap-3 pt-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(220px,0.78fr)]">
+              <div className="relative flex min-h-[20rem] items-center justify-center overflow-hidden border border-emerald-300/15 bg-black/35">
+                <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(16,185,129,0.08)_1px,transparent_1px),linear-gradient(rgba(16,185,129,0.08)_1px,transparent_1px)] bg-[size:24px_24px]" />
+                <div className="absolute inset-x-0 top-0 h-16 bg-linear-to-b from-emerald-300/10 to-transparent" />
+                <div className="absolute bottom-3 left-3 z-10 border border-emerald-300/20 bg-black/70 px-2 py-1 text-[8px] font-black uppercase tracking-[0.18em] text-emerald-200">
+                  Neural Kernel
+                </div>
+                <div
+                  className={`relative z-10 aspect-square h-[38vh] min-h-[12rem] max-h-[22rem] transition-all duration-700 ${
+                    isSystemActive ? 'scale-100 opacity-100' : 'scale-95 opacity-80 grayscale'
+                  }`}
+                >
+                  <Sphere />
+                </div>
+              </div>
+
+              <div className="grid min-h-0 gap-3 xl:grid-rows-[repeat(3,minmax(0,1fr))_auto]">
+                {agentStages.map((stage) => (
+                  <div key={stage.label} className="border border-white/10 bg-white/[0.03] p-3">
+                    <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">
+                      {stage.label}
+                    </p>
+                    <p className={`mt-2 text-lg font-black uppercase ${stage.tone}`}>{stage.value}</p>
+                  </div>
+                ))}
+
+                <div className="border border-white/10 bg-black/30 p-3">
+                  <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">
+                    Command Intent
+                  </p>
+                  <p className="mt-2 text-xs leading-relaxed text-zinc-300">
+                    Type once, get a spoken response back. Use the switches below to bring optics,
+                    core runtime, and live voice online without leaving the dashboard.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto]">
+            <form
+              onSubmit={submitTextCommand}
+              className={`${glassPanel} flex min-h-[7.5rem] flex-col justify-between p-3`}
+            >
+              <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-2">
+                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400">
+                  Text Command
+                </span>
+                <span className="text-[8px] font-black uppercase tracking-[0.16em] text-emerald-300/70">
+                  Voice reply queue
+                </span>
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <input
+                  value={textCommand}
+                  onChange={(event) => setTextCommand(event.target.value)}
+                  placeholder="Type command, Nexus replies in voice..."
+                  className="min-w-0 flex-1 bg-transparent px-2 py-2 text-sm font-semibold text-white outline-none placeholder:text-zinc-600"
+                />
+                <button
+                  type="submit"
+                  disabled={!textCommand.trim() || isSendingTextCommand}
+                  className="grid h-11 w-11 shrink-0 place-items-center border border-emerald-300/25 bg-emerald-400/15 text-emerald-200 transition hover:bg-emerald-400 hover:text-black disabled:cursor-not-allowed disabled:opacity-35"
+                  title="Send text command with voice response"
+                >
+                  <RiSendPlane2Line size={18} />
+                </button>
+              </div>
+              <div className="mt-2 min-h-[1rem] text-[9px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+                {textCommandStatus || 'Low-latency text prompt path is ready.'}
+              </div>
+            </form>
+
+            <div className="nexus-manual-control-rail z-20 min-w-0 xl:min-w-[22rem]">
+              <div className="flex min-w-0 flex-col">
+                <span className="text-[9px] font-black uppercase tracking-[0.28em] text-emerald-300/70">
+                  Manual Controls
+                </span>
+                <span className="mt-1 text-[8px] font-mono uppercase tracking-[0.18em] text-zinc-500">
+                  Runtime override bus
+                </span>
+              </div>
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <button
+                  onClick={onVisionClick}
+                  className={`nexus-control-switch ${isVideoOn ? 'is-danger' : 'is-idle'}`}
+                >
+                  <span className="nexus-control-icon">
+                    {isVideoOn ? <RiSwapBoxLine size={17} /> : <RiCameraLine size={17} />}
+                  </span>
+                  <span>
+                    <span className="block text-[10px]">Vision</span>
+                    <span className="block text-[7px] opacity-55">
+                      {isVideoOn ? 'Switch feed' : 'Optics'}
+                    </span>
+                  </span>
+                </button>
+                <button
+                  onClick={toggleSystem}
+                  disabled={isSystemStarting}
+                  className={`nexus-control-switch ${
+                    isSystemActive ? 'is-active' : isSystemStarting ? 'is-idle' : 'is-danger'
+                  }`}
+                >
+                  <span className="nexus-control-icon">
+                    <RiPhoneFill size={17} />
+                  </span>
+                  <span>
+                    <span className="block text-[10px]">Core</span>
+                    <span className="block text-[7px] opacity-55">
+                      {isSystemActive ? 'Online' : isSystemStarting ? 'Starting' : 'Standby'}
+                    </span>
+                  </span>
+                </button>
+                <button
+                  onClick={toggleMic}
+                  className={`nexus-control-switch ${isMicMuted ? 'is-danger' : 'is-active'}`}
+                >
+                  <span className="nexus-control-icon">
+                    {isMicMuted ? <RiMicOffLine size={17} /> : <RiMicLine size={17} />}
+                  </span>
+                  <span>
+                    <span className="block text-[10px]">Voice</span>
+                    <span className="block text-[7px] opacity-55">
+                      {isMicMuted ? 'Muted' : 'Live'}
+                    </span>
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside className="col-span-12 flex min-h-0 flex-col gap-3 xl:col-span-3">
+          <div className={`${glassPanel} shrink-0 p-3`}>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">
+                  Live Session
+                </p>
+                <p className="mt-2 text-sm font-black uppercase text-zinc-100">{networkLabel}</p>
+              </div>
+              <span className="rounded-md border border-emerald-300/20 bg-emerald-300/10 px-2 py-1 text-[8px] font-black uppercase tracking-[0.16em] text-emerald-200">
+                {chatHistory.length} entries
+              </span>
+            </div>
+            <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">
+              The conversation rail updates continuously so the desktop state stays readable while
+              the agent runs.
+            </p>
+          </div>
+
+          <div className={`${glassPanel} min-h-0 flex-1 p-3 flex flex-col`}>
+            <div className="mb-2 flex items-center justify-between border-b border-white/10 pb-2">
+              <span className="text-[10px] font-black uppercase tracking-[0.18em] text-zinc-400">
+                <RiTerminalBoxLine className="mr-1 inline" /> Transcript
+              </span>
+              <span className="text-[8px] font-mono uppercase tracking-[0.16em] text-emerald-500/50">
+                Live log
+              </span>
+            </div>
+            <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto pr-2 scrollbar-small">
+              {chatHistory.length === 0 ? (
+                <div className="flex h-full flex-col items-center justify-center gap-2 text-zinc-700 opacity-50">
+                  <RiHistoryLine size={24} />
+                  <span className="text-[9px] font-mono uppercase tracking-widest">No data stream</span>
+                </div>
+              ) : (
+                chatHistory.map((msg, idx) => (
+                  <div
+                    key={idx}
+                    className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
+                  >
+                    <div
+                      className={`max-w-[95%] rounded-lg border px-3 py-2 font-mono text-[11px] font-semibold leading-relaxed ${
+                        msg.role === 'user'
+                          ? 'rounded-br-none border-emerald-500/20 bg-emerald-900/20 text-emerald-100/90'
+                          : 'rounded-bl-none border-white/5 bg-zinc-900/50 text-zinc-400'
+                      }`}
+                    >
+                      {msg.parts && msg.parts[0] ? msg.parts[0].text : msg.content}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </aside>
       </div>
     </div>
   )
