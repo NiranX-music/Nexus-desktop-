@@ -1,11 +1,12 @@
-import { useMemo, useState } from 'react'
-import { RiArrowRightUpLine, RiChatSmile3Line, RiGlobalLine, RiLayoutGridLine, RiSettings4Line, RiShieldFlashLine } from 'react-icons/ri'
+import { useEffect, useMemo, useState } from 'react'
+import { RiArrowRightUpLine, RiChatSmile3Line, RiEditLine, RiGlobalLine, RiLayoutGridLine, RiSettings4Line, RiShieldFlashLine } from 'react-icons/ri'
 import TitleBar from '@renderer/components/Titlebar'
 import type { TrialRuntimeProps, TrialTabKey } from './types'
 import TrialDashboard from './TrialDashboard'
 import TrialAiChat from './TrialAiChat'
 import TrialBrowser from './TrialBrowser'
 import TrialSettings from './TrialSettings'
+import WhiteboardView from '@renderer/views/Whiteboard'
 
 const tabs: Array<{
   id: TrialTabKey
@@ -16,6 +17,7 @@ const tabs: Array<{
   { id: 'overview', label: 'Overview', detail: 'Core command surface', icon: <RiLayoutGridLine /> },
   { id: 'chat', label: 'AI Chat', detail: 'Hosted NVIDIA trial chat', icon: <RiChatSmile3Line /> },
   { id: 'browser', label: 'Browser', detail: 'Voice and text control', icon: <RiGlobalLine /> },
+  { id: 'whiteboard', label: 'Whiteboard', detail: 'Handwritten solutions', icon: <RiEditLine /> },
   { id: 'settings', label: 'Settings', detail: 'Local storage and updates', icon: <RiSettings4Line /> }
 ]
 
@@ -29,6 +31,17 @@ const stateLabel = (props: TrialRuntimeProps) => {
 export default function TrialShell(props: TrialRuntimeProps) {
   const [activeTab, setActiveTab] = useState<TrialTabKey>('overview')
   const activeTabMeta = useMemo(() => tabs.find((tab) => tab.id === activeTab) || tabs[0], [activeTab])
+
+  useEffect(() => {
+    const handleNavigation = (event: Event) => {
+      const nextTab = (event as CustomEvent<{ trialTab?: TrialTabKey }>).detail?.trialTab
+      if (nextTab && tabs.some((tab) => tab.id === nextTab)) setActiveTab(nextTab)
+    }
+
+    window.addEventListener('nexus:navigate-tab', handleNavigation as EventListener)
+    return () =>
+      window.removeEventListener('nexus:navigate-tab', handleNavigation as EventListener)
+  }, [])
 
   return (
     <div className="flex h-screen flex-col bg-[#020507] text-zinc-100">
@@ -119,6 +132,7 @@ export default function TrialShell(props: TrialRuntimeProps) {
             <div className="h-full overflow-y-auto p-4 lg:p-5">
               {activeTab === 'overview' && <TrialDashboard {...props} />}
               {activeTab === 'chat' && <TrialAiChat />}
+              {activeTab === 'whiteboard' && <WhiteboardView />}
               {activeTab === 'browser' && (
                 <TrialBrowser
                   isSystemActive={props.isSystemActive}

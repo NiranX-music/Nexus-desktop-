@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
+import rehypeKatex from 'rehype-katex'
 import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
 import {
   RiStickyNoteLine,
   RiDeleteBinLine,
@@ -12,6 +14,8 @@ import {
   RiEditLine 
 } from 'react-icons/ri'
 import { deleteCloudData, listCloudData, saveCloudData } from '@renderer/services/cloud-data'
+import { normalizeMathMarkdown } from '@renderer/components/MarkdownMath'
+import 'katex/dist/katex.min.css'
 
 interface Note {
   filename: string
@@ -296,8 +300,12 @@ const NotesView = ({ glassPanel }: { glassPanel?: string }) => {
 
             <div className="flex-1 overflow-y-auto p-8 scrollbar-small bg-zinc-950/30">
               <div className="prose prose-invert prose-sm max-w-none text-zinc-300">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>
-                  {selectedNote.content}
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm, remarkMath]}
+                  rehypePlugins={[rehypeKatex]}
+                  components={MarkdownComponents}
+                >
+                  {normalizeMathMarkdown(selectedNote.content)}
                 </ReactMarkdown>
               </div>
             </div>

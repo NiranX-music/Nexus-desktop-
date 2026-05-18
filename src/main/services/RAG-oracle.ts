@@ -4,6 +4,8 @@ import path from 'path'
 import crypto from 'crypto'
 import { GoogleGenAI } from '@google/genai'
 import Groq from 'groq-sdk'
+import { embedWithNexusGemini } from './nexus-gemini-api'
+import type { GeminiEmbeddingTaskType } from './nexus-gemini-api'
 
 const getStateDir = () => path.join(app.getPath('userData'), 'nexus_scan_states')
 
@@ -54,6 +56,27 @@ const cosineSimilarity = (vecA: number[], vecB: number[]) => {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
+const createEmbeddings = async (
+  ai: GoogleGenAI | null,
+  contents: string[],
+  taskType: GeminiEmbeddingTaskType
+) => {
+  if (ai) {
+    const response: any = await ai.models.embedContent({
+      model: 'gemini-embedding-001',
+      contents: contents.length === 1 ? contents[0] : contents,
+      config: { taskType }
+    })
+
+    return (response.embeddings || []).map((embedding: any) => embedding.values || [])
+  }
+
+  return embedWithNexusGemini({
+    texts: contents,
+    taskType
+  })
+}
+
 export default function registerOracle({ ipcMain }: { ipcMain: IpcMain }) {
   ipcMain.handle('cancel-ingestion', () => {
     isCancelled = true
@@ -62,13 +85,10 @@ export default function registerOracle({ ipcMain }: { ipcMain: IpcMain }) {
 
   ipcMain.handle('ingest-codebase', async (event, { dirPath, geminiKey }) => {
     try {
-      if (!geminiKey) {
-        throw new Error('Missing Gemini API Key. Please configure it in the Command Center Vault.')
-      }
-
       const targetPath = path.normalize(dirPath.trim())
       isCancelled = false
-      const ai = new GoogleGenAI({ apiKey: geminiKey })
+      const localGeminiKey = String(geminiKey || '').trim()
+      const ai = localGeminiKey ? new GoogleGenAI({ apiKey: localGeminiKey }) : null
 
       const prevState = await loadState(targetPath)
       if (prevState) {
@@ -164,13 +184,13 @@ export default function registerOracle({ ipcMain }: { ipcMain: IpcMain }) {
         }
 
         try {
-          const response: any = await ai.models.embedContent({
-            model: 'gemini-embedding-001',
-            contents: validChunks.map((chunk) => `File: ${fileName}\n\n${chunk}`),
-            config: { taskType: 'RETRIEVAL_DOCUMENT' }
-          })
-          response.embeddings.forEach((emb: any, idx: number) => {
-            vectorDB.push({ filePath: fullPath, chunk: validChunks[idx], embedding: emb.values })
+          const embeddings = await createEmbeddings(
+            ai,
+            validChunks.map((chunk) => `File: ${fileName}\n\n${chunk}`),
+            'RETRIEVAL_DOCUMENT'
+          )
+          embeddings.forEach((embedding: number[], idx: number) => {
+            if (embedding.length) vectorDB.push({ filePath: fullPath, chunk: validChunks[idx], embedding })
           })
 
           processedFiles.add(fullPath)
@@ -204,19 +224,18 @@ export default function registerOracle({ ipcMain }: { ipcMain: IpcMain }) {
       if (vectorDB.length === 0)
         return { success: false, answer: 'Error: No files loaded into memory.' }
 
-      if (!geminiKey || !groqKey) {
-        throw new Error('Missing API Keys. Ensure both Gemini and Groq are configured in Settings.')
+      if (!groqKey) {
+        throw new Error('Missing Groq API Key. Configure Groq in Settings for Oracle answers.')
       }
 
-      const ai = new GoogleGenAI({ apiKey: geminiKey })
+      const localGeminiKey = String(geminiKey || '').trim()
+      const ai = localGeminiKey ? new GoogleGenAI({ apiKey: localGeminiKey }) : null
       const groq = new Groq({ apiKey: groqKey })
 
-      const queryResponse: any = await ai.models.embedContent({
-        model: 'gemini-embedding-001',
-        contents: query,
-        config: { taskType: 'RETRIEVAL_QUERY' }
-      })
-      const queryEmbedding = queryResponse.embeddings[0].values
+      const [queryEmbedding] = await createEmbeddings(ai, [query], 'RETRIEVAL_QUERY')
+      if (!queryEmbedding?.length) {
+        throw new Error('Gemini did not return an embedding for the Oracle query.')
+      }
 
       const rankedChunks = vectorDB
         .map((item) => ({ ...item, score: cosineSimilarity(queryEmbedding, item.embedding) }))

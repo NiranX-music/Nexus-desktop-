@@ -14,6 +14,7 @@ import fsSync from 'fs'
 
 import clipboardy from 'clipboardy'
 import Prism from 'prismjs'
+import { generateWithNexusGemini } from '../services/nexus-gemini-api'
 
 const loadLanguages = require('prismjs/components/')
 loadLanguages([
@@ -382,32 +383,38 @@ export default function registerScreenPeeler() {
           }
         }
 
-        if (!apiKey || apiKey.trim() === '') {
-          throw new Error('Missing Gemini API Key. Please update it in the Command Center Vault.')
-        }
-
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`,
+        const contents = [
           {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [
-                {
-                  parts: [
-                    {
-                      text: "Extract text/code. Output ONLY as JSON: {'language': 'javascript/python/etc', 'code': 'extracted text'}. No markdown blocks."
-                    },
-                    { inline_data: { mime_type: 'image/png', data: rawBase64 } }
-                  ]
-                }
-              ]
-            })
+            parts: [
+              {
+                text: "Extract text/code. Output ONLY as JSON: {'language': 'javascript/python/etc', 'code': 'extracted text'}. No markdown blocks."
+              },
+              { inline_data: { mime_type: 'image/png', data: rawBase64 } }
+            ]
           }
-        )
+        ]
 
-        const data = await response.json()
-        const aiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text
+        let aiResponse = ''
+        if (apiKey.trim()) {
+          const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ contents })
+            }
+          )
+
+          const data = await response.json()
+          aiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+        } else {
+          aiResponse = await generateWithNexusGemini({
+            model: 'gemini-2.5-flash-lite',
+            contents,
+            temperature: 0.2,
+            maxOutputTokens: 4096
+          })
+        }
 
         if (aiResponse) {
           try {

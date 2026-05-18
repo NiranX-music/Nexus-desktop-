@@ -15,7 +15,8 @@ import {
   RiChatSmile3Line,
   RiGlobalLine,
   RiLogoutBoxRLine,
-  RiPulseLine
+  RiPulseLine,
+  RiEditLine
 } from 'react-icons/ri'
 import { getSystemStatus } from '@renderer/services/system-info'
 import type { SystemStats } from '@renderer/services/system-info'
@@ -25,6 +26,7 @@ import { IS_TRIAL_BUILD, TRIAL_ALLOWED_TABS, TRIAL_LIMITATION_COPY } from '@rend
 
 import DashboardView from '../views/Dashboard'
 import type { AssistantVisualState, VisionMode } from '@renderer/IndexRoot'
+import type { RequestQueueItem, RequestRoutingMode } from '@renderer/hooks/useNexusRequestQueue'
 
 const AppsView = !IS_TRIAL_BUILD ? lazy(() => import('../views/APP')) : null
 const WorkFlowEditorView = !IS_TRIAL_BUILD ? lazy(() => import('../views/WorkFlowEditor')) : null
@@ -34,6 +36,7 @@ const SettingsView = lazy(() => import('../views/Settings'))
 const GalleryView = !IS_TRIAL_BUILD ? lazy(() => import('../views/Gallery')) : null
 const AiChatView = lazy(() => import('../views/AiChat'))
 const PhoneView = !IS_TRIAL_BUILD ? lazy(() => import('../views/Phone')) : null
+const WhiteboardView = lazy(() => import('../views/Whiteboard'))
 
 interface NexusProps {
   assistantVisualState: AssistantVisualState
@@ -48,6 +51,10 @@ interface NexusProps {
   stopVision: () => void
   activeStream: MediaStream | null
   sendTextCommand: (command: string) => Promise<void>
+  activeRequest: RequestQueueItem | null
+  requestQueue: RequestQueueItem[]
+  requestRoutingMode: RequestRoutingMode
+  setRequestRoutingMode: (mode: RequestRoutingMode) => void
   onLogout: () => void
   onUpgrade: () => void
   isTrialBuild: boolean
@@ -57,13 +64,14 @@ const glassPanel = 'nexus-glass-card'
 
 const fullNavTabs = [
   { id: 'DASHBOARD', label: 'Command', detail: 'Core overview', icon: <RiLayoutGridLine /> },
-  { id: 'AI CHAT', label: 'AI Chat', detail: 'NVIDIA Build', icon: <RiChatSmile3Line /> },
+  { id: 'AI CHAT', label: 'AI Chat', detail: 'Gemini Live', icon: <RiChatSmile3Line /> },
   {
     id: 'BROWSER CONTROL',
     label: 'Browser',
     detail: 'Voice + text',
     icon: <RiGlobalLine />
   },
+  { id: 'WHITEBOARD', label: 'Whiteboard', detail: 'Handwritten solutions', icon: <RiEditLine /> },
   { id: 'Macros', label: 'Macros', detail: 'Automation flow', icon: <RiBrainLine /> },
   { id: 'Apps', label: 'Apps', detail: 'Local tools', icon: <RiFolderOpenLine /> },
   { id: 'NOTES', label: 'Notes', detail: 'Vault memory', icon: <RiFolderOpenLine /> },
@@ -107,6 +115,17 @@ const Nexus = (props: NexusProps) => {
     if (navTabs.some((tab) => tab.id === activeTab)) return
     setActiveTab(navTabs[0]?.id || 'DASHBOARD')
   }, [activeTab, navTabs])
+
+  useEffect(() => {
+    const handleNavigation = (event: Event) => {
+      const nextTab = (event as CustomEvent<{ tab?: string }>).detail?.tab
+      if (nextTab && navTabs.some((tab) => tab.id === nextTab)) setActiveTab(nextTab)
+    }
+
+    window.addEventListener('nexus:navigate-tab', handleNavigation as EventListener)
+    return () =>
+      window.removeEventListener('nexus:navigate-tab', handleNavigation as EventListener)
+  }, [navTabs])
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000)
@@ -158,10 +177,6 @@ const Nexus = (props: NexusProps) => {
   }
 
   const activeNav = navTabs.find((tab) => tab.id === activeTab) ?? navTabs[0]
-  const activeNavIndex = Math.max(
-    0,
-    navTabs.findIndex((tab) => tab.id === activeNav.id)
-  )
   const batteryLabel = getBatteryLabel(stats)
   const batteryStatus = stats?.battery?.status ?? 'Power'
   const batteryTone =
@@ -195,100 +210,123 @@ const Nexus = (props: NexusProps) => {
       <div className="nexus-radar-grid absolute inset-0 opacity-45" />
       <div className="nexus-scanline" />
 
-      <div className="relative z-10 flex h-full min-h-0 p-2">
-        <main className="flex min-w-0 min-h-0 flex-1 flex-col gap-2">
-          <header className="nexus-command-bar nexus-top-command-bar">
-            <div className="nexus-header-main">
-              <div className="nexus-header-brand">
-                <div className="nexus-brand-core">
-                  <RiShieldFlashLine />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[9px] font-black uppercase tracking-[0.3em] text-emerald-300">
-                    Nexus Tech
-                  </p>
-                  <h1 className="mt-1 text-lg font-black uppercase tracking-[0.08em] text-white">
-                    Nexus AI
-                  </h1>
-                  {props.isTrialBuild && (
-                    <p className="mt-1 text-[9px] font-black uppercase tracking-[0.24em] text-amber-200">
-                      Trial Build
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <div className="nexus-header-title min-w-0">
-                <p className="text-[10px] font-black uppercase tracking-[0.3em] text-emerald-300/80">
-                  Desktop Control Surface
+      <div className="nexus-console-layout relative z-10 grid h-full min-h-0 grid-cols-[248px_minmax(0,1fr)] gap-2 p-2">
+        <aside className="nexus-left-console min-h-0">
+          <div className="nexus-left-brand">
+            <div className="nexus-brand-core nexus-brand-core-large">
+              <RiShieldFlashLine />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[9px] font-black uppercase tracking-[0.28em] text-emerald-300">
+                Nexus Tech
+              </p>
+              <h1 className="mt-1 text-xl font-black uppercase tracking-[0.06em] text-white">
+                Nexus AI
+              </h1>
+              {props.isTrialBuild && (
+                <p className="mt-1 text-[9px] font-black uppercase tracking-[0.22em] text-amber-200">
+                  Trial Build
                 </p>
-                <div className="nexus-header-route mt-1 flex min-w-0 flex-wrap items-center gap-2">
-                  <span className="nexus-header-route-index">
-                    {String(activeNavIndex + 1).padStart(2, '0')}
-                  </span>
-                  <h2 className="truncate text-2xl font-black uppercase text-white md:text-[1.75rem]">
-                    {activeNav.label}
-                  </h2>
-                  <span className="nexus-header-route-detail">
-                    {activeNav.detail}
-                  </span>
-                </div>
-              </div>
+              )}
+            </div>
+          </div>
 
-              <div className="nexus-header-status">
-                <span className={`nexus-status-pill ${assistantStateTone}`} title="Assistant state">
-                  <RiPulseLine /> {assistantStateLabel}
+          <div className="nexus-current-deck">
+            <p className="text-[8px] font-black uppercase tracking-[0.24em] text-zinc-500">
+              Current Deck
+            </p>
+            <h2 className="mt-3 truncate text-base font-black text-white">{activeNav.label}</h2>
+            <p className="mt-1 truncate text-[11px] font-bold text-emerald-200/70">
+              {activeNav.detail}
+            </p>
+          </div>
+
+          <nav className="nexus-side-nav scrollbar-small" aria-label="Nexus sections">
+            {navTabs.map((tab, index) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`nexus-side-nav-tile ${activeTab === tab.id ? 'is-active' : ''}`}
+                title={`${tab.label} - ${tab.detail}`}
+              >
+                <span className="nexus-side-nav-index">{String(index + 1).padStart(2, '0')}</span>
+                <span className="nexus-side-nav-icon">{tab.icon}</span>
+                <span className="nexus-side-nav-copy">
+                  <span>{tab.label}</span>
+                  <small>{tab.detail}</small>
                 </span>
-                <span
-                  className="nexus-status-pill text-emerald-300"
-                  title="Live network throughput"
-                >
-                  <RiWifiLine /> Link {networkLabel}
+              </button>
+            ))}
+          </nav>
+
+          <div className="nexus-left-footer">
+            <span className="nexus-left-footer-tile text-emerald-300">
+              <RiWifiLine />
+              <span>Linked</span>
+            </span>
+            <span className={`nexus-left-footer-tile ${batteryTone}`}>
+              <RiBatteryChargeLine />
+              <span>{batteryLabel}</span>
+            </span>
+          </div>
+        </aside>
+
+        <main className="flex min-w-0 min-h-0 flex-1 flex-col gap-2">
+          <header className="nexus-command-bar nexus-command-head">
+            <div className="nexus-header-title min-w-0">
+              <p className="text-[10px] font-black uppercase tracking-[0.3em] text-emerald-300">
+                Autonomous Desktop Agent
+              </p>
+              <div className="nexus-header-route mt-2 flex min-w-0 flex-wrap items-center gap-2">
+                <h2 className="truncate text-3xl font-black uppercase text-white md:text-[2rem]">
+                  {activeNav.label}
+                </h2>
+                <span className="nexus-header-route-detail">
+                  {activeNav.detail}
                 </span>
-                <span className={`nexus-status-pill ${batteryTone}`} title={batteryStatus}>
-                  <RiBatteryChargeLine /> {batteryLabel}
-                </span>
-                <span className="nexus-status-pill text-orange-100">
-                  {time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
-                {props.isTrialBuild ? (
-                  <button
-                    type="button"
-                    className="nexus-status-pill nexus-logout-button"
-                    onClick={props.onUpgrade}
-                    title="Unlock the full Nexus build"
-                  >
-                    <RiShieldFlashLine /> <span className="hidden sm:inline">Unlock Full</span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="nexus-status-pill nexus-logout-button"
-                    onClick={props.onLogout}
-                    title="Logout account"
-                  >
-                    <RiLogoutBoxRLine /> <span className="hidden sm:inline">Logout</span>
-                  </button>
-                )}
               </div>
             </div>
 
-            <nav className="nexus-header-nav scrollbar-small" aria-label="Nexus sections">
-              {navTabs.map((tab) => (
+            <div className="nexus-header-status">
+              <span className={`nexus-status-pill ${assistantStateTone}`} title="Assistant state">
+                <RiPulseLine /> {assistantStateLabel}
+              </span>
+              <span
+                className="nexus-status-pill text-emerald-300"
+                title="Live network throughput"
+              >
+                <RiWifiLine /> Link {networkLabel}
+              </span>
+              <span className={`nexus-status-pill ${batteryTone}`} title={batteryStatus}>
+                <RiBatteryChargeLine /> {batteryLabel}
+              </span>
+              <span className="nexus-status-pill text-orange-100">
+                {time.toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  second: '2-digit'
+                })}
+              </span>
+              {props.isTrialBuild ? (
                 <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`nexus-header-tab ${activeTab === tab.id ? 'is-active' : ''}`}
-                  title={`${tab.label} - ${tab.detail}`}
+                  type="button"
+                  className="nexus-status-pill nexus-logout-button"
+                  onClick={props.onUpgrade}
+                  title="Unlock the full Nexus build"
                 >
-                  <span className="nexus-header-tab-icon">{tab.icon}</span>
-                  <span className="nexus-header-tab-copy">
-                    <span>{tab.label}</span>
-                    <small>{tab.detail}</small>
-                  </span>
+                  <RiShieldFlashLine /> <span className="hidden sm:inline">Unlock Full</span>
                 </button>
-              ))}
-            </nav>
+              ) : (
+                <button
+                  type="button"
+                  className="nexus-status-pill nexus-logout-button"
+                  onClick={props.onLogout}
+                  title="Logout account"
+                >
+                  <RiLogoutBoxRLine /> <span className="hidden sm:inline">Logout</span>
+                </button>
+              )}
+            </div>
           </header>
 
           <section className="nexus-content-stage relative min-h-0 flex-1 overflow-hidden">
@@ -360,6 +398,7 @@ const Nexus = (props: NexusProps) => {
                     />
                   )}
                   {activeTab === 'AI CHAT' && <AiChatView />}
+                  {activeTab === 'WHITEBOARD' && <WhiteboardView />}
                   {activeTab === 'Apps' && AppsView && <AppsView />}
                   {activeTab === 'NOTES' && <NotesView glassPanel={glassPanel} />}
                   {activeTab === 'SETTINGS' && (

@@ -31,6 +31,7 @@ import registerDirLoader from './logic/dir-load'
 import registerFileScanner from './logic/file-launcher'
 import registerAppLauncher from './logic/app-launcher'
 import registerNotesHandlers from './logic/notes-manager'
+import registerWhiteboardDocs from './logic/whiteboard-docs'
 import registerWebAgent from './logic/web-agent'
 import registerGhostControl from './logic/ghost-control'
 import registerterminalControl from './logic/terminal-control'
@@ -117,7 +118,6 @@ const DEV_RENDERER_ORIGIN = (() => {
   }
 })()
 
-const NVIDIA_API_KEY_ENV_NAMES = ['NVIDIA_API_KEY', 'NVIDIA_BUILD_API_KEY', 'NVIDIA_NIM_API_KEY']
 const PLACEHOLDER_NVIDIA_KEY_RE =
   /^(your-|paste-|replace-|example|placeholder|nvapi[_-]?your|\$NVIDIA_API_KEY|\$\{NVIDIA_API_KEY\})/i
 
@@ -130,15 +130,6 @@ const normalizeNvidiaApiKey = (value = '') => {
 
   if (!candidate || PLACEHOLDER_NVIDIA_KEY_RE.test(candidate)) return ''
   return candidate
-}
-
-const getLaunchNvidiaApiKey = () => {
-  for (const name of NVIDIA_API_KEY_ENV_NAMES) {
-    const apiKey = normalizeNvidiaApiKey(process.env[name])
-    if (apiKey) return apiKey
-  }
-
-  return ''
 }
 
 const encryptSecureValue = (value = '') => {
@@ -208,22 +199,7 @@ const writeSecureKeysToDisk = ({
 }
 
 const seedLaunchNvidiaKey = () => {
-  const launchNvidiaKey = getLaunchNvidiaApiKey()
-  if (!launchNvidiaKey) return
-
-  if (!process.env.NVIDIA_API_KEY) {
-    process.env.NVIDIA_API_KEY = launchNvidiaKey
-  }
-
-  const existingKeys = readSecureKeysFromDisk()
-  if (normalizeNvidiaApiKey(existingKeys.nvidiaKey)) return
-
-  try {
-    writeSecureKeysToDisk({
-      ...existingKeys,
-      nvidiaKey: launchNvidiaKey
-    })
-  } catch {}
+  // Chat is API-gateway only. Provider keys stay on the Nexus AI API host.
 }
 
 const getUpdaterErrorMessage = (error: unknown) => {
@@ -718,11 +694,7 @@ function createWindow(): void {
   mainWindow.on('ready-to-show', () => {
     if (!mainWindow) return
 
-    if (shouldUsePersistentDock()) {
-      enterOverlayMode()
-      return
-    }
-
+    exitOverlayMode()
     mainWindow.show()
   })
 
@@ -1247,6 +1219,7 @@ app.whenReady().then(() => {
   registerGhostControl(ipcMain)
   registerWebAgent(ipcMain)
   registerNotesHandlers(ipcMain)
+  registerWhiteboardDocs({ ipcMain, app })
   registerAppLauncher(ipcMain)
   registerDirLoader(ipcMain)
   registerFileOpen(ipcMain)

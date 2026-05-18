@@ -14,11 +14,16 @@ import {
   getModelsForCategory,
   getNvidiaModelById,
   getStoredNvidiaModelDefaults,
-  NEXUS_AI_PROVIDER_MODE_STORAGE_KEY,
-  NVIDIA_API_KEY_STORAGE_KEY,
   NvidiaModelDefaults
 } from '@renderer/config/nvidia-models'
+import MarkdownMath from '@renderer/components/MarkdownMath'
 import { saveMessage } from '@renderer/services/nexus-ai-brain'
+import {
+  createWhiteboardPayload,
+  extractWhiteboardQuestion,
+  isWhiteboardCommand,
+  publishWhiteboardWrite
+} from '@renderer/services/whiteboard'
 
 type ChatRole = 'user' | 'assistant'
 
@@ -28,7 +33,7 @@ interface ChatMessage {
 }
 
 const defaultWelcome =
-  'Nexus AI is online. Pick a model and type a prompt. Default mode runs on the hosted Nexus API; you can switch to your own NVIDIA key in Settings.'
+  'Nexus AI is online. Pick a model and type a prompt. All chat traffic runs through the configured Nexus AI API gateway.'
 
 const systemPrompt = `You are Nexus, a precise AI chat assistant inside a Windows desktop app. Be helpful, concise, technical when useful, and keep a confident but warm tone. Security verification prompts are paused for these builds: do not ask the user to verify identity before coding or completing requested work.`
 
@@ -66,9 +71,6 @@ export default function AiChatView() {
   const [isSending, setIsSending] = useState(false)
   const [error, setError] = useState('')
   const [voiceReplies, setVoiceReplies] = useState(getInitialVoiceReplies)
-  const [providerMode, setProviderMode] = useState(
-    localStorage.getItem(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY) || 'nexus'
-  )
 
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -79,7 +81,6 @@ export default function AiChatView() {
     const storedDefaults = getStoredNvidiaModelDefaults()
     setDefaults(storedDefaults)
     setSelectedModel(storedDefaults.chat)
-    setProviderMode(localStorage.getItem(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY) || 'nexus')
     if (localStorage.getItem('nexus_nvidia_voice_replies') === null) {
       localStorage.setItem('nexus_nvidia_voice_replies', 'true')
     }
@@ -146,11 +147,8 @@ export default function AiChatView() {
     await saveMessage('user', prompt)
 
     try {
-      const useNexusServers = providerMode !== 'own-key'
-      const apiKey = useNexusServers ? '' : localStorage.getItem(NVIDIA_API_KEY_STORAGE_KEY) || ''
       const result = await window.electron.ipcRenderer.invoke('nvidia:chat-completion', {
-        apiKey,
-        useNexusServers,
+        useNexusServers: true,
         model: selectedModel,
         system: systemPrompt,
         messages: nextMessages
@@ -163,24 +161,29 @@ export default function AiChatView() {
       })
 
       if (!result?.success) {
-        throw new Error(result?.error || 'NVIDIA chat request failed.')
+        throw new Error(result?.error || 'Nexus AI API chat request failed.')
       }
 
       const response = result.content || 'No response content returned.'
       setMessages((current) => [...current, { role: 'assistant', content: response }])
       await saveMessage('nexus', response)
+      if (isWhiteboardCommand(prompt)) {
+        publishWhiteboardWrite(
+          createWhiteboardPayload(extractWhiteboardQuestion(prompt), response, 'chat')
+        )
+      }
       if (voiceReplies) speak(response)
     } catch (err: any) {
-      const message = err?.message || 'Unable to reach NVIDIA Build endpoint.'
+      const message = err?.message || 'Unable to reach the Nexus AI API.'
       setError(message)
       setMessages((current) => [
         ...current,
         {
           role: 'assistant',
-          content: `NVIDIA link failed: ${message}`
+          content: `Nexus AI API failed: ${message}`
         }
       ])
-      if (voiceReplies) speak(`NVIDIA chat failed. ${message}`)
+      if (voiceReplies) speak(`Nexus AI API chat failed. ${message}`)
     } finally {
       setIsSending(false)
     }
@@ -202,7 +205,7 @@ export default function AiChatView() {
               <div>
                 <h2 className="text-lg font-black tracking-[0.16em] uppercase">AI Chat</h2>
                 <p className="text-[10px] font-mono tracking-widest text-emerald-500/70">
-                  NVIDIA BUILD NIM
+                  NEXUS AI API
                 </p>
               </div>
             </div>
@@ -245,7 +248,7 @@ export default function AiChatView() {
               ))}
             </select>
             <p className="min-h-14 rounded-lg border border-white/5 bg-black/40 p-3 text-[11px] leading-relaxed text-zinc-400">
-              {activeModel?.description || 'Live NVIDIA model selected.'}
+              {activeModel?.description || 'Live Nexus AI API model selected.'}
             </p>
           </div>
 
@@ -281,13 +284,12 @@ export default function AiChatView() {
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-5 py-4">
             <div>
               <p className="flex items-center gap-2 text-[10px] font-mono font-bold uppercase tracking-[0.24em] text-emerald-400">
-                <RiBrainLine />{' '}
-                {providerMode === 'own-key' ? 'Personal NVIDIA Key' : 'Hosted Nexus API'}
+                <RiBrainLine /> Nexus AI API Gateway
               </p>
               <h3 className="mt-1 text-base font-bold text-white">
                 {selectedModel}
                 <span className="ml-3 rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-[10px] uppercase tracking-widest text-emerald-200">
-                  {providerMode === 'own-key' ? 'Own API' : 'Nexus API'}
+                  API Only
                 </span>
               </h3>
               <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
@@ -310,13 +312,13 @@ export default function AiChatView() {
                 className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
               >
                 <div
-                  className={`max-w-[78%] rounded-xl border px-4 py-3 text-[13px] leading-relaxed whitespace-pre-wrap ${
+                  className={`max-w-[78%] rounded-xl border px-4 py-3 text-[13px] leading-relaxed ${
                     message.role === 'user'
                       ? 'rounded-br-sm border-emerald-500/25 bg-emerald-500/10 text-emerald-50'
                       : 'rounded-bl-sm border-white/10 bg-black/45 text-zinc-200'
                   }`}
                 >
-                  {message.content}
+                  <MarkdownMath content={message.content} />
                   {message.role === 'assistant' && message.content !== defaultWelcome && (
                     <button
                       onClick={() => speak(message.content)}
@@ -332,7 +334,7 @@ export default function AiChatView() {
             {isSending && (
               <div className="flex justify-start">
                 <div className="rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-xs font-mono text-emerald-300">
-                  NVIDIA model is thinking...
+                  Nexus AI API is thinking...
                 </div>
               </div>
             )}
@@ -367,7 +369,7 @@ export default function AiChatView() {
                     event.currentTarget.form?.requestSubmit()
                   }
                 }}
-                placeholder="Ask Nexus through NVIDIA Build..."
+                placeholder="Ask Nexus through the Nexus AI API..."
                 className="max-h-40 min-h-12 flex-1 resize-none bg-transparent px-2 py-2 text-sm text-white outline-none placeholder:text-zinc-600"
               />
               <button

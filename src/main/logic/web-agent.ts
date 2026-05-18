@@ -23,11 +23,26 @@ interface BrowserSource {
 }
 
 interface ServerlessBrowserPlan {
-  kind: 'search' | 'read'
+  kind:
+    | 'search'
+    | 'read'
+    | 'open'
+    | 'type'
+    | 'press'
+    | 'click'
+    | 'scroll'
+    | 'media'
+    | 'account'
+    | 'reload'
+    | 'back'
+    | 'forward'
   value: string
+  direction?: 'up' | 'down'
+  amount?: number
 }
 
 let serverlessBrowser: any = null
+let serverlessPage: any = null
 let serverlessBrowserCloseTimer: NodeJS.Timeout | null = null
 
 const SERVERLESS_BROWSER_IDLE_MS = 90_000
@@ -42,6 +57,57 @@ const USER_BOOKMARKS: Record<string, string> = {
   chatgpt: 'https://chat.openai.com',
   claude: 'https://claude.ai',
   linkedin: 'https://linkedin.com'
+}
+
+const ACCOUNT_TARGETS: Record<string, string> = {
+  amazon: 'https://www.amazon.in/ap/signin',
+  chatgpt: 'https://chat.openai.com/auth/login',
+  claude: 'https://claude.ai/login',
+  discord: 'https://discord.com/login',
+  facebook: 'https://www.facebook.com/login',
+  github: 'https://github.com/login',
+  gmail: 'https://accounts.google.com/',
+  google: 'https://accounts.google.com/',
+  instagram: 'https://www.instagram.com/accounts/login/',
+  linkedin: 'https://www.linkedin.com/login',
+  microsoft: 'https://login.live.com/',
+  netflix: 'https://www.netflix.com/login',
+  outlook: 'https://login.live.com/',
+  reddit: 'https://www.reddit.com/login/',
+  spotify: 'https://accounts.spotify.com/login',
+  twitter: 'https://twitter.com/i/flow/login',
+  vercel: 'https://vercel.com/login',
+  x: 'https://x.com/i/flow/login',
+  youtube: 'https://accounts.google.com/'
+}
+
+const SERVERLESS_KEY_MAP: Record<string, string> = {
+  enter: 'Enter',
+  return: 'Enter',
+  tab: 'Tab',
+  space: 'Space',
+  escape: 'Escape',
+  esc: 'Escape',
+  backspace: 'Backspace',
+  delete: 'Delete',
+  up: 'ArrowUp',
+  down: 'ArrowDown',
+  left: 'ArrowLeft',
+  right: 'ArrowRight',
+  pageup: 'PageUp',
+  pagedown: 'PageDown',
+  home: 'Home',
+  end: 'End'
+}
+
+const SERVERLESS_MODIFIER_MAP: Record<string, string> = {
+  control: 'Control',
+  ctrl: 'Control',
+  command: 'Meta',
+  cmd: 'Meta',
+  win: 'Meta',
+  shift: 'Shift',
+  alt: 'Alt'
 }
 
 const BROWSER_KEY_MAP: Record<string, Key> = {
@@ -432,6 +498,73 @@ const createExtractiveSummary = (text: string, maxLength = SERVERLESS_SUMMARY_LI
 
 const parseServerlessBrowserPrompt = (prompt: string): ServerlessBrowserPlan => {
   const command = prompt.trim()
+  const lower = command.toLowerCase()
+
+  if (/^(?:reload|refresh)$/i.test(command)) {
+    return { kind: 'reload', value: 'current page' }
+  }
+
+  if (/^(?:back|go back)$/i.test(command)) {
+    return { kind: 'back', value: 'browser history' }
+  }
+
+  if (/^(?:forward|go forward)$/i.test(command)) {
+    return { kind: 'forward', value: 'browser history' }
+  }
+
+  const mediaMatch = command.match(
+    /^(?:(?:media|video|audio|song|track)\s+)?(play|pause|resume|toggle|next|previous|prev)(?:\s+(?:media|video|audio|song|track))?$/i
+  )
+  if (mediaMatch) {
+    const raw = mediaMatch[1].toLowerCase()
+    return {
+      kind: 'media',
+      value: raw === 'resume' ? 'play' : raw === 'prev' ? 'previous' : raw
+    }
+  }
+
+  const accountMatch =
+    command.match(
+      /^(?:add|connect|open|create)\s+(?:my\s+)?(?:(.+?)\s+)?accounts?(?:\s+(?:on|for|to)\s+(.+))?$/i
+    ) || command.match(/^(?:login|log in|sign in|signin)\s+(?:to|into|on)\s+(.+)$/i)
+  if (accountMatch) {
+    const target = (accountMatch[2] || accountMatch[1] || 'google').trim()
+    return { kind: 'account', value: target }
+  }
+
+  const typeMatch = command.match(/^(?:type|write|input|paste)\s+(.+)$/i)
+  if (typeMatch) {
+    return { kind: 'type', value: typeMatch[1].replace(/^["']|["']$/g, '').trim() }
+  }
+
+  const pressMatch = command.match(/^(?:press|hit|key)\s+(.+)$/i)
+  if (pressMatch) {
+    return { kind: 'press', value: pressMatch[1].trim() }
+  }
+
+  const clickMatch = command.match(/^(?:click|tap|select|choose)(?:\s+(.+))?$/i)
+  if (clickMatch) {
+    return { kind: 'click', value: (clickMatch[1] || 'focused element').trim() }
+  }
+
+  const scrollMatch = command.match(/^scroll\s+(up|down)(?:\s+(\d+))?$/i)
+  if (scrollMatch) {
+    return {
+      kind: 'scroll',
+      value: `${scrollMatch[1].toLowerCase()} ${scrollMatch[2] || 620}`,
+      direction: scrollMatch[1].toLowerCase() as 'up' | 'down',
+      amount: Number(scrollMatch[2] || 620)
+    }
+  }
+
+  const openMatch = command.match(/^(?:open|go to|visit)\s+(.+)$/i)
+  if (openMatch) {
+    const target = openMatch[1].trim()
+    return looksLikeUrlTarget(target) || getSmartUrl(target) || lower.startsWith('open ')
+      ? { kind: 'open', value: target }
+      : { kind: 'search', value: target }
+  }
+
   const searchMatch = command.match(
     /^(?:search|google|look up|find|research|web search)\s+(?:for\s+)?(.+)$/i
   )
@@ -459,6 +592,7 @@ const scheduleServerlessBrowserClose = () => {
   serverlessBrowserCloseTimer = setTimeout(async () => {
     const browser = serverlessBrowser
     serverlessBrowser = null
+    serverlessPage = null
     serverlessBrowserCloseTimer = null
     if (browser) await browser.close().catch(() => undefined)
   }, SERVERLESS_BROWSER_IDLE_MS)
@@ -479,9 +613,11 @@ const getServerlessBrowser = async () => {
       '--disable-default-apps',
       '--disable-extensions',
       '--disable-sync',
+      '--autoplay-policy=no-user-gesture-required',
       '--metrics-recording-only',
       '--no-default-browser-check',
-      '--no-first-run'
+      '--no-first-run',
+      '--window-size=1366,768'
     ]
   })
 
@@ -489,23 +625,50 @@ const getServerlessBrowser = async () => {
   return serverlessBrowser
 }
 
-const prepareServerlessPage = async (page: any) => {
+const prepareServerlessPage = async (page: any, options: { allowRichAssets?: boolean } = {}) => {
   page.setDefaultTimeout(18_000)
   page.setDefaultNavigationTimeout(18_000)
+  page.__nexusAllowRichAssets = Boolean(options.allowRichAssets)
   await page.setUserAgent(SERVERLESS_USER_AGENT)
   await page.setViewport({ width: 1366, height: 768, deviceScaleFactor: 1 })
   await page.setCacheEnabled(false)
+
+  if (page.__nexusRequestInterceptionReady) return
+
   await page.setRequestInterception(true)
 
   page.on('request', (request: any) => {
     const resourceType = request.resourceType()
-    if (['font', 'image', 'media', 'stylesheet'].includes(resourceType)) {
-      request.abort()
+    if (
+      !page.__nexusAllowRichAssets &&
+      ['font', 'image', 'media', 'stylesheet'].includes(resourceType)
+    ) {
+      request.abort().catch(() => undefined)
       return
     }
 
-    request.continue()
+    request.continue().catch(() => undefined)
   })
+
+  page.__nexusRequestInterceptionReady = true
+}
+
+const getServerlessPage = async (options: { allowRichAssets?: boolean } = {}) => {
+  const browser = await getServerlessBrowser()
+
+  if (serverlessPage && !serverlessPage.isClosed?.()) {
+    await prepareServerlessPage(serverlessPage, options)
+    return serverlessPage
+  }
+
+  const page = await browser.newPage()
+  serverlessPage = page
+  await prepareServerlessPage(page, options)
+  page.on('close', () => {
+    if (serverlessPage === page) serverlessPage = null
+  })
+
+  return page
 }
 
 const extractSources = (
@@ -636,9 +799,325 @@ const searchServerlessWeb = async (page: any, query: string) => {
   return sources
 }
 
+const resolveServerlessOpenUrl = (value: string) => {
+  const target = value.trim().replace(/^["']|["']$/g, '')
+  const smartRoute = getSmartUrl(target)
+  if (smartRoute) return normalizePublicHttpUrl(smartRoute.url)
+  if (looksLikeUrlTarget(target)) return normalizePublicHttpUrl(target)
+  return normalizePublicHttpUrl(getGoogleSearchUrl(target))
+}
+
+const resolveServerlessAccountTarget = (value: string) => {
+  const target = value
+    .toLowerCase()
+    .replace(/\b(my|the|an|a|account|accounts|login|sign in|signin)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  for (const [key, url] of Object.entries(ACCOUNT_TARGETS)) {
+    if (target.includes(key) || key.includes(target)) {
+      return { provider: key, url: normalizePublicHttpUrl(url) }
+    }
+  }
+
+  if (looksLikeUrlTarget(value)) {
+    return { provider: 'custom', url: normalizePublicHttpUrl(value) }
+  }
+
+  return { provider: 'google', url: normalizePublicHttpUrl(ACCOUNT_TARGETS.google) }
+}
+
+const snapshotServerlessPage = async (page: any) => {
+  const url = page.url()
+  const title = ((await page.title().catch(() => '')) || url || 'Serverless browser').trim()
+  let readableText = ''
+  let sources: BrowserSource[] = []
+
+  try {
+    const html = await page.content()
+    const $ = load(html)
+    $('script, style, noscript, svg, iframe, canvas').remove()
+    readableText = $('body').text().replace(/\s+/g, ' ').trim().slice(0, SERVERLESS_TEXT_LIMIT)
+    sources = extractSources($, url)
+  } catch {
+    readableText = ''
+    sources = []
+  }
+
+  return {
+    title,
+    url,
+    readableText,
+    sources,
+    summary: readableText
+      ? `${title}: ${createExtractiveSummary(readableText, 520)}`
+      : `${title} is open in Serverless Chromium.`
+  }
+}
+
+const normalizeServerlessKey = (token: string) => {
+  const lower = token.toLowerCase()
+  if (SERVERLESS_KEY_MAP[lower]) return SERVERLESS_KEY_MAP[lower]
+  if (/^f\d{1,2}$/i.test(token)) return token.toUpperCase()
+  if (token.length === 1) return token.toUpperCase()
+  return token
+}
+
+const pressServerlessShortcut = async (page: any, value: string) => {
+  const tokens = value
+    .toLowerCase()
+    .replace(/\s*\+\s*/g, '+')
+    .split(/[+\s]+/)
+    .map((token) => token.trim())
+    .filter(Boolean)
+
+  const modifiers: string[] = []
+  let key = ''
+
+  for (const token of tokens) {
+    const modifier = SERVERLESS_MODIFIER_MAP[token]
+    if (modifier) modifiers.push(modifier)
+    else key = normalizeServerlessKey(token)
+  }
+
+  if (!key) throw new Error(`Unsupported serverless key: ${value}`)
+
+  for (const modifier of modifiers) await page.keyboard.down(modifier)
+  try {
+    await page.keyboard.press(key)
+  } finally {
+    for (const modifier of modifiers.reverse()) await page.keyboard.up(modifier)
+  }
+}
+
+const focusServerlessInput = async (page: any) => {
+  const result = await page.evaluate(() => {
+    const doc = (globalThis as any).document
+    const win = (globalThis as any).window
+    if (!doc || !win) return { ok: false, detail: 'No page is loaded.' }
+
+    const isVisible = (element: any) => {
+      const rect = element.getBoundingClientRect()
+      const style = win.getComputedStyle(element)
+      return rect.width > 2 && rect.height > 2 && style.display !== 'none' && style.visibility !== 'hidden'
+    }
+
+    const getWritableState = (element: any) => {
+      const tag = String(element.tagName || '').toLowerCase()
+      const type = String(element.getAttribute?.('type') || '').toLowerCase()
+      if (element.disabled || element.readOnly) return { writable: false, blocked: false }
+      if (type === 'password') return { writable: false, blocked: true }
+      if (tag === 'textarea') return { writable: true, blocked: false }
+      if (tag === 'input') {
+        const accepted = ['', 'text', 'search', 'email', 'url', 'tel', 'number'].includes(type)
+        return { writable: accepted, blocked: false }
+      }
+      return {
+        writable: element.isContentEditable || element.getAttribute?.('role') === 'textbox',
+        blocked: false
+      }
+    }
+
+    const labelFor = (element: any) =>
+      (
+        element.getAttribute?.('aria-label') ||
+        element.getAttribute?.('placeholder') ||
+        element.getAttribute?.('name') ||
+        element.getAttribute?.('id') ||
+        element.textContent ||
+        element.tagName ||
+        'text field'
+      )
+        .replace(/\s+/g, ' ')
+        .trim()
+
+    const active = doc.activeElement
+    if (active && active !== doc.body && isVisible(active)) {
+      const state = getWritableState(active)
+      if (state.blocked) return { ok: false, detail: 'Focused field is a password field.' }
+      if (state.writable) {
+        active.focus()
+        return { ok: true, detail: labelFor(active) }
+      }
+    }
+
+    const elements = Array.from(
+      doc.querySelectorAll('textarea,input,[contenteditable="true"],[role="textbox"]')
+    ) as any[]
+    for (const element of elements) {
+      if (!isVisible(element)) continue
+      const state = getWritableState(element)
+      if (state.blocked) continue
+      if (!state.writable) continue
+      element.focus()
+      return { ok: true, detail: labelFor(element) }
+    }
+
+    return { ok: false, detail: 'No visible writable text box found.' }
+  })
+
+  if (!result.ok) throw new Error(result.detail)
+  return result.detail
+}
+
+const clickServerlessTarget = async (page: any, target: string) => {
+  const candidate = await page.evaluate((targetText: string) => {
+    const doc = (globalThis as any).document
+    const win = (globalThis as any).window
+    if (!doc || !win) return null
+
+    const needle = targetText.toLowerCase().replace(/\s+/g, ' ').trim()
+    const useFocused = !needle || needle === 'focused element' || needle === 'current'
+    const isVisible = (element: any) => {
+      const rect = element.getBoundingClientRect()
+      const style = win.getComputedStyle(element)
+      return rect.width > 3 && rect.height > 3 && style.display !== 'none' && style.visibility !== 'hidden'
+    }
+    const labelFor = (element: any) =>
+      [
+        element.innerText,
+        element.textContent,
+        element.getAttribute?.('aria-label'),
+        element.getAttribute?.('title'),
+        element.getAttribute?.('placeholder'),
+        element.getAttribute?.('value'),
+        element.getAttribute?.('alt')
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    const toCandidate = (element: any) => {
+      const rect = element.getBoundingClientRect()
+      return {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+        label: labelFor(element) || element.tagName || 'element'
+      }
+    }
+
+    const active = doc.activeElement
+    if (useFocused && active && active !== doc.body && isVisible(active)) return toCandidate(active)
+
+    const elements = Array.from(
+      doc.querySelectorAll(
+        'button,a,input,textarea,select,label,[role="button"],[role="link"],[aria-label],[title],[contenteditable="true"]'
+      )
+    ) as any[]
+
+    for (const element of elements) {
+      if (!isVisible(element)) continue
+      const label = labelFor(element).toLowerCase()
+      if (useFocused || label.includes(needle)) return toCandidate(element)
+    }
+
+    return null
+  }, target)
+
+  if (!candidate) throw new Error(`No visible serverless target matched "${target}".`)
+  await page.mouse.click(candidate.x, candidate.y)
+  await delay(650)
+  return candidate.label
+}
+
+const scrollServerlessPage = async (
+  page: any,
+  direction: 'up' | 'down' = 'down',
+  amount = 620
+) => {
+  return page.evaluate(
+    ({ direction, amount }: { direction: 'up' | 'down'; amount: number }) => {
+      const win = (globalThis as any).window
+      if (!win) return 0
+      win.scrollBy({ top: direction === 'up' ? -amount : amount, behavior: 'smooth' })
+      return Math.round(win.scrollY || 0)
+    },
+    { direction, amount }
+  )
+}
+
+const controlServerlessMedia = async (page: any, command: string) => {
+  const result = await page.evaluate(async (mediaCommand: string) => {
+    const doc = (globalThis as any).document
+    if (!doc) return { ok: false, detail: 'No page is loaded.' }
+
+    const labelFor = (element: any) =>
+      [
+        element.innerText,
+        element.textContent,
+        element.getAttribute?.('aria-label'),
+        element.getAttribute?.('title')
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+
+    const clickByLabel = (patterns: RegExp[]) => {
+      const elements = Array.from(doc.querySelectorAll('button,a,[role="button"],[aria-label]')) as any[]
+      for (const element of elements) {
+        const label = labelFor(element)
+        if (!patterns.some((pattern) => pattern.test(label))) continue
+        element.click()
+        return label || 'media button'
+      }
+      return ''
+    }
+
+    if (mediaCommand === 'next') {
+      const label = clickByLabel([/next/i, /skip/i])
+      return label
+        ? { ok: true, detail: `Clicked ${label}` }
+        : { ok: false, detail: 'No next media control was visible.' }
+    }
+
+    if (mediaCommand === 'previous') {
+      const label = clickByLabel([/previous/i, /prev/i, /back/i])
+      return label
+        ? { ok: true, detail: `Clicked ${label}` }
+        : { ok: false, detail: 'No previous media control was visible.' }
+    }
+
+    const media = Array.from(doc.querySelectorAll('video,audio')) as any[]
+    const target = media.find((item) => !item.paused) || media[0]
+
+    if (!target) {
+      const label = clickByLabel([
+        mediaCommand === 'pause' ? /pause/i : /play/i,
+        /play/i,
+        /pause/i
+      ])
+      return label
+        ? { ok: true, detail: `Clicked ${label}` }
+        : { ok: false, detail: 'No playable media element was found.' }
+    }
+
+    try {
+      if (mediaCommand === 'pause') target.pause()
+      else if (mediaCommand === 'play') await target.play()
+      else if (target.paused) await target.play()
+      else target.pause()
+
+      return {
+        ok: true,
+        detail: target.paused ? 'Media paused.' : 'Media playing.'
+      }
+    } catch (error: any) {
+      return { ok: false, detail: error?.message || 'Media control was blocked by the page.' }
+    }
+  }, command)
+
+  if (!result.ok && ['play', 'pause', 'toggle'].includes(command)) {
+    await page.keyboard.press('Space').catch(() => undefined)
+    return `${result.detail} Sent Space as a fallback media toggle.`
+  }
+
+  if (!result.ok) throw new Error(result.detail)
+  return result.detail
+}
+
 const runServerlessBrowserPrompt = async (prompt: string, scope: BrowserAccessScope) => {
   const actions: BrowserControlAction[] = []
-  let page: any = null
 
   if (!prompt) {
     return {
@@ -653,15 +1132,30 @@ const runServerlessBrowserPrompt = async (prompt: string, scope: BrowserAccessSc
 
   try {
     const plan = parseServerlessBrowserPrompt(prompt)
-    const browser = await getServerlessBrowser()
-    page = await browser.newPage()
-    await prepareServerlessPage(page)
+    const page = await getServerlessPage({
+      allowRichAssets: !['search', 'read'].includes(plan.kind)
+    })
 
     actions.push({
       action: `serverless_${plan.kind}`,
       detail: plan.value,
       ok: true
     })
+
+    const finishControlAction = async (summaryPrefix: string, includeReadableText = false) => {
+      const snapshot = await snapshotServerlessPage(page)
+      return {
+        success: true,
+        summary: `${summaryPrefix} Current page: ${snapshot.title}.`,
+        scope,
+        runtime: 'serverless-chromium',
+        actions,
+        sources: snapshot.sources,
+        readableText: includeReadableText ? snapshot.readableText : undefined,
+        url: snapshot.url,
+        title: snapshot.title
+      }
+    }
 
     if (plan.kind === 'read') {
       const pageResult = await readServerlessPage(page, plan.value)
@@ -678,6 +1172,82 @@ const runServerlessBrowserPrompt = async (prompt: string, scope: BrowserAccessSc
         url: pageResult.url,
         title: pageResult.title
       }
+    }
+
+    if (plan.kind === 'open') {
+      const url = resolveServerlessOpenUrl(plan.value)
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 22_000 })
+      await page.waitForSelector('body', { timeout: 5000 }).catch(() => undefined)
+      actions.push({ action: 'open_page', detail: url, ok: true })
+      return finishControlAction('Opened in the persistent serverless browser.', true)
+    }
+
+    if (plan.kind === 'account') {
+      const account = resolveServerlessAccountTarget(plan.value)
+      await page.goto(account.url, { waitUntil: 'domcontentloaded', timeout: 22_000 })
+      await page.waitForSelector('body', { timeout: 5000 }).catch(() => undefined)
+      actions.push({ action: 'account_page', detail: `${account.provider}: ${account.url}`, ok: true })
+      const snapshot = await snapshotServerlessPage(page)
+      return {
+        success: true,
+        summary: `Opened the ${account.provider} account page in Serverless Chromium. Credentials are not stored or auto-filled; use explicit text commands or the live bridge when you are ready.`,
+        scope,
+        runtime: 'serverless-chromium',
+        actions,
+        sources: snapshot.sources,
+        readableText: snapshot.readableText,
+        url: snapshot.url,
+        title: snapshot.title
+      }
+    }
+
+    if (plan.kind === 'type') {
+      const field = await focusServerlessInput(page)
+      await page.keyboard.type(plan.value, { delay: 8 })
+      actions.push({ action: 'type_text', detail: `Typed into ${field}`, ok: true })
+      return finishControlAction(`Typed into ${field} in Serverless Chromium.`)
+    }
+
+    if (plan.kind === 'press') {
+      await pressServerlessShortcut(page, plan.value)
+      actions.push({ action: 'press_key', detail: plan.value, ok: true })
+      return finishControlAction(`Pressed ${plan.value} in Serverless Chromium.`)
+    }
+
+    if (plan.kind === 'click') {
+      const label = await clickServerlessTarget(page, plan.value)
+      actions.push({ action: 'click_target', detail: label, ok: true })
+      return finishControlAction(`Clicked ${label} in Serverless Chromium.`, true)
+    }
+
+    if (plan.kind === 'scroll') {
+      const y = await scrollServerlessPage(page, plan.direction, plan.amount)
+      actions.push({ action: 'scroll_page', detail: `${plan.value}; y=${y}`, ok: true })
+      return finishControlAction(`Scrolled ${plan.direction || 'down'} in Serverless Chromium.`)
+    }
+
+    if (plan.kind === 'media') {
+      const detail = await controlServerlessMedia(page, plan.value)
+      actions.push({ action: 'media_control', detail, ok: true })
+      return finishControlAction(`Media command completed: ${detail}`)
+    }
+
+    if (plan.kind === 'reload') {
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 18_000 })
+      actions.push({ action: 'reload_page', detail: page.url(), ok: true })
+      return finishControlAction('Reloaded the serverless browser page.', true)
+    }
+
+    if (plan.kind === 'back') {
+      await page.goBack({ waitUntil: 'domcontentloaded', timeout: 18_000 }).catch(() => null)
+      actions.push({ action: 'history_back', detail: page.url(), ok: true })
+      return finishControlAction('Moved back in serverless browser history.', true)
+    }
+
+    if (plan.kind === 'forward') {
+      await page.goForward({ waitUntil: 'domcontentloaded', timeout: 18_000 }).catch(() => null)
+      actions.push({ action: 'history_forward', detail: page.url(), ok: true })
+      return finishControlAction('Moved forward in serverless browser history.', true)
     }
 
     const sources = await searchServerlessWeb(page, plan.value)
@@ -755,7 +1325,6 @@ const runServerlessBrowserPrompt = async (prompt: string, scope: BrowserAccessSc
       sources: []
     }
   } finally {
-    if (page) await page.close().catch(() => undefined)
     scheduleServerlessBrowserClose()
   }
 }

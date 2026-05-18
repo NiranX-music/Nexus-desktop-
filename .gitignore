@@ -1,6 +1,7 @@
 node_modules
 dist
 dist-fresh
+dist-trial
 out
 .vite/
 
@@ -22,3 +23,4 @@ eng.traineddata
 
 versions
 versions.json
+Setup files/

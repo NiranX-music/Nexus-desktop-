@@ -63,6 +63,7 @@ import AxiosInstance from '@renderer/config/AxiosInstance'
 import { getStoredNvidiaModelDefaults } from '@renderer/config/nvidia-models'
 import { SECURITY_VERIFICATIONS_PAUSED } from '@renderer/config/security-flags'
 import { runBrowserControlPrompt } from '@renderer/functions/browser-control-api'
+import { createWhiteboardPayload, publishWhiteboardWrite } from '@renderer/services/whiteboard'
 
 const MIC_CHUNK_TARGET_SAMPLES = 2048
 const MAX_AUDIO_SOCKET_BACKLOG_BYTES = 768 * 1024
@@ -71,6 +72,7 @@ const APP_WATCHER_IDLE_GUARD_MS = 2500
 const CONTEXT_TIMEOUT_MS = 450
 const MAX_CONTEXT_HISTORY_TURNS = 6
 const MAX_CONTEXT_HISTORY_CHARS = 420
+const TEXT_RESPONSE_TIMEOUT_MS = 12000
 
 export interface NexusRuntimeStatus {
   isConnected: boolean
@@ -79,6 +81,12 @@ export interface NexusRuntimeStatus {
 }
 
 type NexusStatusListener = (status: NexusRuntimeStatus) => void
+
+type PendingTextResponse = {
+  resolve: () => void
+  reject: (error: Error) => void
+  timeout: ReturnType<typeof setTimeout>
+}
 
 const withTimeout = async <T,>(task: Promise<T>, fallback: T, timeoutMs = CONTEXT_TIMEOUT_MS) => {
   try {
@@ -107,9 +115,12 @@ export class GeminiLiveService {
   public audioContext: AudioContext | null = null
   public mediaStream: MediaStream | null = null
   public workletNode: AudioWorkletNode | null = null
+  public micSourceNode: MediaStreamAudioSourceNode | null = null
+  public scriptProcessorNode: ScriptProcessorNode | null = null
   public analyser: AnalyserNode | null = null
   public apiKey: string
   public isConnected: boolean = false
+  private useScriptProcessorFallback: boolean = false
   private isMicMuted: boolean = false
 
   private nextStartTime: number = 0
@@ -131,6 +142,11 @@ export class GeminiLiveService {
   private analyserOutputConnected: boolean = false
   private speechReleaseTimer: ReturnType<typeof setTimeout> | null = null
   private statusListeners = new Set<NexusStatusListener>()
+  private connectPromise: Promise<void> | null = null
+  private forceSpeakHandler: ((event: any) => void) | null = null
+  private pendingTextResponse: PendingTextResponse | null = null
+  private textInputTurnActive: boolean = false
+  private textInputReleaseTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor() {
     this.apiKey = ''
@@ -217,9 +233,24 @@ export class GeminiLiveService {
     this.analyser.fftSize = 256
     this.analyser.smoothingTimeConstant = 0.5
 
-    const audioWorkletCode = `
+    if (!this.audioContext.audioWorklet) {
+      this.useScriptProcessorFallback = true
+      this.isAudioEngineReady = true
+      return
+    }
+
+    // Packaged Electron loads the renderer from file://. Chromium can reject
+    // AudioWorklet modules on that origin, so use the compatibility path there.
+    if (window.location.protocol === 'file:') {
+      this.useScriptProcessorFallback = true
+      this.isAudioEngineReady = true
+      return
+    }
+
+    const staticWorkletUrl = new URL('./pcm-processor.worklet.js', window.location.href).href
+    const inlineWorkletCode = `
       class PCMProcessor extends AudioWorkletProcessor {
-        process(inputs, outputs, parameters) {
+        process(inputs) {
           const input = inputs[0];
           if (input.length > 0) {
             this.port.postMessage(input[0]);
@@ -229,15 +260,69 @@ export class GeminiLiveService {
       }
       registerProcessor('pcm-processor', PCMProcessor);
     `
-    const blob = new Blob([audioWorkletCode], { type: 'application/javascript' })
-    const workletUrl = URL.createObjectURL(blob)
+    const blob = new Blob([inlineWorkletCode], { type: 'application/javascript' })
+    const blobWorkletUrl = URL.createObjectURL(blob)
 
     try {
-      await this.audioContext.audioWorklet.addModule(workletUrl)
+      await this.audioContext.audioWorklet.addModule(staticWorkletUrl)
       this.isAudioEngineReady = true
+      this.useScriptProcessorFallback = false
+    } catch (staticError) {
+      try {
+        await this.audioContext.audioWorklet.addModule(blobWorkletUrl)
+        this.isAudioEngineReady = true
+        this.useScriptProcessorFallback = false
+      } catch (blobError) {
+        console.warn('Nexus audio worklet failed; using script processor fallback.', {
+          staticError,
+          blobError
+        })
+        this.useScriptProcessorFallback = true
+        this.isAudioEngineReady = true
+      }
     } finally {
-      URL.revokeObjectURL(workletUrl)
+      URL.revokeObjectURL(blobWorkletUrl)
     }
+  }
+
+  private queueMicrophoneSamples(inputData: Float32Array, inputSampleRate: number) {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN || this.isMicMuted) return
+    if (this.textInputTurnActive) return
+
+    if (this.socket.bufferedAmount > MAX_AUDIO_SOCKET_BACKLOG_BYTES) {
+      this.rawAudioBuffer = []
+      this.rawAudioBufferLength = 0
+      return
+    }
+
+    const copiedInput = new Float32Array(inputData)
+    this.rawAudioBuffer.push(copiedInput)
+    this.rawAudioBufferLength += copiedInput.length
+
+    const requiredRawSamples = Math.floor(MIC_CHUNK_TARGET_SAMPLES * (inputSampleRate / 16000))
+
+    if (this.rawAudioBufferLength < requiredRawSamples) return
+
+    const combined = new Float32Array(this.rawAudioBufferLength)
+    let offset = 0
+    for (const buf of this.rawAudioBuffer) {
+      combined.set(buf, offset)
+      offset += buf.length
+    }
+    this.rawAudioBuffer = []
+    this.rawAudioBufferLength = 0
+
+    const downsampledData = downsampleTo16000(combined, inputSampleRate)
+    const base64Audio = float32ToBase64PCM(downsampledData)
+    this.lastUserAudioSentAt = Date.now()
+
+    this.socket.send(
+      JSON.stringify({
+        realtimeInput: {
+          mediaChunks: [{ mimeType: 'audio/pcm;rate=16000', data: base64Audio }]
+        }
+      })
+    )
   }
 
   private stopAllAudio() {
@@ -257,7 +342,83 @@ export class GeminiLiveService {
     this.emitRuntimeStatus()
   }
 
+  private createTextTurnError(message: string) {
+    const error = new Error(message)
+    ;(error as any).userMessageSaved = true
+    return error
+  }
+
+  private beginPendingTextResponse(): Promise<void> {
+    this.clearPendingTextResponse()
+    this.textInputTurnActive = true
+    if (this.textInputReleaseTimer) {
+      clearTimeout(this.textInputReleaseTimer)
+      this.textInputReleaseTimer = null
+    }
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingTextResponse = null
+        this.textInputTurnActive = false
+        reject(this.createTextTurnError('Live voice did not return audio in time.'))
+      }, TEXT_RESPONSE_TIMEOUT_MS)
+
+      this.pendingTextResponse = { resolve, reject, timeout }
+    })
+  }
+
+  private resolvePendingTextResponse() {
+    if (!this.pendingTextResponse) return
+    const pending = this.pendingTextResponse
+    clearTimeout(pending.timeout)
+    this.pendingTextResponse = null
+    if (this.textInputReleaseTimer) clearTimeout(this.textInputReleaseTimer)
+    this.textInputReleaseTimer = setTimeout(() => {
+      this.textInputTurnActive = false
+      this.textInputReleaseTimer = null
+    }, TEXT_RESPONSE_TIMEOUT_MS)
+    pending.resolve()
+  }
+
+  private rejectPendingTextResponse(error: Error) {
+    if (!this.pendingTextResponse) return
+    const pending = this.pendingTextResponse
+    clearTimeout(pending.timeout)
+    this.pendingTextResponse = null
+    this.textInputTurnActive = false
+    if (this.textInputReleaseTimer) {
+      clearTimeout(this.textInputReleaseTimer)
+      this.textInputReleaseTimer = null
+    }
+    pending.reject(error)
+  }
+
+  private clearPendingTextResponse() {
+    if (this.pendingTextResponse) {
+      clearTimeout(this.pendingTextResponse.timeout)
+      this.pendingTextResponse = null
+    }
+    this.textInputTurnActive = false
+    if (this.textInputReleaseTimer) {
+      clearTimeout(this.textInputReleaseTimer)
+      this.textInputReleaseTimer = null
+    }
+  }
+
   async connect(): Promise<void> {
+    if (this.isConnected && this.socket?.readyState === WebSocket.OPEN) return
+    if (this.connectPromise) return this.connectPromise
+
+    this.connectPromise = this.connectInternal()
+
+    try {
+      await this.connectPromise
+    } finally {
+      this.connectPromise = null
+    }
+  }
+
+  private async connectInternal(): Promise<void> {
     this.apiKey = (await this.loadGeminiKey()).trim()
 
     if (!this.apiKey || this.apiKey === '') {
@@ -333,6 +494,7 @@ You are capable of complex, multi-step workflows. If the user gives a complex co
 - **send_whatsapp:** Use this for ANY messaging request.
 - **ghost_type:** Use for typing into any active window.
 - **control_browser:** Use this for browser tab, tab group, and whole-browser tasks. If the prompt includes a Browser Control Mode scope, pass that scope exactly. If the user gives a browser command without a scope, default to "tab".
+- **write_whiteboard:** Use whenever the user asks to write, show, solve, explain, or draw something on the whiteboard. Keep the content short-line, step-by-step, and board-ready. Use LaTeX for math with $...$ or $$...$$. Whiteboard writes auto-save to the Documents folder.
 
 ## 🗣️ LANGUAGE PROTOCOLS
 - Match the user's requested tone perfectly based on your Identity.
@@ -377,9 +539,14 @@ ${nvidiaDefaultSummary}
     const finalSystemInstruction = Nexus_SYSTEM_INSTRUCTION + contextPrompt
 
     const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${this.apiKey}`
-    this.socket = new WebSocket(url)
+    const socket = new WebSocket(url)
+    this.socket = socket
 
-    window.addEventListener('ai-force-speak', (event: any) => {
+    if (this.forceSpeakHandler) {
+      window.removeEventListener('ai-force-speak', this.forceSpeakHandler)
+    }
+
+    this.forceSpeakHandler = (event: any) => {
       const systemPrompt = event.detail
       if (systemPrompt && this.socket && this.socket.readyState === WebSocket.OPEN) {
         const overrideMsg = {
@@ -395,23 +562,40 @@ ${nvidiaDefaultSummary}
         }
         this.socket.send(JSON.stringify(overrideMsg))
       }
-    })
+    }
 
-    this.socket.onopen = async () => {
+    window.addEventListener('ai-force-speak', this.forceSpeakHandler)
+
+    let openResolve: (() => void) | null = null
+    let openReject: ((error: Error) => void) | null = null
+    let openSettled = false
+    const openPromise = new Promise<void>((resolve, reject) => {
+      openResolve = resolve
+      openReject = reject
+    })
+    const resolveOpen = () => {
+      if (openSettled) return
+      openSettled = true
+      clearTimeout(openTimeout)
+      openResolve?.()
+    }
+    const rejectOpen = (error: Error) => {
+      if (openSettled) return
+      openSettled = true
+      clearTimeout(openTimeout)
+      openReject?.(error)
+    }
+    const openTimeout = window.setTimeout(() => {
+      rejectOpen(new Error('Gemini Live connection timed out.'))
+    }, 12000)
+
+    socket.onopen = async () => {
+      if (this.socket !== socket) return
+
       if (this.audioContext && this.audioContext.state === 'suspended') {
         await this.audioContext.resume()
       }
 
-      this.isConnected = true
-      this.nextStartTime = 0
-
-      this.aiResponseBuffer = ''
-      this.userInputBuffer = ''
-      this.rawAudioBuffer = []
-      this.rawAudioBufferLength = 0
-      this.lastUserAudioSentAt = 0
-      this.lastResponseAudioAt = 0
-      this.emitRuntimeStatus()
       const setupMsg = {
         setup: {
           model: this.model,
@@ -1149,6 +1333,27 @@ ${nvidiaDefaultSummary}
                   }
                 },
                 {
+                  name: 'write_whiteboard',
+                  description:
+                    'Writes a solution or explanation onto the Nexus Whiteboard in human-handwriting style. Use this whenever the user asks to write, show, draw, or solve something on the whiteboard. For math, use LaTeX wrapped in $...$ or $$...$$.',
+                  parameters: {
+                    type: 'OBJECT',
+                    properties: {
+                      prompt: {
+                        type: 'STRING',
+                        description:
+                          'The original question or problem being solved on the whiteboard.'
+                      },
+                      content: {
+                        type: 'STRING',
+                        description:
+                          'The complete whiteboard-ready solution. Use short lines, plain text, and step-by-step wording.'
+                      }
+                    },
+                    required: ['prompt', 'content']
+                  }
+                },
+                {
                   name: 'open_in_vscode',
                   description:
                     "Opens the currently active file or project in Visual Studio Code. Use this when the user says 'open it in vscode'."
@@ -1399,17 +1604,39 @@ ${nvidiaDefaultSummary}
         }
       }
 
-      this.socket?.send(JSON.stringify(setupMsg))
-
-      this.startMicrophone()
-      this.startAppWatcher()
+      socket.send(JSON.stringify(setupMsg))
     }
 
-    this.socket.onmessage = async (event) => {
+    socket.onmessage = async (event) => {
+      if (this.socket !== socket) return
+
       try {
         const data = JSON.parse(event.data instanceof Blob ? await event.data.text() : event.data)
 
         if (data.error) {
+          console.warn('Gemini Live session error:', data.error)
+          if (!this.isConnected) {
+            rejectOpen(new Error(data.error.message || 'Gemini Live rejected the session.'))
+          }
+          this.rejectPendingTextResponse(
+            this.createTextTurnError(data.error.message || 'Gemini Live returned an error.')
+          )
+          return
+        }
+
+        if (data.setupComplete) {
+          this.isConnected = true
+          this.nextStartTime = 0
+          this.aiResponseBuffer = ''
+          this.userInputBuffer = ''
+          this.rawAudioBuffer = []
+          this.rawAudioBufferLength = 0
+          this.lastUserAudioSentAt = 0
+          this.lastResponseAudioAt = 0
+          this.emitRuntimeStatus()
+          void this.startMicrophone()
+          this.startAppWatcher()
+          resolveOpen()
           return
         }
 
@@ -1419,6 +1646,7 @@ ${nvidiaDefaultSummary}
           this.stopAllAudio()
           this.aiResponseBuffer = ''
           this.userInputBuffer = ''
+          this.rejectPendingTextResponse(this.createTextTurnError('Live voice was interrupted.'))
         }
 
         if (data.toolCall) {
@@ -1570,6 +1798,15 @@ ${nvidiaDefaultSummary}
                   })
                 )
                 result = `✅ I am streaming the code for ${call.args.file_name} to the screen now.`
+              } else if (call.name === 'write_whiteboard') {
+                const prompt = String(call.args.prompt || 'Whiteboard solution').trim()
+                const content = String(call.args.content || '').trim()
+                const saveResult = await publishWhiteboardWrite(
+                  createWhiteboardPayload(prompt, content, 'command')
+                )
+                result = saveResult.success
+                  ? `Written on the Nexus Whiteboard and saved to Docs: ${saveResult.path}`
+                  : 'Written on the Nexus Whiteboard.'
               } else if (call.name === 'open_in_vscode') {
                 window.dispatchEvent(new CustomEvent('ai-open-vscode'))
                 result = '✅ Opening Visual Studio Code.'
@@ -1690,7 +1927,9 @@ ${nvidiaDefaultSummary}
               functionResponses: functionResponses
             }
           }
-          this.socket?.send(JSON.stringify(responseMsg))
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify(responseMsg))
+          }
         }
 
         if (serverContent) {
@@ -1699,12 +1938,17 @@ ${nvidiaDefaultSummary}
               if (part.inlineData) {
                 this.lastResponseAudioAt = Date.now()
                 this.scheduleAudioChunk(part.inlineData.data)
+                this.resolvePendingTextResponse()
+              }
+              if (part.text) {
+                this.resolvePendingTextResponse()
               }
             })
           }
 
           if (serverContent.outputTranscription?.text) {
             this.aiResponseBuffer += serverContent.outputTranscription.text
+            this.resolvePendingTextResponse()
           }
 
           if (serverContent.inputTranscription?.text) {
@@ -1721,17 +1965,48 @@ ${nvidiaDefaultSummary}
               await saveMessage('nexus', this.aiResponseBuffer.trim())
               this.aiResponseBuffer = ''
             }
+
+            if (this.pendingTextResponse) {
+              this.rejectPendingTextResponse(
+                this.createTextTurnError('Live voice finished without returning audio.')
+              )
+            } else {
+              this.textInputTurnActive = false
+              if (this.textInputReleaseTimer) {
+                clearTimeout(this.textInputReleaseTimer)
+                this.textInputReleaseTimer = null
+              }
+            }
           }
         }
       } catch (err) {}
     }
 
-    this.socket.onclose = () => {
+    socket.onerror = () => {
+      if (this.socket !== socket) return
+      rejectOpen(new Error('Gemini Live socket error.'))
+    }
+
+    socket.onclose = (event) => {
+      if (this.socket !== socket) return
+      rejectOpen(
+        new Error(
+          event.reason ||
+            `Gemini Live socket closed before the session became ready (code ${event.code}).`
+        )
+      )
       this.disconnect()
     }
+
+    await openPromise
   }
 
   startAppWatcher() {
+    if (this.appWatcherInterval) {
+      clearInterval(this.appWatcherInterval)
+      this.appWatcherInterval = null
+    }
+
     this.appWatcherInterval = setInterval(async () => {
       if (!this.isConnected || !this.socket) return
       const now = Date.now()
@@ -1782,53 +2057,29 @@ ${nvidiaDefaultSummary}
       })
 
       const source = this.audioContext.createMediaStreamSource(this.mediaStream)
+      this.micSourceNode = source
       const inputSampleRate = this.audioContext.sampleRate
+
+      if (this.useScriptProcessorFallback) {
+        this.scriptProcessorNode = this.audioContext.createScriptProcessor(4096, 1, 1)
+        this.scriptProcessorNode.onaudioprocess = (event) => {
+          this.queueMicrophoneSamples(event.inputBuffer.getChannelData(0), inputSampleRate)
+        }
+        source.connect(this.scriptProcessorNode)
+        this.scriptProcessorNode.connect(this.audioContext.destination)
+        return
+      }
 
       this.workletNode = new AudioWorkletNode(this.audioContext, 'pcm-processor')
 
       this.workletNode.port.onmessage = (event) => {
-        if (!this.socket || this.socket.readyState !== WebSocket.OPEN || this.isMicMuted) return
-
-        if (this.socket.bufferedAmount > MAX_AUDIO_SOCKET_BACKLOG_BYTES) {
-          this.rawAudioBuffer = []
-          this.rawAudioBufferLength = 0
-          return
-        }
-
-        const inputData = event.data
-        this.rawAudioBuffer.push(inputData)
-        this.rawAudioBufferLength += inputData.length
-
-        const requiredRawSamples = Math.floor(MIC_CHUNK_TARGET_SAMPLES * (inputSampleRate / 16000))
-
-        if (this.rawAudioBufferLength >= requiredRawSamples) {
-          const combined = new Float32Array(this.rawAudioBufferLength)
-          let offset = 0
-          for (const buf of this.rawAudioBuffer) {
-            combined.set(buf, offset)
-            offset += buf.length
-          }
-          this.rawAudioBuffer = []
-          this.rawAudioBufferLength = 0
-
-          const downsampledData = downsampleTo16000(combined, inputSampleRate)
-          const base64Audio = float32ToBase64PCM(downsampledData)
-          this.lastUserAudioSentAt = Date.now()
-
-          this.socket.send(
-            JSON.stringify({
-              realtimeInput: {
-                mediaChunks: [{ mimeType: 'audio/pcm;rate=16000', data: base64Audio }]
-              }
-            })
-          )
-        }
+        this.queueMicrophoneSamples(event.data, inputSampleRate)
       }
 
       source.connect(this.workletNode)
       this.workletNode.connect(this.audioContext.destination)
     } catch (err) {
-      alert('Microphone access denied or failed to initialize.')
+      console.warn('Microphone access denied or failed to initialize.', err)
     }
   }
 
@@ -1879,7 +2130,7 @@ ${nvidiaDefaultSummary}
     const command = text.trim()
     if (!command) return
 
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+    if (!this.isConnected || !this.socket || this.socket.readyState !== WebSocket.OPEN) {
       throw new Error('Core is still starting. Try again in a moment.')
     }
 
@@ -1887,20 +2138,29 @@ ${nvidiaDefaultSummary}
     this.userInputBuffer = ''
     this.aiResponseBuffer = ''
     await saveMessage('user', command)
+    const responseStarted = this.beginPendingTextResponse()
 
-    this.socket.send(
-      JSON.stringify({
-        clientContent: {
-          turns: [
-            {
-              role: 'user',
-              parts: [{ text: command }]
-            }
-          ],
-          turnComplete: true
-        }
-      })
-    )
+    try {
+      this.socket.send(
+        JSON.stringify({
+          clientContent: {
+            turns: [
+              {
+                role: 'user',
+                parts: [{ text: command }]
+              }
+            ],
+            turnComplete: true
+          }
+        })
+      )
+    } catch (error: any) {
+      this.rejectPendingTextResponse(
+        this.createTextTurnError(error?.message || 'Unable to send text to Live voice.')
+      )
+    }
+
+    await responseStarted
   }
 
   disconnect(): void {
@@ -1910,6 +2170,11 @@ ${nvidiaDefaultSummary}
     }
 
     this.isConnected = false
+    if (this.pendingTextResponse) {
+      this.rejectPendingTextResponse(this.createTextTurnError('Live voice disconnected.'))
+    } else {
+      this.clearPendingTextResponse()
+    }
     this.stopAllAudio()
     this.lastUserAudioSentAt = 0
     this.lastResponseAudioAt = 0
@@ -1925,6 +2190,15 @@ ${nvidiaDefaultSummary}
     if (this.workletNode) {
       this.workletNode.disconnect()
       this.workletNode = null
+    }
+    if (this.scriptProcessorNode) {
+      this.scriptProcessorNode.disconnect()
+      this.scriptProcessorNode.onaudioprocess = null
+      this.scriptProcessorNode = null
+    }
+    if (this.micSourceNode) {
+      this.micSourceNode.disconnect()
+      this.micSourceNode = null
     }
     if (this.audioContext) {
       this.audioContext.close()

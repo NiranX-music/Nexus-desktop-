@@ -2,10 +2,6 @@ export const ingestCodebase = async (dirPath: string): Promise<string> => {
   try {
     const geminiKey = localStorage.getItem('nexus_custom_api_key') || ''
 
-    if (!geminiKey.trim()) {
-      throw new Error('Missing Gemini API Key. Please update it in the Command Center Vault.')
-    }
-
     window.dispatchEvent(new CustomEvent('oracle-ingest-start', { detail: { path: dirPath } }))
 
     const cleanupListener = window.electron.ipcRenderer.on(
@@ -43,10 +39,8 @@ export const consultOracle = async (query: string): Promise<string> => {
     const geminiKey = localStorage.getItem('nexus_custom_api_key') || ''
     const groqKey = localStorage.getItem('nexus_groq_api_key') || ''
 
-    if (!geminiKey.trim() || !groqKey.trim()) {
-      throw new Error(
-        'Missing Gemini or Groq API Keys. Please configure them in the Command Center.'
-      )
+    if (!groqKey.trim()) {
+      throw new Error('Missing Groq API Key. Please configure it in the Command Center.')
     }
 
     window.dispatchEvent(new CustomEvent('oracle-thinking'))

@@ -154,7 +154,7 @@ const MiniOverlay = ({
 
     setIsSendingText(true)
     try {
-      await sendTextCommand(command)
+      sendTextCommand(command).catch(() => {})
       setTextCommand('')
     } finally {
       setIsSendingText(false)

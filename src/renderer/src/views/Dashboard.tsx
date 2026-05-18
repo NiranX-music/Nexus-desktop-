@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useCallback, useRef, useState } from 'react'
 import Sphere from '@renderer/components/Sphere'
+import MarkdownMath from '@renderer/components/MarkdownMath'
 import {
   RiCpuLine,
   RiCameraLine,
@@ -29,6 +30,7 @@ import { GiTinker } from 'react-icons/gi'
 import { HiComputerDesktop } from 'react-icons/hi2'
 import * as faceapi from 'face-api.js'
 import type { AssistantVisualState, VisionMode } from '@renderer/IndexRoot'
+import type { RequestQueueItem, RequestRoutingMode } from '@renderer/hooks/useNexusRequestQueue'
 import {
   controlMediaSession,
   getMediaSessions,
@@ -49,6 +51,10 @@ interface NexusProps {
   stopVision: () => void
   activeStream: MediaStream | null
   sendTextCommand: (command: string) => Promise<void>
+  activeRequest: RequestQueueItem | null
+  requestQueue: RequestQueueItem[]
+  requestRoutingMode: RequestRoutingMode
+  setRequestRoutingMode: (mode: RequestRoutingMode) => void
 }
 
 interface DashboardViewProps {
@@ -107,7 +113,11 @@ export default function DashboardView({
     toggleSystem,
     isMicMuted,
     isSystemStarting,
-    sendTextCommand
+    sendTextCommand,
+    activeRequest,
+    requestQueue,
+    requestRoutingMode,
+    setRequestRoutingMode
   } = props
   const resolvedAssistantVisualState = assistantVisualState || propAssistantVisualState
 
@@ -129,12 +139,23 @@ export default function DashboardView({
     if (!command || isSendingTextCommand) return
 
     setIsSendingTextCommand(true)
-    setTextCommandStatus(isSystemActive ? 'Sending command...' : 'Starting core...')
 
     try {
-      await sendTextCommand(command)
+      const wasSteering = requestRoutingMode === 'steer'
+      const requestPromise = sendTextCommand(command)
       setTextCommand('')
-      setTextCommandStatus('Voice response queued.')
+      setTextCommandStatus(
+        wasSteering
+          ? 'Steering request moved to the front.'
+          : activeRequest || requestQueue.length > 0
+            ? 'Request added to queue.'
+            : isSystemActive
+              ? 'Request accepted.'
+              : 'Request queued. Core will start.'
+      )
+      requestPromise.catch((error: any) => {
+        setTextCommandStatus(error?.message || 'Queued request failed.')
+      })
     } catch (error: any) {
       setTextCommandStatus(error?.message || 'Unable to send text command.')
     } finally {
@@ -452,7 +473,7 @@ export default function DashboardView({
       tone:
         resolvedAssistantVisualState === 'speaking' ? 'text-fuchsia-200' : 'text-emerald-300'
     },
-    { label: 'NVIDIA Build', value: 'Ready', tone: 'text-cyan-300' },
+    { label: 'Gemini API', value: 'Ready', tone: 'text-cyan-300' },
     {
       label: 'Local Actions',
       value:
@@ -500,20 +521,20 @@ export default function DashboardView({
   ]
 
   return (
-    <div className="nexus-dashboard-arena relative h-full w-full flex-1 animate-in fade-in zoom-in duration-300 overflow-hidden p-3 lg:p-4">
-      <div className="grid h-full min-h-0 grid-cols-12 gap-3">
-        <section className="col-span-12 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+    <div className="nexus-dashboard-arena relative min-h-full w-full animate-in fade-in zoom-in duration-300 overflow-visible p-2 lg:p-3">
+      <div className="grid min-h-full grid-cols-12 gap-2">
+        <section className="nexus-status-strip col-span-12 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
           {statusOverview.map((item) => (
-            <div key={item.label} className={`${glassPanel} p-3`}>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-[8px] font-black uppercase tracking-[0.22em] text-zinc-500">
+            <div key={item.label} className={`${glassPanel} nexus-status-tile`}>
+              <div className="flex min-w-0 items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="nexus-status-tile-label">
                     {item.label}
                   </p>
-                  <p className={`mt-2 text-base font-black uppercase ${item.tone}`}>{item.value}</p>
+                  <p className={`nexus-status-tile-value ${item.tone}`}>{item.value}</p>
                 </div>
                 <span
-                  className={`mt-1 h-2.5 w-2.5 rounded-full ${
+                  className={`h-2 w-2 shrink-0 rounded-full ${
                     item.label === 'Runtime' && resolvedAssistantVisualState === 'speaking'
                       ? 'bg-fuchsia-300 shadow-[0_0_12px_rgba(244,114,182,0.8)]'
                       : item.label === 'Runtime' && resolvedAssistantVisualState === 'running'
@@ -522,14 +543,14 @@ export default function DashboardView({
                   }`}
                 />
               </div>
-              <p className="mt-2 truncate text-[9px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+              <p className="nexus-status-tile-detail">
                 {item.detail}
               </p>
             </div>
           ))}
         </section>
 
-        <aside className="col-span-12 flex min-h-0 flex-col gap-3 xl:col-span-3 xl:overflow-y-auto xl:pr-1 scrollbar-small">
+        <aside className="hidden">
           <div className={`${glassPanel} shrink-0 p-3`}>
             <div className="flex items-center justify-between border-b border-white/10 pb-2">
               <span className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-zinc-400">
@@ -801,39 +822,51 @@ export default function DashboardView({
           </div>
         </aside>
 
-        <section className="col-span-12 flex min-h-0 flex-col gap-3 xl:col-span-6">
-          <div className={`${glassPanel} flex min-h-0 flex-1 flex-col p-4`}>
-            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-3">
-              <div>
+        <section className="nexus-core-command-column nexus-fixed-sphere-column col-span-12 flex min-h-[34rem] flex-col gap-2 xl:col-span-8">
+          <div className={`${glassPanel} nexus-agent-core-panel nexus-fixed-sphere-panel flex min-h-0 flex-1 flex-col p-3`}>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-2">
+              <div className="min-w-0">
                 <span className="text-[10px] font-black uppercase tracking-[0.22em] text-emerald-300">
                   Agent Core
                 </span>
-                <p className="mt-2 text-sm font-semibold leading-relaxed text-zinc-400">
-                  One surface for live voice, optics, device actions, and text-to-voice command flow.
+                <p className="mt-1 text-xs font-semibold leading-snug text-zinc-400">
+                  Live voice and command kernel.
                 </p>
               </div>
-              <span className="rounded-md border border-white/10 bg-black/35 px-3 py-1.5 text-[8px] font-black uppercase tracking-[0.18em] text-zinc-500">
+              <span className="max-w-full rounded-md border border-white/10 bg-black/35 px-2.5 py-1.5 text-[8px] font-black uppercase leading-tight tracking-[0.14em] text-zinc-500">
                 {isSystemStarting ? 'Starting low-latency link' : runtimeRibbonLabel}
               </span>
             </div>
 
-            <div className="grid min-h-0 flex-1 gap-3 pt-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(220px,0.78fr)]">
-              <div className="relative flex min-h-[20rem] items-center justify-center overflow-hidden border border-emerald-300/15 bg-black/35">
+            <div className="nexus-core-focus-grid grid min-h-0 flex-1 gap-2 pt-2">
+              <div className="nexus-core-orb-stage relative flex min-h-[26rem] items-center justify-center overflow-visible border border-emerald-300/15 bg-black/35">
                 <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(16,185,129,0.08)_1px,transparent_1px),linear-gradient(rgba(16,185,129,0.08)_1px,transparent_1px)] bg-[size:24px_24px]" />
                 <div className="absolute inset-x-0 top-0 h-16 bg-linear-to-b from-emerald-300/10 to-transparent" />
+                <div className="nexus-core-sphere-fallback" aria-hidden="true" />
                 <div className="absolute bottom-3 left-3 z-10 border border-emerald-300/20 bg-black/70 px-2 py-1 text-[8px] font-black uppercase tracking-[0.18em] text-emerald-200">
                   Neural Kernel
                 </div>
                 <div
-                  className={`relative z-10 aspect-square h-[38vh] min-h-[12rem] max-h-[22rem] transition-all duration-700 ${
-                    isSystemActive ? 'scale-100 opacity-100' : 'scale-95 opacity-80 grayscale'
+                  className={`nexus-core-orb relative z-20 aspect-square h-[54vh] min-h-[18rem] max-h-[30rem] transition-all duration-700 ${
+                    isSystemActive ? 'scale-100 opacity-100' : 'scale-100 opacity-95'
                   }`}
                 >
-                  <Sphere />
+                  <Sphere
+                    visualState={resolvedAssistantVisualState}
+                    isSystemActive={isSystemActive}
+                  />
+                </div>
+                <div className="nexus-core-stage-strip">
+                  {agentStages.map((stage) => (
+                    <div key={stage.label} className="nexus-core-stage-chip">
+                      <span>{stage.label}</span>
+                      <strong className={stage.tone}>{stage.value}</strong>
+                    </div>
+                  ))}
                 </div>
               </div>
 
-              <div className="grid min-h-0 gap-3 xl:grid-rows-[repeat(3,minmax(0,1fr))_auto]">
+              <div className="hidden">
                 {agentStages.map((stage) => (
                   <div key={stage.label} className="border border-white/10 bg-white/[0.03] p-3">
                     <p className="text-[8px] font-black uppercase tracking-[0.2em] text-zinc-500">
@@ -856,25 +889,55 @@ export default function DashboardView({
             </div>
           </div>
 
-          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto]">
-            <form
-              onSubmit={submitTextCommand}
-              className={`${glassPanel} flex min-h-[7.5rem] flex-col justify-between p-3`}
-            >
-              <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-2">
-                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400">
-                  Text Command
-                </span>
-                <span className="text-[8px] font-black uppercase tracking-[0.16em] text-emerald-300/70">
-                  Voice reply queue
+          <form
+            onSubmit={submitTextCommand}
+            className="nexus-manual-control-rail nexus-command-control-rail nexus-fixed-control-rail min-w-0"
+          >
+            <div className="nexus-inline-command min-w-0">
+              <div className="flex min-w-0 items-center justify-between gap-3">
+                <div className="flex min-w-0 flex-col">
+                  <span className="text-[9px] font-black uppercase tracking-[0.28em] text-emerald-300/70">
+                    Manual Controls
+                  </span>
+                  <span className="mt-1 text-[8px] font-mono uppercase tracking-[0.18em] text-zinc-500">
+                    AI text command bus
+                  </span>
+                </div>
+                <span className="hidden text-[8px] font-black uppercase tracking-[0.16em] text-emerald-300/70 sm:inline">
+                  {activeRequest ? 'Running queue' : requestQueue.length ? `${requestQueue.length} queued` : 'Gemini live'}
                 </span>
               </div>
-              <div className="mt-3 flex items-center gap-2">
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                <div className="inline-flex border border-white/10 bg-black/35 p-1">
+                  {(['queue', 'steer'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setRequestRoutingMode(mode)}
+                      className={`px-3 py-1.5 text-[8px] font-black uppercase tracking-[0.16em] transition ${
+                        requestRoutingMode === mode
+                          ? 'bg-emerald-300 text-black'
+                          : 'text-zinc-500 hover:text-zinc-200'
+                      }`}
+                    >
+                      {mode}
+                    </button>
+                  ))}
+                </div>
+                <span className="max-w-[14rem] truncate text-[8px] font-mono uppercase tracking-[0.12em] text-zinc-600">
+                  {activeRequest
+                    ? `Now: ${activeRequest.command}`
+                    : requestQueue.length
+                      ? `Next: ${requestQueue[0].command}`
+                      : 'Queue idle'}
+                </span>
+              </div>
+              <div className="nexus-command-input-wrap mt-2 flex items-center gap-2">
                 <input
                   value={textCommand}
                   onChange={(event) => setTextCommand(event.target.value)}
-                  placeholder="Type command, Nexus replies in voice..."
-                  className="min-w-0 flex-1 bg-transparent px-2 py-2 text-sm font-semibold text-white outline-none placeholder:text-zinc-600"
+                  placeholder="Command Nexus AI..."
+                  className="nexus-command-input min-w-0 flex-1 bg-transparent px-2 py-2 text-sm font-semibold text-white outline-none placeholder:text-zinc-600"
                 />
                 <button
                   type="submit"
@@ -885,22 +948,40 @@ export default function DashboardView({
                   <RiSendPlane2Line size={18} />
                 </button>
               </div>
-              <div className="mt-2 min-h-[1rem] text-[9px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+              <div className="nexus-command-status mt-1 min-h-[0.9rem] text-[8px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
                 {textCommandStatus || 'Low-latency text prompt path is ready.'}
               </div>
-            </form>
+              {(activeRequest || requestQueue.length > 0) && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {activeRequest && (
+                    <span className="max-w-full truncate border border-emerald-300/20 bg-emerald-300/10 px-2 py-1 text-[8px] font-black uppercase tracking-[0.12em] text-emerald-200">
+                      Running: {activeRequest.command}
+                    </span>
+                  )}
+                  {requestQueue.slice(0, 2).map((item, index) => (
+                    <span
+                      key={item.id}
+                      className={`max-w-full truncate border px-2 py-1 text-[8px] font-black uppercase tracking-[0.12em] ${
+                        item.mode === 'steer'
+                          ? 'border-cyan-300/20 bg-cyan-300/10 text-cyan-100'
+                          : 'border-white/10 bg-white/[0.04] text-zinc-400'
+                      }`}
+                    >
+                      {item.mode === 'steer' ? 'Steer' : `Q${index + 1}`}: {item.command}
+                    </span>
+                  ))}
+                  {requestQueue.length > 2 && (
+                    <span className="border border-white/10 bg-white/[0.04] px-2 py-1 text-[8px] font-black uppercase tracking-[0.12em] text-zinc-500">
+                      +{requestQueue.length - 2}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
 
-            <div className="nexus-manual-control-rail z-20 min-w-0 xl:min-w-[22rem]">
-              <div className="flex min-w-0 flex-col">
-                <span className="text-[9px] font-black uppercase tracking-[0.28em] text-emerald-300/70">
-                  Manual Controls
-                </span>
-                <span className="mt-1 text-[8px] font-mono uppercase tracking-[0.18em] text-zinc-500">
-                  Runtime override bus
-                </span>
-              </div>
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <div className="nexus-control-switch-group flex min-w-0 flex-wrap items-center gap-2">
                 <button
+                  type="button"
                   onClick={onVisionClick}
                   className={`nexus-control-switch ${isVideoOn ? 'is-danger' : 'is-idle'}`}
                 >
@@ -915,6 +996,7 @@ export default function DashboardView({
                   </span>
                 </button>
                 <button
+                  type="button"
                   onClick={toggleSystem}
                   disabled={isSystemStarting}
                   className={`nexus-control-switch ${
@@ -932,6 +1014,7 @@ export default function DashboardView({
                   </span>
                 </button>
                 <button
+                  type="button"
                   onClick={toggleMic}
                   className={`nexus-control-switch ${isMicMuted ? 'is-danger' : 'is-active'}`}
                 >
@@ -946,11 +1029,10 @@ export default function DashboardView({
                   </span>
                 </button>
               </div>
-            </div>
-          </div>
+          </form>
         </section>
 
-        <aside className="col-span-12 flex min-h-0 flex-col gap-3 xl:col-span-3">
+        <aside className="col-span-12 flex min-h-[34rem] flex-col gap-2 xl:col-span-4">
           <div className={`${glassPanel} shrink-0 p-3`}>
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -963,9 +1045,8 @@ export default function DashboardView({
                 {chatHistory.length} entries
               </span>
             </div>
-            <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">
-              The conversation rail updates continuously so the desktop state stays readable while
-              the agent runs.
+            <p className="mt-2 text-[10px] leading-snug text-zinc-500">
+              Live transcript for commands and spoken responses.
             </p>
           </div>
 
@@ -997,7 +1078,7 @@ export default function DashboardView({
                           : 'rounded-bl-none border-white/5 bg-zinc-900/50 text-zinc-400'
                       }`}
                     >
-                      {msg.parts && msg.parts[0] ? msg.parts[0].text : msg.content}
+                      <MarkdownMath content={msg.parts && msg.parts[0] ? msg.parts[0].text : msg.content} />
                     </div>
                   </div>
                 ))

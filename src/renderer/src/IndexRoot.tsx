@@ -8,7 +8,17 @@ import {
 } from 'react-icons/ri'
 import MiniOverlay from './components/MiniOverlay'
 import { nexusService } from './services/nexus-voice-ai'
+import { saveMessage } from './services/nexus-ai-brain'
+import { generateWithNexusGeminiClient } from './services/nexus-gemini-api'
+import {
+  WHITEBOARD_SYSTEM_PROMPT,
+  createWhiteboardPayload,
+  extractWhiteboardQuestion,
+  isWhiteboardCommand,
+  publishWhiteboardWrite
+} from './services/whiteboard'
 import { getScreenSourceId } from './hooks/CaptureDesktop'
+import { useNexusRequestQueue } from './hooks/useNexusRequestQueue'
 import Nexus from './UI/nexus'
 import TitleBar from './components/Titlebar'
 import { useAuthStore } from './store/auth-store'
@@ -214,6 +224,14 @@ const IndexRoot = () => {
   const processingVideoRef = useRef<HTMLVideoElement>(document.createElement('video'))
   const activeStreamRef = useRef<MediaStream | null>(null)
   const aiIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const coreIntentActiveRef = useRef(false)
+  const coreReconnectBusyRef = useRef(false)
+  const coreReconnectFailuresRef = useRef(0)
+
+  const setCoreActiveState = (active: boolean) => {
+    coreIntentActiveRef.current = active
+    setIsSystemActive(active)
+  }
 
   useEffect(() => {
     void window.electron.ipcRenderer
@@ -223,8 +241,17 @@ const IndexRoot = () => {
 
     const unsubscribeStatus = nexusService.subscribeStatus((status) => {
       setAssistantVisualState(
-        status.isConnected ? (status.isSpeaking ? 'speaking' : 'running') : 'offline'
+        status.isConnected
+          ? status.isSpeaking
+            ? 'speaking'
+            : 'running'
+          : coreIntentActiveRef.current
+            ? 'running'
+            : 'offline'
       )
+      if (status.isConnected) {
+        coreReconnectFailuresRef.current = 0
+      }
     })
 
     window.electron.ipcRenderer.on('overlay-mode', (_e, mode) => setIsOverlay(Boolean(mode)))
@@ -236,11 +263,40 @@ const IndexRoot = () => {
 
   useEffect(() => {
     const watchdog = setInterval(() => {
-      if (isSystemActive && !isSystemStarting && !nexusService.isConnected) {
-        setIsSystemActive(false)
-        setIsMicMuted(true)
-        stopVision()
+      if (
+        !isSystemActive ||
+        isSystemStarting ||
+        nexusService.isConnected ||
+        coreReconnectBusyRef.current
+      ) {
+        return
       }
+
+      coreReconnectBusyRef.current = true
+
+      nexusService
+        .connect()
+        .then(() => {
+          coreReconnectFailuresRef.current = 0
+          setCoreActiveState(true)
+          setIsMicMuted(false)
+          nexusService.setMute(false)
+        })
+        .catch((error: any) => {
+          coreReconnectFailuresRef.current += 1
+          const message = String(error?.message || '')
+          const isMissingKey =
+            message === 'NO_API_KEY' || message.toLowerCase().includes('gemini api key')
+
+          if (isMissingKey || coreReconnectFailuresRef.current >= 3) {
+            setCoreActiveState(false)
+            setIsMicMuted(true)
+            stopVision()
+          }
+        })
+        .finally(() => {
+          coreReconnectBusyRef.current = false
+        })
     }, 2500)
     return () => clearInterval(watchdog)
   }, [isSystemActive, isSystemStarting])
@@ -269,6 +325,10 @@ const IndexRoot = () => {
 
   const startSystem = async () => {
     if (isSystemActive && nexusService.isConnected) return
+    if (coreReconnectBusyRef.current) {
+      await waitForCoreReady()
+      return
+    }
     if (isSystemStarting) {
       await waitForCoreReady()
       return
@@ -277,19 +337,15 @@ const IndexRoot = () => {
     setIsSystemStarting(true)
     try {
       await nexusService.connect()
-      setIsSystemActive(true)
+      setCoreActiveState(true)
       setIsMicMuted(false)
       nexusService.setMute(false)
-      waitForCoreReady()
-        .then(() => setIsSystemStarting(false))
-        .catch(() => {
-          setIsSystemActive(false)
-          setIsMicMuted(true)
-          setIsSystemStarting(false)
-        })
     } catch (error) {
-      setIsSystemStarting(false)
+      setCoreActiveState(false)
+      setIsMicMuted(true)
       throw error
+    } finally {
+      setIsSystemStarting(false)
     }
   }
 
@@ -300,17 +356,17 @@ const IndexRoot = () => {
       } catch (err: any) {
         if (err.message === 'NO_API_KEY') {
           alert(
-            '⚠️ CRITICAL ERROR: Gemini API Key is missing. Please enter it in the Command Center Vault (Settings Tab).'
+            'Hosted Gemini text commands are ready. Add a local Gemini Live key in Settings only when you want the live voice/action core.'
           )
         } else {
           alert(`Connection failed: ${err.message}`)
         }
-        setIsSystemActive(false)
+        setCoreActiveState(false)
         setIsSystemStarting(false)
       }
     } else {
       nexusService.disconnect()
-      setIsSystemActive(false)
+      setCoreActiveState(false)
       setIsSystemStarting(false)
       setIsMicMuted(true)
       nexusService.setMute(true)
@@ -318,16 +374,96 @@ const IndexRoot = () => {
     }
   }
 
-  const sendTextCommand = async (command: string) => {
-    if (!isSystemActive || !nexusService.isConnected) {
-      await startSystem()
-      await waitForCoreReady()
-    } else if (isSystemStarting) {
-      await waitForCoreReady()
+  const writeCommandToWhiteboard = async (command: string) => {
+    const prompt = extractWhiteboardQuestion(command)
+    await saveMessage('user', command)
+
+    const response = await generateWithNexusGeminiClient({
+      prompt,
+      system: WHITEBOARD_SYSTEM_PROMPT,
+      temperature: 0.35,
+      maxOutputTokens: 1100
+    })
+
+    publishWhiteboardWrite(createWhiteboardPayload(prompt, response, 'command'))
+    await saveMessage('nexus', `I wrote the solution on the whiteboard.\n\n${response}`)
+
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel()
+      window.speechSynthesis.speak(new SpeechSynthesisUtterance('I wrote it on the whiteboard.'))
+    }
+  }
+
+  const executeTextCommand = async (command: string) => {
+    if (isWhiteboardCommand(command)) {
+      await writeCommandToWhiteboard(command)
+      return
     }
 
-    await nexusService.sendTextCommand(command)
+    try {
+      if (!isSystemActive || !nexusService.isConnected) {
+        await startSystem()
+        await waitForCoreReady()
+      } else if (isSystemStarting) {
+        await waitForCoreReady()
+      }
+
+      await nexusService.sendTextCommand(command)
+    } catch (error: any) {
+      const message = String(error?.message || '')
+      const liveConnectionGlitch =
+        message.toLowerCase().includes('core is still starting') ||
+        message.toLowerCase().includes('socket') ||
+        message.toLowerCase().includes('closed')
+      const liveVoiceSilent =
+        message.toLowerCase().includes('live voice did not return') ||
+        message.toLowerCase().includes('live voice finished without') ||
+        message.toLowerCase().includes('live voice disconnected') ||
+        message.toLowerCase().includes('live voice was interrupted')
+
+      if (liveConnectionGlitch) {
+        try {
+          await startSystem()
+          await waitForCoreReady()
+          await nexusService.sendTextCommand(command)
+          return
+        } catch (retryError) {
+          error = retryError
+        }
+      }
+
+      const fallbackAllowed =
+        error?.message === 'NO_API_KEY' ||
+        String(error?.message || '').toLowerCase().includes('gemini api key') ||
+        liveConnectionGlitch ||
+        liveVoiceSilent
+
+      if (!fallbackAllowed) throw error
+
+      if (!error?.userMessageSaved) {
+        await saveMessage('user', command)
+      }
+      const response = await generateWithNexusGeminiClient({
+        prompt: command,
+        system:
+          'You are Nexus AI inside the desktop command console. Reply directly and briefly. The local Live voice socket was slow or silent, so answer normally through the hosted Nexus Gemini API.'
+      })
+      await saveMessage('nexus', response)
+
+      if (window.speechSynthesis && response) {
+        window.speechSynthesis.cancel()
+        window.speechSynthesis.speak(new SpeechSynthesisUtterance(response))
+      }
+    }
   }
+
+  const {
+    activeRequest,
+    requestQueue,
+    requestRoutingMode,
+    setRequestRoutingMode,
+    submitRequest: sendTextCommand
+  } = useNexusRequestQueue(executeTextCommand)
 
   const toggleMic = () => {
     const s = !isMicMuted
@@ -345,7 +481,7 @@ const IndexRoot = () => {
     }
 
     nexusService.disconnect()
-    setIsSystemActive(false)
+    setCoreActiveState(false)
     setIsSystemStarting(false)
     setIsMicMuted(true)
     nexusService.setMute(true)
@@ -486,6 +622,10 @@ const IndexRoot = () => {
             stopVision={stopVision}
             activeStream={activeStreamRef.current}
             sendTextCommand={sendTextCommand}
+            activeRequest={activeRequest}
+            requestQueue={requestQueue}
+            requestRoutingMode={requestRoutingMode}
+            setRequestRoutingMode={setRequestRoutingMode}
             onLogout={logoutAccount}
             onUpgrade={openFullExperience}
             isTrialBuild={IS_TRIAL_BUILD}

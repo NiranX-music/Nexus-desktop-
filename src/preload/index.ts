@@ -117,6 +117,8 @@ const allowedInvokeChannels = new Set([
   'verify-vault-face',
   'verify-vault-pass',
   'verify-vault-pin',
+  'whiteboard:open-docs',
+  'whiteboard:save-doc',
   'write-file'
 ])
 

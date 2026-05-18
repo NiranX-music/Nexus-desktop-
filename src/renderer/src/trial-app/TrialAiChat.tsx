@@ -1,7 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import {
   RiBrainLine,
-  RiRefreshLine,
   RiRobot2Line,
   RiSendPlane2Line,
   RiStopCircleLine,
@@ -13,10 +12,15 @@ import {
   getModelsForCategory,
   getNvidiaModelById,
   getStoredNvidiaModelDefaults,
-  NEXUS_AI_PROVIDER_MODE_STORAGE_KEY,
-  NVIDIA_API_KEY_STORAGE_KEY,
   type NvidiaModelDefaults
 } from '@renderer/config/nvidia-models'
+import MarkdownMath from '@renderer/components/MarkdownMath'
+import {
+  createWhiteboardPayload,
+  extractWhiteboardQuestion,
+  isWhiteboardCommand,
+  publishWhiteboardWrite
+} from '@renderer/services/whiteboard'
 
 type ChatRole = 'user' | 'assistant'
 
@@ -26,7 +30,7 @@ interface ChatMessage {
 }
 
 const defaultWelcome =
-  'Nexus Trial is online. This lightweight build keeps the hosted NVIDIA chat route available so you can test the core conversation flow right away.'
+  'Nexus Trial is online. This lightweight build sends chat through the configured Nexus AI API gateway.'
 
 const systemPrompt = `You are Nexus Trial, a lightweight desktop AI assistant. Be concise, warm, technical when useful, and optimize for fast direct replies inside a Windows desktop app.`
 
@@ -63,9 +67,6 @@ export default function TrialAiChat() {
   const [isSending, setIsSending] = useState(false)
   const [error, setError] = useState('')
   const [voiceReplies, setVoiceReplies] = useState(true)
-  const [providerMode, setProviderMode] = useState(
-    localStorage.getItem(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY) || 'nexus'
-  )
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const models = useMemo(() => getModelsForCategory(category), [category])
@@ -75,7 +76,6 @@ export default function TrialAiChat() {
     const storedDefaults = getStoredNvidiaModelDefaults()
     setDefaults(storedDefaults)
     setSelectedModel(storedDefaults.chat)
-    setProviderMode(localStorage.getItem(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY) || 'nexus')
   }, [])
 
   useEffect(() => {
@@ -126,11 +126,8 @@ export default function TrialAiChat() {
     await saveToLocalHistory('user', prompt)
 
     try {
-      const useNexusServers = providerMode !== 'own-key'
-      const apiKey = useNexusServers ? '' : localStorage.getItem(NVIDIA_API_KEY_STORAGE_KEY) || ''
       const result = await window.electron.ipcRenderer.invoke('nvidia:chat-completion', {
-        apiKey,
-        useNexusServers,
+        useNexusServers: true,
         model: selectedModel,
         system: systemPrompt,
         messages: nextMessages
@@ -143,21 +140,26 @@ export default function TrialAiChat() {
       })
 
       if (!result?.success) {
-        throw new Error(result?.error || 'NVIDIA chat request failed.')
+        throw new Error(result?.error || 'Nexus AI API chat request failed.')
       }
 
       const response = result.content || 'No response content returned.'
       setMessages((current) => [...current, { role: 'assistant', content: response }])
       await saveToLocalHistory('model', response)
+      if (isWhiteboardCommand(prompt)) {
+        publishWhiteboardWrite(
+          createWhiteboardPayload(extractWhiteboardQuestion(prompt), response, 'chat')
+        )
+      }
       if (voiceReplies) speak(response)
     } catch (err: any) {
-      const message = err?.message || 'Unable to reach the NVIDIA Build endpoint.'
+      const message = err?.message || 'Unable to reach the Nexus AI API.'
       setError(message)
       setMessages((current) => [
         ...current,
-        { role: 'assistant', content: `NVIDIA link failed: ${message}` }
+        { role: 'assistant', content: `Nexus AI API failed: ${message}` }
       ])
-      if (voiceReplies) speak(`NVIDIA chat failed. ${message}`)
+      if (voiceReplies) speak(`Nexus AI API chat failed. ${message}`)
     } finally {
       setIsSending(false)
     }
@@ -176,7 +178,7 @@ export default function TrialAiChat() {
                 Trial AI Chat
               </p>
               <h2 className="mt-1 text-lg font-black uppercase tracking-[0.08em] text-white">
-                NVIDIA Core
+                Nexus AI API
               </h2>
             </div>
           </div>
@@ -246,13 +248,6 @@ export default function TrialAiChat() {
             <div className="mt-4 flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={() => setProviderMode(localStorage.getItem(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY) || 'nexus')}
-                className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-black/35 px-3 py-2 text-[10px] font-black uppercase tracking-[0.16em] text-zinc-300 transition hover:border-white/20"
-              >
-                <RiRefreshLine /> Reload routing
-              </button>
-              <button
-                type="button"
                 onClick={stopSpeaking}
                 className="inline-flex items-center gap-2 rounded-2xl border border-red-300/18 bg-red-400/10 px-3 py-2 text-[10px] font-black uppercase tracking-[0.16em] text-red-100 transition hover:bg-red-400/16"
               >
@@ -265,9 +260,7 @@ export default function TrialAiChat() {
                 Current route
               </p>
               <p className="mt-2 text-sm text-zinc-300">
-                {providerMode === 'own-key'
-                  ? 'Using your local NVIDIA override key.'
-                  : 'Using Nexus hosted routing for fast trial access.'}
+                Using the Nexus AI API gateway for all trial chat traffic.
               </p>
             </div>
           </div>
@@ -302,7 +295,7 @@ export default function TrialAiChat() {
               <p className="mb-2 text-[10px] font-black uppercase tracking-[0.18em] text-zinc-500">
                 {message.role === 'user' ? 'Operator' : 'Nexus'}
               </p>
-              <p>{message.content}</p>
+              <MarkdownMath content={message.content} />
             </div>
           ))}
 

@@ -44,7 +44,10 @@ type BrowserExecutionMode = 'core' | 'bridge' | 'serverless'
 
 const quickPrompts = [
   { label: 'Search', prompt: 'search Nexus AI desktop agent', icon: <RiGlobalLine /> },
-  { label: 'New Tab', prompt: 'new tab', icon: <RiKeyboardLine /> },
+  { label: 'Open', prompt: 'open youtube music', icon: <RiGlobalLine /> },
+  { label: 'Play/Pause', prompt: 'toggle media', icon: <RiPlayFill /> },
+  { label: 'Account', prompt: 'add google account', icon: <RiShieldFlashLine /> },
+  { label: 'Type', prompt: 'type Nexus AI', icon: <RiKeyboardLine /> },
   { label: 'Reload', prompt: 'reload', icon: <RiRefreshLine /> },
   { label: 'Back', prompt: 'back', icon: <RiArrowGoBackLine /> },
   { label: 'Click', prompt: 'click', icon: <RiCursorLine /> },
@@ -86,7 +89,7 @@ const executionModeCopy: Record<BrowserExecutionMode, string> = {
   core: 'Core voice model routes the task through the assistant.',
   bridge: 'Direct bridge controls the browser you already have open.',
   serverless:
-    'Serverless Chromium runs an isolated open-source browser for web search and page reading.'
+    'Serverless Chromium keeps an isolated browser session for search, open, type, click, scroll, play, pause, and account pages.'
 }
 
 const buildCoreBrowserCommand = (command: string, scope: BrowserAccessScope) => `
@@ -369,10 +372,10 @@ export default function BrowserControlView({
                   Browser Control
                 </h2>
                 <p className="mt-1 text-[10px] font-black uppercase tracking-[0.2em] text-emerald-300/70">
-                  Scoped local browser execution
+                  Scoped browser and serverless control
                 </p>
                 <p className="mt-2 max-w-2xl text-[11px] leading-relaxed text-zinc-500">
-                  One command rail for browser voice, text, and autonomous page actions with clear access boundaries.
+                  One command rail for browser voice, text, autonomous page actions, media controls, and account entry surfaces.
                 </p>
               </div>
             </div>
@@ -456,7 +459,7 @@ export default function BrowserControlView({
                 executionMode === 'core'
                   ? 'Ask Core to control the browser...'
                   : executionMode === 'serverless'
-                    ? 'Search the web or read a public URL in Serverless Chromium...'
+                    ? 'Open/search/type/click/scroll/play/pause/add account in Serverless Chromium...'
                     : scope === 'tab'
                       ? 'Active tab command...'
                       : scope === 'tab-group'

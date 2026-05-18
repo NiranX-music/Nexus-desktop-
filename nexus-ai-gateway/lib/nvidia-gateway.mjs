@@ -1,9 +1,15 @@
-const NVIDIA_BASE_URL = 'https://integrate.api.nvidia.com/v1'
+const DEFAULT_UPSTREAM_BASE_URL = 'https://integrate.api.nvidia.com/v1'
 const DEFAULT_MODEL = 'deepseek-ai/deepseek-v4-pro'
 const DEFAULT_ADMIN_PASS = '05122010'
-const NVIDIA_API_KEY_ENV_NAMES = ['NVIDIA_API_KEY', 'NVIDIA_BUILD_API_KEY', 'NVIDIA_NIM_API_KEY']
-const PLACEHOLDER_NVIDIA_KEY_RE =
-  /^(your-|paste-|replace-|example|placeholder|nvapi[_-]?your|\$NVIDIA_API_KEY|\$\{NVIDIA_API_KEY\})/i
+const UPSTREAM_API_KEY_ENV_NAMES = [
+  'NEXUS_AI_UPSTREAM_API_KEY',
+  'NEXUS_AI_API_KEY',
+  'NVIDIA_API_KEY',
+  'NVIDIA_BUILD_API_KEY',
+  'NVIDIA_NIM_API_KEY'
+]
+const PLACEHOLDER_UPSTREAM_KEY_RE =
+  /^(your-|paste-|replace-|example|placeholder|nvapi[_-]?your|\$[A-Z0-9_]+|\$\{[A-Z0-9_]+\})/i
 
 const MODEL_CATALOG = [
   'deepseek-ai/deepseek-v4-pro',
@@ -42,24 +48,75 @@ export function getEnvValue(name) {
   return (netlifyValue || process.env[name] || '').trim()
 }
 
-export function normalizeNvidiaApiKey(value = '') {
+export function normalizeUpstreamApiKey(value = '') {
   const candidate = String(value || '')
     .trim()
     .replace(/^Bearer\s+/i, '')
     .replace(/^['"]|['"]$/g, '')
     .trim()
 
-  if (!candidate || PLACEHOLDER_NVIDIA_KEY_RE.test(candidate)) return ''
+  if (!candidate || PLACEHOLDER_UPSTREAM_KEY_RE.test(candidate)) return ''
   return candidate
 }
 
-export function getNvidiaApiKey() {
-  for (const name of NVIDIA_API_KEY_ENV_NAMES) {
-    const apiKey = normalizeNvidiaApiKey(getEnvValue(name))
+export function normalizeNvidiaApiKey(value = '') {
+  return normalizeUpstreamApiKey(value)
+}
+
+export function getUpstreamApiKey() {
+  for (const name of UPSTREAM_API_KEY_ENV_NAMES) {
+    const apiKey = normalizeUpstreamApiKey(getEnvValue(name))
     if (apiKey) return apiKey
   }
 
   return ''
+}
+
+export function getNvidiaApiKey() {
+  return getUpstreamApiKey()
+}
+
+export function getUpstreamBaseUrl() {
+  const configured =
+    getEnvValue('NEXUS_AI_UPSTREAM_BASE_URL') ||
+    getEnvValue('NEXUS_AI_BASE_URL') ||
+    getEnvValue('NVIDIA_BASE_URL') ||
+    DEFAULT_UPSTREAM_BASE_URL
+
+  return configured.replace(/\/$/, '')
+}
+
+export function getUpstreamChatUrl() {
+  return getEnvValue('NEXUS_AI_UPSTREAM_CHAT_URL') || `${getUpstreamBaseUrl()}/chat/completions`
+}
+
+export function getUpstreamModelsUrl() {
+  return getEnvValue('NEXUS_AI_UPSTREAM_MODELS_URL') || `${getUpstreamBaseUrl()}/models`
+}
+
+export function getUpstreamAuthHeaders(apiKey) {
+  if (!apiKey) return {}
+
+  const headerName = getEnvValue('NEXUS_AI_UPSTREAM_AUTH_HEADER') || 'authorization'
+  const scheme = getEnvValue('NEXUS_AI_UPSTREAM_AUTH_SCHEME') || 'Bearer'
+  const authValue = scheme.toLowerCase() === 'none' ? apiKey : `${scheme} ${apiKey}`
+
+  return {
+    [headerName]: authValue
+  }
+}
+
+function allowsNoUpstreamKey() {
+  return getEnvValue('NEXUS_AI_UPSTREAM_ALLOW_NO_KEY').toLowerCase() === 'true'
+}
+
+function getUpstreamProviderName() {
+  const configured = getEnvValue('NEXUS_AI_UPSTREAM_NAME')
+  if (configured) return configured
+
+  const baseUrl = getUpstreamBaseUrl().toLowerCase()
+  if (baseUrl.includes('nvidia.com')) return 'nvidia'
+  return 'custom-upstream'
 }
 
 export function buildHeaders(extra = {}) {
@@ -119,12 +176,15 @@ export function getGatewayStatus(headers = {}) {
     }
   }
 
-  const apiKey = getNvidiaApiKey()
+  const apiKey = getUpstreamApiKey()
   return {
     status: 200,
     body: {
       success: true,
-      configured: Boolean(apiKey),
+      configured: Boolean(apiKey) || allowsNoUpstreamKey(),
+      providerMode: 'nexus-api-only',
+      upstreamProvider: getUpstreamProviderName(),
+      upstreamBaseUrl: getUpstreamBaseUrl(),
       publicAi: getEnvValue('NEXUS_ALLOW_PUBLIC_AI').toLowerCase() === 'true',
       adminPassConfigured: Boolean(getEnvValue('NEXUS_ADMIN_PASS')),
       defaultModel: DEFAULT_MODEL,
@@ -166,14 +226,14 @@ export async function createChatResult(rawBody = {}, headers = {}) {
     }
   }
 
-  const apiKey = getNvidiaApiKey()
-  if (!apiKey) {
+  const apiKey = getUpstreamApiKey()
+  if (!apiKey && !allowsNoUpstreamKey()) {
     return {
       status: 503,
       body: {
         success: false,
         error:
-          'Nexus Server NVIDIA_API_KEY is not configured on this gateway. Add a real NVIDIA Build key to NVIDIA_API_KEY, NVIDIA_BUILD_API_KEY, or NVIDIA_NIM_API_KEY.'
+          'Nexus AI upstream API key is not configured. Add your key to NEXUS_AI_UPSTREAM_API_KEY on this gateway.'
       }
     }
   }
@@ -212,10 +272,10 @@ export async function createChatResult(rawBody = {}, headers = {}) {
   const timeout = setTimeout(() => controller.abort(), 55000)
 
   try {
-    const response = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
+    const response = await fetch(getUpstreamChatUrl(), {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${apiKey}`,
+        ...getUpstreamAuthHeaders(apiKey),
         'content-type': 'application/json'
       },
       body: JSON.stringify(payload),
@@ -230,7 +290,11 @@ export async function createChatResult(rawBody = {}, headers = {}) {
         status: response.status,
         body: {
           success: false,
-          error: data?.error?.message || data?.error || text || `NVIDIA returned ${response.status}.`
+          error:
+            data?.error?.message ||
+            data?.error ||
+            text ||
+            `Nexus AI upstream returned ${response.status}.`
         }
       }
     }
@@ -239,8 +303,10 @@ export async function createChatResult(rawBody = {}, headers = {}) {
       status: 200,
       body: {
         success: true,
+        providerMode: 'nexus-api-only',
+        upstreamProvider: getUpstreamProviderName(),
         model: data?.model || payload.model,
-        content: data?.choices?.[0]?.message?.content || '',
+        content: extractChatContent(data),
         usage: data?.usage || null
       }
     }
@@ -249,7 +315,10 @@ export async function createChatResult(rawBody = {}, headers = {}) {
       status: 502,
       body: {
         success: false,
-        error: error?.name === 'AbortError' ? 'NVIDIA request timed out.' : error?.message || 'NVIDIA request failed.'
+        error:
+          error?.name === 'AbortError'
+            ? 'Nexus AI upstream request timed out.'
+            : error?.message || 'Nexus AI upstream request failed.'
       }
     }
   } finally {
@@ -269,8 +338,8 @@ export async function createModelsResult(headers = {}) {
     }
   }
 
-  const apiKey = getNvidiaApiKey()
-  if (!apiKey) {
+  const apiKey = getUpstreamApiKey()
+  if (!apiKey && !allowsNoUpstreamKey()) {
     return {
       status: 200,
       body: {
@@ -285,9 +354,9 @@ export async function createModelsResult(headers = {}) {
   const timeout = setTimeout(() => controller.abort(), 25000)
 
   try {
-    const response = await fetch(`${NVIDIA_BASE_URL}/models`, {
+    const response = await fetch(getUpstreamModelsUrl(), {
       headers: {
-        authorization: `Bearer ${apiKey}`
+        ...getUpstreamAuthHeaders(apiKey)
       },
       signal: controller.signal
     })
@@ -299,21 +368,24 @@ export async function createModelsResult(headers = {}) {
         status: response.status,
         body: {
           success: false,
-          error: data?.error?.message || data?.error || text || `NVIDIA returned ${response.status}.`,
+          error:
+            data?.error?.message ||
+            data?.error ||
+            text ||
+            `Nexus AI upstream returned ${response.status}.`,
           models: MODEL_CATALOG
         }
       }
     }
 
-    const models = Array.isArray(data?.data)
-      ? data.data.map((model) => model.id).filter(Boolean).sort((a, b) => a.localeCompare(b))
-      : MODEL_CATALOG
+    const models = normalizeModelList(data) || MODEL_CATALOG
 
     return {
       status: 200,
       body: {
         success: true,
-        source: 'nvidia',
+        source: getUpstreamProviderName(),
+        providerMode: 'nexus-api-only',
         models
       }
     }
@@ -323,7 +395,7 @@ export async function createModelsResult(headers = {}) {
       body: {
         success: true,
         source: 'catalog-fallback',
-        warning: error?.message || 'NVIDIA model sync failed.',
+        warning: error?.message || 'Nexus AI upstream model sync failed.',
         models: MODEL_CATALOG
       }
     }
@@ -378,6 +450,44 @@ function parseJson(text) {
   } catch {
     return {}
   }
+}
+
+function extractChatContent(data) {
+  const content =
+    data?.choices?.[0]?.message?.content ||
+    data?.content ||
+    data?.response ||
+    data?.text ||
+    data?.output_text ||
+    data?.message
+
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => (typeof part === 'string' ? part : part?.text || part?.content || ''))
+      .filter(Boolean)
+      .join('\n')
+  }
+
+  return typeof content === 'string' ? content : ''
+}
+
+function normalizeModelList(data) {
+  const rawModels = Array.isArray(data?.data)
+    ? data.data
+    : Array.isArray(data?.models)
+      ? data.models
+      : Array.isArray(data)
+        ? data
+        : null
+
+  if (!rawModels) return null
+
+  const models = rawModels
+    .map((model) => (typeof model === 'string' ? model : model?.id || model?.name))
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b))
+
+  return models.length ? models : null
 }
 
 function getHeader(headers, name) {

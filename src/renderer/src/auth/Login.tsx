@@ -305,7 +305,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="relative flex min-h-screen items-start justify-center overflow-x-hidden overflow-y-auto bg-[#050505] px-4 py-6 font-sans text-emerald-50 selection:bg-emerald-500/30 selection:text-emerald-100 lg:items-center lg:px-6 lg:py-8">
+    <div className="relative flex h-screen min-h-0 items-start justify-center overflow-y-auto overflow-x-hidden bg-[#050505] px-4 py-6 font-sans text-emerald-50 selection:bg-emerald-500/30 selection:text-emerald-100 lg:px-6 lg:py-8">
       <div className="pointer-events-none absolute top-[-10%] left-[-5%] h-125 w-125 animate-pulse rounded-full bg-emerald-600/10 blur-[150px]" />
       <div className="pointer-events-none absolute right-[-5%] bottom-[-10%] h-125 w-125 rounded-full bg-cyan-900/10 blur-[150px]" />
 
@@ -315,7 +315,7 @@ export default function LoginPage() {
         variants={containerVariants}
         initial="hidden"
         animate="show"
-        className="relative z-10 grid w-full max-w-7xl grid-cols-1 items-start gap-6 lg:grid-cols-12 lg:items-start xl:items-center"
+        className="relative z-10 grid w-full max-w-7xl grid-cols-1 items-start gap-6 lg:grid-cols-12"
       >
         <motion.div
           variants={panelVariants}

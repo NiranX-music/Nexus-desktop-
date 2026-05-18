@@ -30,11 +30,14 @@ interface BrowserEvent {
 
 const quickPrompts = [
   { label: 'Search', prompt: 'search Nexus Agent trial build' },
+  { label: 'Open', prompt: 'open youtube music' },
+  { label: 'Play/Pause', prompt: 'toggle media' },
+  { label: 'Account', prompt: 'add google account' },
+  { label: 'Type', prompt: 'type Nexus AI' },
   { label: 'Back', prompt: 'back' },
   { label: 'Reload', prompt: 'reload' },
   { label: 'Click', prompt: 'click' },
-  { label: 'Scroll', prompt: 'scroll down' },
-  { label: 'New Tab', prompt: 'new tab' }
+  { label: 'Scroll', prompt: 'scroll down' }
 ]
 
 const scopes: Array<{ id: BrowserAccessScope; label: string; detail: string }> = [
@@ -46,7 +49,7 @@ const scopes: Array<{ id: BrowserAccessScope; label: string; detail: string }> =
 const executionModeCopy: Record<BrowserExecutionMode, string> = {
   core: 'Routes the browser task through the voice core.',
   bridge: 'Controls the live browser you already have open.',
-  serverless: 'Runs search and page reading in isolated Chromium.'
+  serverless: 'Keeps isolated Chromium ready for search, open, type, click, scroll, media controls, and account pages.'
 }
 
 const browserScopeLabels: Record<BrowserAccessScope, string> = {
@@ -307,7 +310,11 @@ export default function TrialBrowser({
             <textarea
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
-              placeholder="Tell Nexus what to do in the browser..."
+              placeholder={
+                executionMode === 'serverless'
+                  ? 'Open/search/type/click/scroll/play/pause/add account in Serverless Chromium...'
+                  : 'Tell Nexus what to do in the browser...'
+              }
               className="min-h-[8rem] w-full resize-none rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-300/25"
             />
 

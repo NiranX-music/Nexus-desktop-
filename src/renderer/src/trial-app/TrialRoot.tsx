@@ -7,7 +7,17 @@ import {
 } from 'react-icons/ri'
 import MiniOverlay from '@renderer/components/MiniOverlay'
 import { getScreenSourceId } from '@renderer/hooks/CaptureDesktop'
+import { useNexusRequestQueue } from '@renderer/hooks/useNexusRequestQueue'
 import { nexusService } from '@renderer/services/nexus-voice-ai'
+import { saveMessage } from '@renderer/services/nexus-ai-brain'
+import { generateWithNexusGeminiClient } from '@renderer/services/nexus-gemini-api'
+import {
+  WHITEBOARD_SYSTEM_PROMPT,
+  createWhiteboardPayload,
+  extractWhiteboardQuestion,
+  isWhiteboardCommand,
+  publishWhiteboardWrite
+} from '@renderer/services/whiteboard'
 import TrialShell from './TrialShell'
 import type { TrialAssistantVisualState, TrialVisionMode } from './types'
 
@@ -269,7 +279,7 @@ export default function TrialRoot() {
         await startSystem()
       } catch (error: any) {
         if (error?.message === 'NO_API_KEY') {
-          alert('Gemini API key is missing. Add it in Trial Settings to use local routing.')
+          alert('Hosted Gemini text commands are ready. Add a local Gemini Live key only for the live voice core.')
         } else {
           alert(`Connection failed: ${error?.message || 'Unknown error'}`)
         }
@@ -286,16 +296,69 @@ export default function TrialRoot() {
     }
   }
 
-  const sendTextCommand = async (command: string) => {
-    if (!isSystemActive || !nexusService.isConnected) {
-      await startSystem()
-      await waitForCoreReady()
-    } else if (isSystemStarting) {
-      await waitForCoreReady()
+  const writeCommandToWhiteboard = async (command: string) => {
+    const prompt = extractWhiteboardQuestion(command)
+    await saveMessage('user', command)
+    const response = await generateWithNexusGeminiClient({
+      prompt,
+      system: WHITEBOARD_SYSTEM_PROMPT,
+      temperature: 0.35,
+      maxOutputTokens: 1100
+    })
+
+    publishWhiteboardWrite(createWhiteboardPayload(prompt, response, 'command'))
+    await saveMessage('nexus', `I wrote the solution on the whiteboard.\n\n${response}`)
+
+    if (window.speechSynthesis && response) {
+      window.speechSynthesis.cancel()
+      window.speechSynthesis.speak(new SpeechSynthesisUtterance('I wrote it on the whiteboard.'))
+    }
+  }
+
+  const executeTextCommand = async (command: string) => {
+    if (isWhiteboardCommand(command)) {
+      await writeCommandToWhiteboard(command)
+      return
     }
 
-    await nexusService.sendTextCommand(command)
+    try {
+      if (!isSystemActive || !nexusService.isConnected) {
+        await startSystem()
+        await waitForCoreReady()
+      } else if (isSystemStarting) {
+        await waitForCoreReady()
+      }
+
+      await nexusService.sendTextCommand(command)
+    } catch (error: any) {
+      const fallbackAllowed =
+        error?.message === 'NO_API_KEY' ||
+        String(error?.message || '').toLowerCase().includes('gemini api key')
+
+      if (!fallbackAllowed) throw error
+
+      await saveMessage('user', command)
+      const response = await generateWithNexusGeminiClient({
+        prompt: command,
+        system:
+          'You are Nexus AI inside the trial desktop command console. Reply directly and briefly. If a request needs local desktop control, explain that the live voice/action core needs a local Gemini Live key, but answer what you can using the hosted Nexus Gemini API.'
+      })
+      await saveMessage('nexus', response)
+
+      if (window.speechSynthesis && response) {
+        window.speechSynthesis.cancel()
+        window.speechSynthesis.speak(new SpeechSynthesisUtterance(response))
+      }
+    }
   }
+
+  const {
+    activeRequest,
+    requestQueue,
+    requestRoutingMode,
+    setRequestRoutingMode,
+    submitRequest: sendTextCommand
+  } = useNexusRequestQueue(executeTextCommand)
 
   const toggleMic = () => {
     const nextValue = !isMicMuted
@@ -430,6 +493,10 @@ export default function TrialRoot() {
         startVision={startVision}
         stopVision={stopVision}
         sendTextCommand={sendTextCommand}
+        activeRequest={activeRequest}
+        requestQueue={requestQueue}
+        requestRoutingMode={requestRoutingMode}
+        setRequestRoutingMode={setRequestRoutingMode}
         onUpgrade={openFullExperience}
       />
     </TrialMandatoryUpdateGate>

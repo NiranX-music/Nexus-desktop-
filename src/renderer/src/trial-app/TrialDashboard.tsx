@@ -54,6 +54,7 @@ export default function TrialDashboard(props: TrialRuntimeProps) {
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([])
   const [command, setCommand] = useState('')
   const [isSending, setIsSending] = useState(false)
+  const [commandStatus, setCommandStatus] = useState('Queue ready')
   const videoRef = useRef<HTMLVideoElement | null>(null)
 
   useEffect(() => {
@@ -107,8 +108,21 @@ export default function TrialDashboard(props: TrialRuntimeProps) {
 
     setIsSending(true)
     try {
-      await props.sendTextCommand(nextCommand)
+      const wasSteering = props.requestRoutingMode === 'steer'
+      const requestPromise = props.sendTextCommand(nextCommand)
       setCommand('')
+      setCommandStatus(
+        wasSteering
+          ? 'Steering request moved to the front.'
+          : props.activeRequest || props.requestQueue.length > 0
+            ? 'Request added to queue.'
+            : 'Request accepted.'
+      )
+      requestPromise.catch((error: any) => {
+        setCommandStatus(error?.message || 'Queued request failed.')
+      })
+    } catch (error: any) {
+      setCommandStatus(error?.message || 'Unable to send command.')
     } finally {
       setIsSending(false)
     }
@@ -314,7 +328,33 @@ export default function TrialDashboard(props: TrialRuntimeProps) {
               </div>
             </div>
 
-            <form onSubmit={sendQuickCommand} className="mt-4 flex gap-3">
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+              <div className="inline-flex rounded-2xl border border-white/10 bg-black/35 p-1">
+                {(['queue', 'steer'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => props.setRequestRoutingMode(mode)}
+                    className={`rounded-xl px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.16em] transition ${
+                      props.requestRoutingMode === mode
+                        ? 'bg-emerald-300 text-black'
+                        : 'text-zinc-500 hover:text-zinc-200'
+                    }`}
+                  >
+                    {mode}
+                  </button>
+                ))}
+              </div>
+              <span className="max-w-[16rem] truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+                {props.activeRequest
+                  ? `Running: ${props.activeRequest.command}`
+                  : props.requestQueue.length
+                    ? `${props.requestQueue.length} queued`
+                    : commandStatus}
+              </span>
+            </div>
+
+            <form onSubmit={sendQuickCommand} className="mt-3 flex gap-3">
               <input
                 value={command}
                 onChange={(event) => setCommand(event.target.value)}
@@ -323,7 +363,7 @@ export default function TrialDashboard(props: TrialRuntimeProps) {
               />
               <button
                 type="submit"
-                disabled={isSending}
+                disabled={isSending || !command.trim()}
                 className="inline-flex items-center justify-center gap-2 rounded-2xl border border-emerald-300/25 bg-emerald-400 px-4 py-3 text-[10px] font-black uppercase tracking-[0.16em] text-black transition hover:bg-emerald-300 disabled:opacity-50"
               >
                 {isSending ? <RiLoader4Line className="animate-spin" /> : <RiSendPlane2Line />}
@@ -331,11 +371,28 @@ export default function TrialDashboard(props: TrialRuntimeProps) {
               </button>
             </form>
 
+            {(props.activeRequest || props.requestQueue.length > 0) && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {props.requestQueue.slice(0, 3).map((item, index) => (
+                  <span
+                    key={item.id}
+                    className={`max-w-full truncate rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${
+                      item.mode === 'steer'
+                        ? 'border-cyan-300/20 bg-cyan-300/10 text-cyan-100'
+                        : 'border-white/10 bg-white/[0.04] text-zinc-400'
+                    }`}
+                  >
+                    {item.mode === 'steer' ? 'Steer' : `Q${index + 1}`}: {item.command}
+                  </span>
+                ))}
+              </div>
+            )}
+
             <div className="mt-4 grid gap-3 sm:grid-cols-3">
               {[
                 'Open Spotify and play my focus mix',
                 'Summarize my current machine status',
-                'Search the web for NVIDIA Build model updates'
+                'Search the web for Gemini API updates'
               ].map((preset) => (
                 <button
                   key={preset}

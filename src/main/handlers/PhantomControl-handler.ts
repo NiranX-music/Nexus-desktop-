@@ -11,6 +11,7 @@ import { keyboard, Key } from '@nut-tree-fork/nut-js'
 import path from 'path'
 import fs from 'fs/promises'
 import fsSync from 'fs'
+import { generateWithNexusGemini } from '../services/nexus-gemini-api'
 
 let phantomWindow: BrowserWindow | null = null
 
@@ -220,67 +221,72 @@ export default function registerPhantomKeyboard() {
         }
       }
 
-      if (!apiKey || apiKey.trim() === '') {
-        if (phantomWindow) {
-          phantomWindow.webContents.send(
-            'phantom-error',
-            'CRITICAL: Missing Gemini API Key.\nPlease launch the main Nexus Dashboard and update your Command Center Vault.'
-          )
-        }
-        return
-      }
-
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:streamGenerateContent?alt=sse&key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  {
-                    text: `You are Phantom, an inline code generator. Output ONLY the raw text or code requested. NO markdown formatting blocks like \`\`\`python. NO conversational text. Just the exact string.\n\nRequest: ${promptText}`
-                  }
-                ]
-              }
-            ]
-          })
-        }
-      )
-
-      if (!response.body) throw new Error('ReadableStream not supported.')
-
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder('utf-8')
+      const generationPrompt = `You are Phantom, an inline code generator. Output ONLY the raw text or code requested. NO markdown formatting blocks like \`\`\`python. NO conversational text. Just the exact string.\n\nRequest: ${promptText}`
       let fullGeneratedText = ''
-      let buffer = ''
 
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
+      if (!apiKey.trim()) {
+        fullGeneratedText = await generateWithNexusGemini({
+          model: 'gemini-2.5-flash',
+          prompt: generationPrompt,
+          temperature: 0.4,
+          maxOutputTokens: 8192
+        })
 
-        buffer += decoder.decode(value, { stream: true })
-
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const dataStr = line.slice(6)
-            if (dataStr === '[DONE]') continue
-
-            try {
-              const parsed = JSON.parse(dataStr)
-              const textChunk = parsed.candidates?.[0]?.content?.parts?.[0]?.text || ''
-
-              if (textChunk) {
-                fullGeneratedText += textChunk
-                if (phantomWindow) {
-                  phantomWindow.webContents.send('phantom-stream-chunk', textChunk)
+        if (phantomWindow && fullGeneratedText) {
+          phantomWindow.webContents.send('phantom-stream-chunk', fullGeneratedText)
+        }
+      } else {
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:streamGenerateContent?alt=sse&key=${apiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [
+                {
+                  parts: [
+                    {
+                      text: generationPrompt
+                    }
+                  ]
                 }
+              ]
+            })
+          }
+        )
+
+        if (!response.body) throw new Error('ReadableStream not supported.')
+
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder('utf-8')
+        let buffer = ''
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          buffer += decoder.decode(value, { stream: true })
+
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const dataStr = line.slice(6)
+              if (dataStr === '[DONE]') continue
+
+              try {
+                const parsed = JSON.parse(dataStr)
+                const textChunk = parsed.candidates?.[0]?.content?.parts?.[0]?.text || ''
+
+                if (textChunk) {
+                  fullGeneratedText += textChunk
+                  if (phantomWindow) {
+                    phantomWindow.webContents.send('phantom-stream-chunk', textChunk)
+                  }
+                }
+              } catch (e) {
               }
-            } catch (e) {
             }
           }
         }

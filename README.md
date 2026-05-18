@@ -310,7 +310,7 @@ Nexus operates locally by default, but can bridge into cloud models and search e
 - `https://nexus-ai-gateway-2.netlify.app`
 - `https://nexus-ai-gateway-3.netlify.app`
 
-Set `NVIDIA_API_KEY` as a secret environment variable in every gateway hosting provider before enabling Nexus Server AI for production users.
+Set `NEXUS_AI_UPSTREAM_API_KEY` as a secret environment variable in every gateway hosting provider before enabling Nexus Server AI for production users. `NVIDIA_API_KEY` is still accepted as a legacy fallback for existing NVIDIA Build deployments.
 
 ### 🔴 Required Keys
 

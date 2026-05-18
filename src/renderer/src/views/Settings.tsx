@@ -54,12 +54,6 @@ const DEFAULT_DEVELOPER_PROFILE = {
   website: 'https://niranx-nexus-agent.vercel.app',
   note: 'Nexus AI is maintained by NiranX and Resolute Team.'
 }
-const sanitizeNvidiaKey = (value = '') =>
-  value
-    .trim()
-    .replace(/^Bearer\s+/i, '')
-    .replace(/^['"]|['"]$/g, '')
-    .trim()
 
 const getDeveloperProfile = () => {
   try {
@@ -94,10 +88,8 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const [groqKey, setGroqKey] = useState(localStorage.getItem('nexus_groq_api_key') || '')
   const [hfKey, setHfKey] = useState(localStorage.getItem('nexus_hf_api_key') || '')
   const [tailvyKey, setTailvyKey] = useState(localStorage.getItem('nexus_tailvy_api_key') || '')
-  const [nvidiaKey, setNvidiaKey] = useState(localStorage.getItem(NVIDIA_API_KEY_STORAGE_KEY) || '')
-  const [aiProviderMode, setAiProviderMode] = useState(
-    localStorage.getItem(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY) || 'nexus'
-  )
+  const [nvidiaKey, setNvidiaKey] = useState('')
+  const [aiProviderMode, setAiProviderMode] = useState('nexus')
   const [nvidiaDefaults, setNvidiaDefaults] = useState<NvidiaModelDefaults>(
     DEFAULT_NVIDIA_MODEL_DEFAULTS
   )
@@ -137,6 +129,8 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
 
   useEffect(() => {
     setNvidiaDefaults(getStoredNvidiaModelDefaults())
+    localStorage.removeItem(NVIDIA_API_KEY_STORAGE_KEY)
+    localStorage.setItem(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY, 'nexus')
 
     const hydrateCloudSettings = async () => {
       if (IS_TRIAL_BUILD) {
@@ -171,8 +165,8 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
       }
 
       if (cloudProviderMode) {
-        setAiProviderMode(cloudProviderMode)
-        localStorage.setItem(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY, cloudProviderMode)
+        setAiProviderMode('nexus')
+        localStorage.setItem(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY, 'nexus')
       }
 
       if (cloudModelDefaults) {
@@ -194,9 +188,9 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
 
     if (window.electron?.ipcRenderer) {
       window.electron.ipcRenderer.invoke('secure-get-keys').then((keys) => {
-        if (keys?.nvidiaKey && !localStorage.getItem(NVIDIA_API_KEY_STORAGE_KEY)) {
-          setNvidiaKey(keys.nvidiaKey)
-          localStorage.setItem(NVIDIA_API_KEY_STORAGE_KEY, keys.nvidiaKey)
+        if (keys?.nvidiaKey) {
+          setNvidiaKey('')
+          localStorage.removeItem(NVIDIA_API_KEY_STORAGE_KEY)
         }
       })
 
@@ -390,15 +384,17 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   }
 
   const saveApiKeys = async () => {
-    const cleanNvidiaKey = sanitizeNvidiaKey(nvidiaKey)
+    const enforcedProviderMode = 'nexus'
+    const cleanNvidiaKey = ''
+    setAiProviderMode(enforcedProviderMode)
     setNvidiaKey(cleanNvidiaKey)
 
     localStorage.setItem('nexus_custom_api_key', geminiKey)
     localStorage.setItem('nexus_groq_api_key', groqKey)
     localStorage.setItem('nexus_hf_api_key', hfKey)
     localStorage.setItem('nexus_tailvy_api_key', tailvyKey)
-    localStorage.setItem(NVIDIA_API_KEY_STORAGE_KEY, cleanNvidiaKey)
-    localStorage.setItem(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY, aiProviderMode)
+    localStorage.removeItem(NVIDIA_API_KEY_STORAGE_KEY)
+    localStorage.setItem(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY, enforcedProviderMode)
 
     if (window.electron?.ipcRenderer) {
       try {
@@ -414,13 +410,13 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
     } else {
       const { saveCloudSetting } = await loadCloudDataModule()
       await Promise.all([
-        saveCloudSetting(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY, { value: aiProviderMode }),
+        saveCloudSetting(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY, { value: enforcedProviderMode }),
         saveCloudSetting('nexus_key_status', {
           gemini: Boolean(geminiKey),
           groq: Boolean(groqKey),
           hf: Boolean(hfKey),
           tavily: Boolean(tailvyKey),
-          nvidia: Boolean(cleanNvidiaKey)
+          nvidia: false
         })
       ])
       setCloudSyncStatus(
@@ -428,9 +424,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
       )
     }
 
-    alert(
-      'Neural uplinks saved. AI Chat will use the selected Nexus Server / Own API routing mode.'
-    )
+    alert('Neural uplinks saved. AI Chat will use the Nexus AI API gateway only.')
   }
 
   const saveNvidiaDefaults = async () => {
@@ -438,18 +432,16 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
     await saveCloudSettingIfAvailable(
       NVIDIA_DEFAULTS_STORAGE_KEY,
       { value: JSON.stringify(nvidiaDefaults) },
-      'NVIDIA model defaults synced to Supabase.'
+      'Nexus AI model defaults synced to Supabase.'
     )
-    alert('NVIDIA Build model defaults saved.')
+    alert('Nexus AI model defaults saved.')
   }
 
   const syncNvidiaModels = async () => {
     if (!window.electron?.ipcRenderer) return
-    setNvidiaSyncStatus('Syncing live NVIDIA /v1/models...')
-    const cleanNvidiaKey = sanitizeNvidiaKey(nvidiaKey)
+    setNvidiaSyncStatus('Syncing Nexus AI API model list...')
     const result = await window.electron.ipcRenderer.invoke('nvidia:list-models', {
-      apiKey: aiProviderMode === 'own-key' ? cleanNvidiaKey : '',
-      useNexusServers: aiProviderMode !== 'own-key'
+      useNexusServers: true
     })
 
     if (result?.success) {
@@ -457,7 +449,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
         `Live endpoint returned ${result.models.length} models. Bundled catalog remains categorized.`
       )
     } else {
-      setNvidiaSyncStatus(result?.error || 'Unable to sync NVIDIA models.')
+      setNvidiaSyncStatus(result?.error || 'Unable to sync Nexus AI models.')
     }
   }
 
@@ -887,13 +879,8 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                     {[
                       {
                         id: 'nexus',
-                        title: 'Run models on Nexus Servers',
-                        text: 'Default. Uses multi-site Vercel/Netlify failover and does not require a user API key.'
-                      },
-                      {
-                        id: 'own-key',
-                        title: 'Use my own NVIDIA API key',
-                        text: 'Advanced mode. Requests go directly to NVIDIA using the encrypted local key below.'
+                        title: 'Use Nexus AI API gateway',
+                        text: 'Required API-only mode. Desktop requests go to the gateway; the gateway owns the upstream key.'
                       }
                     ].map((mode) => (
                       <button
@@ -931,14 +918,15 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
 
                     <div className="flex flex-col gap-2">
                       <label className="text-[10px] text-zinc-400 font-mono tracking-widest uppercase flex items-center gap-2">
-                      <RiBrainLine size={14} /> NVIDIA Build NIM Override
+                      <RiBrainLine size={14} /> Gateway Upstream Key
                       </label>
                       <div className={inputContainerClass}>
                         <input
                           type="password"
                           value={nvidiaKey}
+                          disabled
                           onChange={(e) => setNvidiaKey(e.target.value)}
-                          placeholder="Optional: nvapi-... override"
+                          placeholder="Set NEXUS_AI_UPSTREAM_API_KEY on the API host"
                           className="bg-transparent border-none outline-none text-sm font-mono text-zinc-100 w-full placeholder:text-zinc-700"
                         />
                       </div>
@@ -994,11 +982,11 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-white/5 pb-4">
                       <div>
                         <span className={titleClass}>
-                          <RiBrainLine className="text-emerald-400" size={18} /> NVIDIA API Key
+                          <RiBrainLine className="text-emerald-400" size={18} /> Nexus AI API Key
                           Guide
                         </span>
                         <p className="text-[10px] text-zinc-500 font-mono mt-1 tracking-widest uppercase">
-                          Optional override. Nexus API works without a user key.
+                          Server-side only. Desktop never stores the upstream model key.
                         </p>
                       </div>
                       <a
@@ -1007,7 +995,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                         rel="noreferrer"
                         className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-[10px] font-bold tracking-widest text-emerald-300 transition-all hover:bg-emerald-500/20"
                       >
-                        OPEN NVIDIA KEYS <RiExternalLinkLine size={14} />
+                        OPEN PROVIDER KEYS <RiExternalLinkLine size={14} />
                       </a>
                     </div>
 
@@ -1015,18 +1003,18 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                       {[
                         {
                           step: '01',
-                          title: 'Default Mode',
-                          text: 'Leave this blank to use the hosted Nexus NVIDIA route.'
+                          title: 'Gateway Mode',
+                          text: 'Desktop chat always calls the Nexus AI API gateway.'
                         },
                         {
                           step: '02',
-                          title: 'Optional Key',
-                          text: 'Advanced users can generate a personal NVIDIA Build key.'
+                          title: 'Server Key',
+                          text: 'Put your real upstream key in provider hosting env vars.'
                         },
                         {
                           step: '03',
-                          title: 'Paste Override',
-                          text: 'Paste it above only if you want local billing/control.'
+                          title: 'No Local Key',
+                          text: 'The desktop app does not save or send provider secrets.'
                         },
                         {
                           step: '04',
@@ -1052,7 +1040,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                     </div>
 
                     <div className="rounded-xl border border-white/5 bg-black/50 p-4 text-[10px] font-mono text-zinc-400">
-                      Direct NVIDIA base URL used only when a local override key exists:{' '}
+                      Gateway upstream base URL is configured on the API host:{' '}
                       <span className="text-emerald-300">
                         https://integrate.api.nvidia.com/v1
                       </span>
@@ -1062,17 +1050,16 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                   <div className="bg-[#050505] border border-white/5 p-4 rounded-xl mt-2 flex items-start gap-3">
                     <RiShieldKeyholeLine className="text-zinc-500 shrink-0 mt-0.5" size={16} />
                     <p className="text-[10px] text-zinc-400 font-mono leading-relaxed">
-                      [SECURITY NOTICE]: Optional local API keys are encrypted and stored strictly
-                      in your local OS. If no NVIDIA key is saved, AI Chat uses the hosted Nexus
-                      proxy, so prompts are sent to the hosted Nexus API route and billed through
-                      the configured server-side NVIDIA key.
+                      [SECURITY NOTICE]: AI Chat uses the Nexus AI API gateway only. Upstream
+                      provider secrets must stay in Vercel/Netlify or your API host as
+                      NEXUS_AI_UPSTREAM_API_KEY.
                     </p>
                   </div>
                 </div>
               </motion.div>
             )}
 
-            {/* --- TAB 4: NVIDIA MODELS --- */}
+            {/* --- TAB 4: AI MODELS --- */}
             {activeTab === 'models' && (
               <motion.div
                 key="models"
@@ -1086,12 +1073,12 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-4">
                     <div>
                       <span className={titleClass}>
-                        <RiBrainLine className="text-emerald-400" size={18} /> NVIDIA Build Model
+                        <RiBrainLine className="text-emerald-400" size={18} /> Nexus AI Model
                         Defaults
                       </span>
                       <p className="text-[10px] text-zinc-500 font-mono mt-2 tracking-widest uppercase">
-                        Chat uses OpenAI-compatible NVIDIA NIM. Voice assistant reads these defaults
-                        at startup.
+                        Chat uses the OpenAI-compatible Nexus AI API gateway. Voice assistant reads
+                        these defaults at startup.
                       </p>
                     </div>
                     <div className="flex flex-col sm:flex-row gap-3">
@@ -1157,10 +1144,10 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
 
                           <div className="min-h-20 rounded-xl border border-white/5 bg-black/40 p-3">
                             <p className="text-[11px] text-zinc-300 font-semibold">
-                              {selected?.provider || 'NVIDIA'} / {selected?.name || 'model'}
+                              {selected?.provider || 'Nexus AI'} / {selected?.name || 'model'}
                             </p>
                             <p className="text-[10px] text-zinc-500 mt-1 leading-relaxed">
-                              {selected?.description || 'Model selected from live NVIDIA endpoint.'}
+                              {selected?.description || 'Model selected from the Nexus AI API.'}
                             </p>
                           </div>
                         </div>
@@ -1171,10 +1158,9 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                   <div className="bg-[#050505] border border-white/5 p-4 rounded-xl flex items-start gap-3">
                     <RiShieldKeyholeLine className="text-zinc-500 shrink-0 mt-0.5" size={16} />
                     <p className="text-[10px] text-zinc-400 font-mono leading-relaxed">
-                      The bundled catalog includes current NVIDIA Build LLM, coding, reasoning,
-                      multimodal, speech, translation, image, and retrieval models. The live sync
-                      button queries the hosted Nexus models route when no local key is saved, or
-                      NVIDIA's /v1/models endpoint directly when you provide an override key.
+                      The bundled catalog includes current LLM, coding, reasoning, multimodal,
+                      speech, translation, image, and retrieval models. The live sync button queries
+                      the hosted Nexus AI API models route only.
                     </p>
                   </div>
                 </div>

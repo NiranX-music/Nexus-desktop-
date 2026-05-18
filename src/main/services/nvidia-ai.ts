@@ -1,11 +1,7 @@
 import { IpcMain } from 'electron'
 
-const NVIDIA_BASE_URL = 'https://integrate.api.nvidia.com/v1'
 const DEFAULT_MODEL = 'deepseek-ai/deepseek-v4-pro'
 const DEFAULT_NEXUS_API_BASE_URL = 'https://niranx-nexus-agent.vercel.app'
-const NVIDIA_API_KEY_ENV_NAMES = ['NVIDIA_API_KEY', 'NVIDIA_BUILD_API_KEY', 'NVIDIA_NIM_API_KEY']
-const PLACEHOLDER_NVIDIA_KEY_RE =
-  /^(your-|paste-|replace-|example|placeholder|nvapi[_-]?your|\$NVIDIA_API_KEY|\$\{NVIDIA_API_KEY\})/i
 
 type ChatRole = 'system' | 'user' | 'assistant'
 
@@ -30,12 +26,18 @@ const getNexusApiBaseUrl = () => {
 
 const endpointFor = (baseUrl: string, endpoint: 'chat' | 'models') => {
   const cleanBase = baseUrl.replace(/\/$/, '')
-  if (cleanBase.includes('/api/nvidia/') || cleanBase.includes('/.netlify/functions/')) {
+  if (
+    cleanBase.includes('/api/nvidia/') ||
+    cleanBase.includes('/api/ai/') ||
+    cleanBase.includes('/.netlify/functions/')
+  ) {
     return cleanBase
       .replace(/\/chat$/, `/${endpoint}`)
       .replace(/\/models$/, `/${endpoint}`)
       .replace(/nvidia-chat$/, `nvidia-${endpoint}`)
       .replace(/nvidia-models$/, `nvidia-${endpoint}`)
+      .replace(/ai-chat$/, `ai-${endpoint}`)
+      .replace(/ai-models$/, `ai-${endpoint}`)
   }
 
   if (cleanBase.includes('netlify.app')) {
@@ -43,29 +45,6 @@ const endpointFor = (baseUrl: string, endpoint: 'chat' | 'models') => {
   }
 
   return `${cleanBase}/api/nvidia/${endpoint}`
-}
-
-const normalizeNvidiaApiKey = (value = '') => {
-  const candidate = String(value || '')
-    .trim()
-    .replace(/^Bearer\s+/i, '')
-    .replace(/^['"]|['"]$/g, '')
-    .trim()
-
-  if (!candidate || PLACEHOLDER_NVIDIA_KEY_RE.test(candidate)) return ''
-  return candidate
-}
-
-const getDirectNvidiaApiKey = (payload: any = {}) => {
-  const payloadKey = normalizeNvidiaApiKey(payload.apiKey)
-  if (payloadKey) return payloadKey
-
-  for (const name of NVIDIA_API_KEY_ENV_NAMES) {
-    const apiKey = normalizeNvidiaApiKey(process.env[name])
-    if (apiKey) return apiKey
-  }
-
-  return ''
 }
 
 const normalizeMessages = (messages: NvidiaChatMessage[] = []) =>
@@ -98,11 +77,6 @@ const getApiErrorMessage = (data: any, fallback: string) => {
   return fallback
 }
 
-const buildNvidiaMessages = (payload: any, messages: Array<{ role: ChatRole; content: string }>) => {
-  const system = String(payload.system || '').trim()
-  return system ? [{ role: 'system' as ChatRole, content: system }, ...messages] : messages
-}
-
 const callNexusApiChat = async (
   payload: any,
   messages: Array<{ role: ChatRole; content: string }>
@@ -133,7 +107,7 @@ const callNexusApiChat = async (
     throw new Error(
       getApiErrorMessage(
         data,
-        `${response.status} status from Nexus AI API. Check that NVIDIA_API_KEY is set on Vercel.`
+        `${response.status} status from Nexus AI API. Check NEXUS_AI_API_URL and the upstream API key on the API host.`
       )
     )
   }
@@ -141,54 +115,9 @@ const callNexusApiChat = async (
   return {
     success: true,
     endpoint: baseUrl,
+    providerMode: 'nexus-api-only',
     model: data.model || model,
     content: data.content || ''
-  }
-}
-
-const callDirectNvidiaChat = async (
-  payload: any,
-  messages: Array<{ role: ChatRole; content: string }>
-) => {
-  const apiKey = getDirectNvidiaApiKey(payload)
-  if (!apiKey) {
-    throw new Error('No NVIDIA API key is saved. Add one in Settings or use the hosted Nexus API.')
-  }
-
-  const model = String(payload.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL
-  const upstreamPayload: any = {
-    model,
-    messages: buildNvidiaMessages(payload, messages),
-    temperature: payload.temperature ?? 1,
-    top_p: payload.top_p ?? 0.95,
-    max_tokens: resolveMaxTokens(payload.max_tokens, model),
-    stream: false
-  }
-
-  if (model.includes('deepseek-v4')) {
-    upstreamPayload.chat_template_kwargs = { thinking: false }
-  }
-
-  const response = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${apiKey}`,
-      'content-type': 'application/json'
-    },
-    body: JSON.stringify(upstreamPayload)
-  })
-
-  const { data } = await readJsonResponse(response)
-
-  if (!response.ok) {
-    throw new Error(getApiErrorMessage(data, `NVIDIA returned ${response.status} for ${model}.`))
-  }
-
-  return {
-    success: true,
-    endpoint: NVIDIA_BASE_URL,
-    model: data.model || model,
-    content: data.choices?.[0]?.message?.content || ''
   }
 }
 
@@ -208,36 +137,12 @@ const listNexusApiModels = async () => {
     throw new Error(
       getApiErrorMessage(
         data,
-        `${response.status} status from Nexus AI API. Check that NVIDIA_API_KEY is set on Vercel.`
+        `${response.status} status from Nexus AI API. Check NEXUS_AI_API_URL and the upstream API key on the API host.`
       )
     )
   }
 
   return data.models || []
-}
-
-const listDirectNvidiaModels = async (payload: any = {}) => {
-  const apiKey = getDirectNvidiaApiKey(payload)
-  if (!apiKey) {
-    throw new Error('No NVIDIA API key is saved. Add one in Settings or use the hosted Nexus API.')
-  }
-
-  const response = await fetch(`${NVIDIA_BASE_URL}/models`, {
-    headers: {
-      authorization: `Bearer ${apiKey}`
-    }
-  })
-
-  const { data } = await readJsonResponse(response)
-
-  if (!response.ok) {
-    throw new Error(getApiErrorMessage(data, `NVIDIA returned ${response.status}.`))
-  }
-
-  return (data.data || [])
-    .map((model: any) => model.id)
-    .filter(Boolean)
-    .sort((a: string, b: string) => a.localeCompare(b))
 }
 
 const getNexusApiStatus = async () => {
@@ -262,6 +167,7 @@ const getNexusApiStatus = async () => {
     return {
       success: response.ok && data?.success !== false,
       endpoint: baseUrl,
+      providerMode: 'nexus-api-only',
       modelCount: Array.isArray(data?.models) ? data.models.length : 0,
       error: response.ok ? '' : data?.error || `${response.status} status from Nexus AI API`
     }
@@ -269,6 +175,7 @@ const getNexusApiStatus = async () => {
     return {
       success: false,
       endpoint: baseUrl,
+      providerMode: 'nexus-api-only',
       modelCount: 0,
       error: error?.message || 'Nexus AI API status check failed.'
     }
@@ -292,10 +199,6 @@ export default function registerNvidiaAI({ ipcMain }: { ipcMain: IpcMain }) {
         return { success: false, error: 'No chat message was provided.' }
       }
 
-      if (payload.useNexusServers === false) {
-        return await callDirectNvidiaChat(payload, messages)
-      }
-
       return await callNexusApiChat(payload, messages)
     } catch (error: any) {
       return {
@@ -307,11 +210,8 @@ export default function registerNvidiaAI({ ipcMain }: { ipcMain: IpcMain }) {
 
   ipcMain.handle('nvidia:list-models', async (_event, payload: any = {}) => {
     try {
-      const models =
-        payload.useNexusServers === false
-          ? await listDirectNvidiaModels(payload)
-          : await listNexusApiModels()
-      return { success: true, models }
+      const models = await listNexusApiModels()
+      return { success: true, providerMode: 'nexus-api-only', models }
     } catch (error: any) {
       return {
         success: false,
