@@ -43,7 +43,7 @@ export default function TrialSettings({ isSystemActive }: TrialSettingsProps) {
     localStorage.getItem('nexus_ai_provider_mode') || 'nexus'
   )
   const [appVersion, setAppVersion] = useState('Loading')
-  const [updateFeedUrl, setUpdateFeedUrl] = useState('https://niranx-nexus-agent.vercel.app/updates/win')
+  const [updateFeedUrl, setUpdateFeedUrl] = useState('https://nexus-desktop-app.vercel.app/updates/win')
   const [updateStatus, setUpdateStatus] = useState<
     'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'installing' | 'error'
   >('idle')
@@ -414,7 +414,7 @@ export default function TrialSettings({ isSystemActive }: TrialSettingsProps) {
               </h3>
             </div>
             <a
-              href="https://niranx-nexus-agent.vercel.app/installer"
+              href="https://nexus-desktop-app.vercel.app/installer"
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center gap-2 rounded-2xl border border-amber-300/18 bg-amber-300/10 px-4 py-3 text-[10px] font-black uppercase tracking-[0.16em] text-amber-100 transition hover:bg-amber-300/16"

@@ -8,13 +8,13 @@ We pledge to act and interact in ways that contribute to an open, welcoming, div
 
 ## Our Standards
 
-Examples of behavior that contributes to a positive environment for the Nexus community include:
+Examples of behavior that contributes to a positive environment for the NEXUS community include:
 
 - Demonstrating empathy and kindness toward other people
 - Being respectful of differing opinions, viewpoints, and experiences
 - Giving and gracefully accepting constructive feedback
 - Accepting responsibility and apologizing to those affected by our mistakes, and learning from the experience
-- Focusing on what is best not just for us as individuals, but for the overall Nexus ecosystem and its users
+- Focusing on what is best not just for us as individuals, but for the overall NEXUS ecosystem and its users
 - Being Friendly and Professional
 
 ## Unacceptable Behavior
@@ -39,7 +39,7 @@ This Code of Conduct applies within all community spaces related to Nexus AI (in
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the core Nexus maintainers responsible for enforcement at **niranx986@gmail.com**. All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the core NEXUS maintainers responsible for enforcement at **niranx986@gmail.com**. All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the reporter of any incident.
 
@@ -63,14 +63,14 @@ Community leaders will follow these Community Impact Guidelines in determining t
 
 **Community Impact**: A serious violation of community standards, including sustained inappropriate behavior.
 
-**Consequence**: A temporary ban from any sort of interaction or public communication with the Nexus community for a specified period of time. No public or private interaction with the people involved, including unsolicited interaction with those enforcing the Code of Conduct, is allowed during this period. Violating these terms may lead to a permanent ban.
+**Consequence**: A temporary ban from any sort of interaction or public communication with the NEXUS community for a specified period of time. No public or private interaction with the people involved, including unsolicited interaction with those enforcing the Code of Conduct, is allowed during this period. Violating these terms may lead to a permanent ban.
 
 ### 4. Permanent Ban
 
 
 **Community Impact**: Demonstrating a pattern of violation of community standards, including sustained inappropriate behavior, harassment of an individual, or aggression toward or disparagement of classes of individuals.
 
-**Consequence**: A permanent ban from any sort of public interaction within the Nexus community.
+**Consequence**: A permanent ban from any sort of public interaction within the NEXUS community.
 
 ## Attribution
 
@@ -81,3 +81,4 @@ Community Impact Guidelines were inspired by [Mozilla's code of conduct enforcem
 [homepage]: https://www.contributor-covenant.org
 
 For answers to common questions about this code of conduct, see the FAQ at https://www.contributor-covenant.org/faq. Translations are available at https://www.contributor-covenant.org/translations.
+

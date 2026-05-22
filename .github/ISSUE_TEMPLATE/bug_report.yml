@@ -45,7 +45,7 @@ body:
       label: Steps to reproduce
       description: Provide the shortest deterministic repro path supported by direct observation.
       placeholder: |
-        1. Start Nexus packaged .exe on Windows 11.
+        1. Start NEXUS packaged .exe on Windows 11.
         2. Focus on VS Code and press `Ctrl+Alt+Space`.
         3. Speak command "Write a python script".
         4. Observe no text injected and check Electron console for `ipcRenderer timeout`.
@@ -70,7 +70,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Nexus version
+      label: NEXUS version
       description: Exact version/build tested (check your package.json or releases).
       placeholder: '1.2.0'
     validations:
@@ -87,7 +87,7 @@ body:
     id: install_method
     attributes:
       label: Install method
-      description: How Nexus was launched.
+      description: How NEXUS was launched.
       placeholder: 'npm run dev / Packaged Windows .exe / Docker Compose (Web Interface)'
     validations:
       required: true
@@ -95,7 +95,7 @@ body:
     id: module
     attributes:
       label: Affected Module / Tool
-      description: Which part of the Nexus system is failing?
+      description: Which part of the NEXUS system is failing?
       placeholder: 'Phantom Typer / Local RAG (LanceDB) / ADB Mobile Link / Screen Peeler'
     validations:
       required: true
@@ -111,5 +111,4 @@ body:
       label: Additional information
       description: Add any remaining context. If this is a regression, include the last known good version.
       placeholder: 'Last known good version was 1.1.0. Temporary workaround is manually copying the text from the web interface.'
-
 

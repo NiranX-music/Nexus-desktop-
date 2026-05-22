@@ -1,6 +1,6 @@
 <svg width="1280" height="640" viewBox="0 0 1280 640" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">Nexus AI neural desktop banner</title>
-  <desc id="desc">A dark green command interface banner for Nexus AI by Nexus Tech.</desc>
+  <desc id="desc">A dark green command interface banner for Nexus AI by Resolute Nexus.</desc>
   <defs>
     <radialGradient id="coreGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(650 300) rotate(90) scale(280 430)">
       <stop stop-color="#21FFD0" stop-opacity="0.45"/>
@@ -69,7 +69,7 @@
     </g>
   </g>
   <text x="640" y="512" text-anchor="middle" fill="#F5FFF9" font-family="Segoe UI, Arial, sans-serif" font-size="82" font-weight="900" letter-spacing="14">NEXUS AI</text>
-  <text x="640" y="558" text-anchor="middle" fill="#8DFFDD" font-family="Consolas, monospace" font-size="22" font-weight="700" letter-spacing="7">AUTONOMOUS DESKTOP AGENT // NEXUS TECH</text>
-  <text x="74" y="586" fill="#6B7C77" font-family="Consolas, monospace" font-size="14" font-weight="700" letter-spacing="2">MADE WITH LOVE FROM NIRANX, RESOLUTE TEAM</text>
+  <text x="640" y="558" text-anchor="middle" fill="#8DFFDD" font-family="Consolas, monospace" font-size="22" font-weight="700" letter-spacing="7">AUTONOMOUS DESKTOP AGENT // RESOLUTE NEXUS</text>
+  <text x="74" y="586" fill="#6B7C77" font-family="Consolas, monospace" font-size="14" font-weight="700" letter-spacing="2">DEVELOPED BY NIRANX // RESOLUTE NEXUS</text>
   <text x="1206" y="586" text-anchor="end" fill="#6B7C77" font-family="Consolas, monospace" font-size="14" font-weight="700" letter-spacing="2">nexus-desktop-app.vercel.app</text>
 </svg>

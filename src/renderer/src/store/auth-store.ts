@@ -1,23 +1,18 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
-import {
-  clearDesktopAuthArtifacts,
-  readStoredAppAuthToken,
-  type DesktopAuthMode,
-  type DesktopAuthUser
-} from '@renderer/services/auth-session'
 
 interface AuthState {
   accessToken: string | null
-  authMode: DesktopAuthMode | null
-  user: DesktopAuthUser | null
+  userEmail: string | null
+  authMode: 'cloud' | 'app' | null
   isAuthInitialized: boolean
 
   setAccessToken: (token: string | null) => void
+  setUserEmail: (email: string | null) => void
   setAuthSession: (session: {
     token: string | null
-    mode: DesktopAuthMode | null
-    user?: DesktopAuthUser | null
+    mode?: 'cloud' | 'app' | null
+    user?: { email?: string; name?: string } | null
   }) => void
   setIsAuthInitialized: (value: boolean) => void
   logout: () => void
@@ -26,8 +21,8 @@ interface AuthState {
 export const useAuthStore = create<AuthState>()(
   immer((set) => ({
     accessToken: null,
+    userEmail: null,
     authMode: null,
-    user: null,
     isAuthInitialized: false,
 
     setAccessToken: (token) =>
@@ -35,11 +30,17 @@ export const useAuthStore = create<AuthState>()(
         state.accessToken = token
       }),
 
-    setAuthSession: ({ token, mode, user = null }) =>
+    setUserEmail: (email) =>
       set((state) => {
-        state.accessToken = token
-        state.authMode = mode
-        state.user = user
+        state.userEmail = email
+      }),
+
+    setAuthSession: (session) =>
+      set((state) => {
+        state.accessToken = session.token
+        state.authMode = session.mode || null
+        state.userEmail = session.user?.email || null
+        state.isAuthInitialized = true
       }),
 
     setIsAuthInitialized: (value) =>
@@ -49,22 +50,12 @@ export const useAuthStore = create<AuthState>()(
 
     logout: () =>
       set((state) => {
-        const appSessionToken = readStoredAppAuthToken()
-
-        import('@renderer/lib/supabase')
-          .then(({ signOutCloudSession }) => signOutCloudSession())
-          .catch(() => {})
-
-        if (appSessionToken) {
-          window.electron?.ipcRenderer?.invoke('email-auth:logout', appSessionToken).catch(() => {})
-        }
-
-        clearDesktopAuthArtifacts()
-        window.dispatchEvent(new Event('nexus-auth-logout'))
         state.accessToken = null
+        state.userEmail = null
         state.authMode = null
-        state.user = null
         state.isAuthInitialized = true
+        localStorage.removeItem('nexus_local_session')
+        localStorage.removeItem('nexus_cloud_token')
       })
   }))
 )

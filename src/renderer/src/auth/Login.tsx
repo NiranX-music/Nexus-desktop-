@@ -1,281 +1,168 @@
-import { useEffect, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
-import { useNavigate } from 'react-router-dom'
+import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import {
   Activity,
-  Cloud,
   Cpu,
   Database,
-  Fingerprint,
   KeyRound,
-  Loader2,
   Lock,
   LogIn,
   Mail,
-  MonitorSmartphone,
   Network,
   ShieldCheck,
   TerminalSquare,
   User,
   UserPlus
 } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { useAuthStore } from '../store/auth-store'
+import { configureCloudSupabase } from '../lib/supabase'
+import { normalizeCloudAuthUser, persistPreferredDesktopAuthMode } from '../services/auth-session'
+import { bootstrapCloudAccount, saveCloudData, syncLocalSettingsToCloud } from '../services/cloud-data'
 
-import { activateCloudSessionPayload } from '@renderer/services/cloud-session'
-import {
-  normalizeAppAuthUser,
-  persistPreferredDesktopAuthMode,
-  persistStoredAppAuthToken
-} from '@renderer/services/auth-session'
-import { useAuthStore } from '@renderer/store/auth-store'
-
-const CLOUD_AUTH_FEEDBACK_STORAGE_KEY = 'nexus_cloud_auth_feedback'
-const LOGIN_UI_MODE_STORAGE_KEY = 'nexus_login_ui_mode'
-
-type LoginSurfaceMode = 'cloud' | 'app'
-type AppAuthStep = 'login' | 'register'
-
-const readCloudAuthFeedback = () => localStorage.getItem(CLOUD_AUTH_FEEDBACK_STORAGE_KEY) || ''
-const readPreferredUiMode = (): LoginSurfaceMode =>
-  localStorage.getItem(LOGIN_UI_MODE_STORAGE_KEY) === 'app' ? 'app' : 'cloud'
-
-const normalizeDesktopLoginCode = (value = '') => {
-  const raw = String(value || '')
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, '')
-    .replace(/^NX/, '')
-    .slice(0, 8)
-
-  if (!raw) return ''
-
-  const groups = ['NX', raw.slice(0, 4), raw.slice(4, 8)].filter(Boolean)
-  return groups.join('-')
-}
-
-const isValidEmail = (value = '') => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())
+type Mode = 'signin' | 'create'
 
 export default function LoginPage() {
   const navigate = useNavigate()
+  const setAuthSession = useAuthStore((state) => state.setAuthSession)
   const [bootLogs, setBootLogs] = useState<string[]>([])
   const [isReady, setIsReady] = useState(false)
-  const [authMode, setAuthMode] = useState<LoginSurfaceMode>(readPreferredUiMode())
-  const [appAuthStep, setAppAuthStep] = useState<AppAuthStep>('login')
-  const [authError, setAuthError] = useState(readCloudAuthFeedback())
-  const [statusMessage, setStatusMessage] = useState('')
-  const [desktopLoginCode, setDesktopLoginCode] = useState('')
-  const [isOpeningWebsite, setIsOpeningWebsite] = useState(false)
-  const [isVerifyingCode, setIsVerifyingCode] = useState(false)
-  const [isAppAuthBusy, setIsAppAuthBusy] = useState(false)
-  const [appName, setAppName] = useState('')
-  const [appEmail, setAppEmail] = useState('')
-  const [appPassword, setAppPassword] = useState('')
-  const [appConfirmPassword, setAppConfirmPassword] = useState('')
+  const [mode, setMode] = useState<Mode>('signin')
+  const [displayName, setDisplayName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isCloudConfigured] = useState(() => Boolean(configureCloudSupabase()))
 
-  const electronAPI = (window as any).electron?.ipcRenderer
-
-  const clearAuthMessages = () => {
-    setAuthError('')
-    setStatusMessage('')
-    localStorage.removeItem(CLOUD_AUTH_FEEDBACK_STORAGE_KEY)
-  }
-
-  const activateAppAccountSession = (payload: any) => {
-    if (!payload?.ok || !payload?.token || !payload?.user) {
-      throw new Error(payload?.error || 'Unable to activate the Nexus app account session.')
-    }
-
-    const user = normalizeAppAuthUser(payload.user)
-    persistStoredAppAuthToken(payload.token)
-    persistPreferredDesktopAuthMode('app')
-    localStorage.setItem('nexus_user_name', user.name)
-    useAuthStore.getState().setAuthSession({
-      token: payload.token,
-      mode: 'app',
-      user
-    })
-
-    return user
-  }
-
-  const handleWebsiteLogin = async () => {
-    clearAuthMessages()
-
-    if (!electronAPI) {
-      window.open(
-        `${import.meta.env.VITE_NEXUS_WEB_APP_URL || 'https://niranx-nexus-agent.vercel.app'}/auth=desktop?desktop=1`,
-        '_blank'
-      )
-      setStatusMessage(
-        'Website opened. Sign in there, copy the Nexus desktop code, then paste it below.'
-      )
-      return
-    }
-
-    setIsOpeningWebsite(true)
-    try {
-      const response = await electronAPI.invoke('cloud-auth:open-login')
-      if (!response?.ok) {
-        setAuthError(response?.error || 'Unable to open Nexus website login.')
-        return
-      }
-
-      setStatusMessage(
-        'Website opened. Sign in there, generate a Nexus desktop code, then paste it below.'
-      )
-    } catch (error) {
-      setAuthError(
-        error instanceof Error
-          ? error.message
-          : 'Unable to open the Nexus website login flow.'
-      )
-    } finally {
-      setIsOpeningWebsite(false)
-    }
-  }
-
-  const verifyDesktopCode = async () => {
-    const code = normalizeDesktopLoginCode(desktopLoginCode)
-
-    setDesktopLoginCode(code)
-    clearAuthMessages()
-
-    if (code.length < 12) {
-      setAuthError('Enter the full Nexus desktop code from the website.')
-      return
-    }
-
-    if (!electronAPI) {
-      setAuthError('Desktop code verification is only available inside the Nexus app.')
-      return
-    }
-
-    setIsVerifyingCode(true)
-    setStatusMessage('Verifying Nexus desktop code...')
-
-    try {
-      const response = await electronAPI.invoke('cloud-auth:redeem-code', { userCode: code })
-      if (!response?.ok) {
-        throw new Error(response?.error || 'Unable to verify the Nexus desktop code.')
-      }
-
-      await activateCloudSessionPayload(response)
-      setStatusMessage('Cloud access granted. Entering Nexus...')
-      navigate('/', { replace: true })
-    } catch (error) {
-      setAuthError(
-        error instanceof Error ? error.message : 'Unable to verify the Nexus desktop code.'
-      )
-      setStatusMessage('')
-    } finally {
-      setIsVerifyingCode(false)
-    }
-  }
-
-  const submitAppAuth = async () => {
-    clearAuthMessages()
-
-    if (!electronAPI) {
-      setAuthError('App account auth is only available inside the Nexus desktop app.')
-      return
-    }
-
-    const email = appEmail.trim().toLowerCase()
-    const password = appPassword
-    const name = appName.trim()
-
-    if (!isValidEmail(email)) {
-      setAuthError('Enter a valid email address.')
-      return
-    }
-
-    if (password.length < 8) {
-      setAuthError('Use at least 8 characters for the app account password.')
-      return
-    }
-
-    if (appAuthStep === 'register') {
-      if (name.length < 2) {
-        setAuthError('Enter a display name for the app account.')
-        return
-      }
-
-      if (appConfirmPassword !== password) {
-        setAuthError('Passwords do not match yet.')
-        return
-      }
-    }
-
-    setIsAppAuthBusy(true)
-    setStatusMessage(
-      appAuthStep === 'register'
-        ? 'Creating secure app account on this PC...'
-        : 'Signing into the app account...'
-    )
-
-    try {
-      const response =
-        appAuthStep === 'register'
-          ? await electronAPI.invoke('email-auth:register', { name, email, password })
-          : await electronAPI.invoke('email-auth:login', { email, password })
-
-      if (!response?.ok) {
-        throw new Error(response?.error || 'Unable to complete app account sign-in.')
-      }
-
-      activateAppAccountSession(response)
-      setStatusMessage(
-        appAuthStep === 'register'
-          ? 'App account created. Entering Nexus...'
-          : 'App account unlocked. Entering Nexus...'
-      )
-      navigate('/', { replace: true })
-    } catch (error) {
-      setAuthError(
-        error instanceof Error ? error.message : 'Unable to complete app account sign-in.'
-      )
-      setStatusMessage('')
-    } finally {
-      setIsAppAuthBusy(false)
-    }
-  }
+  const authStateLabel = useMemo(() => (isCloudConfigured ? 'CLOUD' : 'SETUP'), [isCloudConfigured])
 
   useEffect(() => {
     const sequence = [
       'SYS_BOOT: INITIATING KERNEL...',
       'SECURE_ENCLAVE: MOUNTED',
-      'NEURAL_LINK: ESTABLISHING...',
+      'SUPABASE_AUTH: EMAIL + PASSWORD',
       'IPC_BRIDGE: [OK]',
-      'AUTH_FABRIC: CLOUD + APP MODES READY',
+      'REMOTE_MEMORY: READY',
       'AGENTIC_ROUTER: ONLINE',
-      'AWAITING OPERATOR HANDSHAKE...'
+      'AWAITING OPERATOR CREDENTIALS...'
     ]
 
     let currentStep = 0
     const interval = setInterval(() => {
       if (currentStep < sequence.length) {
         setBootLogs((prev) => [...prev, sequence[currentStep]])
-        currentStep += 1
+        currentStep++
       } else {
         setIsReady(true)
         clearInterval(interval)
       }
-    }, 550)
+    }, 420)
 
     return () => clearInterval(interval)
   }, [])
 
-  useEffect(() => {
-    const syncFeedback = () => {
-      setAuthError(readCloudAuthFeedback())
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setError('')
+    setNotice('')
+    setIsSubmitting(true)
+
+    try {
+      const supabase = configureCloudSupabase()
+      if (!supabase) {
+        throw new Error('Supabase is not configured for this build. Add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.')
+      }
+
+      const normalizedEmail = email.trim().toLowerCase()
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+        throw new Error('Enter a valid email address.')
+      }
+      if (password.length < 8) {
+        throw new Error('Password must be at least 8 characters.')
+      }
+
+      const name = displayName.trim() || normalizedEmail.split('@')[0] || 'Nexus Operator'
+
+      if (mode === 'create') {
+        if (password !== confirmPassword) throw new Error('Passwords do not match.')
+        if (name.length < 2) throw new Error('Enter a display name.')
+
+        const { data, error: signUpError } = await supabase.auth.signUp({
+          email: normalizedEmail,
+          password,
+          options: {
+            data: {
+              name,
+              full_name: name
+            }
+          }
+        })
+
+        if (signUpError) throw signUpError
+        if (!data.session || !data.user) {
+          setNotice('Account created. Check your email to confirm it, then sign in here.')
+          setMode('signin')
+          return
+        }
+
+        const user = normalizeCloudAuthUser(data.user)
+        persistPreferredDesktopAuthMode('cloud')
+        localStorage.setItem('nexus_user_name', user.name)
+        localStorage.removeItem('nexus_local_account')
+        localStorage.removeItem('nexus_local_session')
+        setAuthSession({ token: data.session.access_token, mode: 'cloud', user })
+        await Promise.allSettled([
+          bootstrapCloudAccount(),
+          syncLocalSettingsToCloud(),
+          saveCloudData('account', 'details', {
+            email: user.email,
+            display_name: user.name,
+            provider: 'email',
+            created_at: data.user.created_at,
+            last_sign_in_at: data.user.last_sign_in_at || null,
+            updated_at: new Date().toISOString()
+          })
+        ])
+      } else {
+        const { data, error: signInError } = await supabase.auth.signInWithPassword({
+          email: normalizedEmail,
+          password
+        })
+
+        if (signInError || !data.session || !data.user) {
+          throw signInError || new Error('Email or password is incorrect.')
+        }
+
+        const user = normalizeCloudAuthUser(data.user)
+        persistPreferredDesktopAuthMode('cloud')
+        localStorage.setItem('nexus_user_name', user.name)
+        localStorage.removeItem('nexus_local_account')
+        localStorage.removeItem('nexus_local_session')
+        setAuthSession({ token: data.session.access_token, mode: 'cloud', user })
+        await Promise.allSettled([
+          bootstrapCloudAccount(),
+          syncLocalSettingsToCloud(),
+          saveCloudData('account', 'details', {
+            email: user.email,
+            display_name: user.name,
+            provider: 'email',
+            created_at: data.user.created_at,
+            last_sign_in_at: data.user.last_sign_in_at || null,
+            updated_at: new Date().toISOString()
+          })
+        ])
+      }
+
+      navigate('/', { replace: true })
+    } catch (err: any) {
+      setError(err.message || 'Authentication failed.')
+    } finally {
+      setIsSubmitting(false)
     }
-
-    window.addEventListener('nexus-cloud-auth-feedback', syncFeedback)
-    return () => window.removeEventListener('nexus-cloud-auth-feedback', syncFeedback)
-  }, [])
-
-  useEffect(() => {
-    localStorage.setItem(LOGIN_UI_MODE_STORAGE_KEY, authMode)
-    clearAuthMessages()
-  }, [authMode])
+  }
 
   const containerVariants = {
     hidden: { opacity: 0 },
@@ -305,38 +192,37 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="relative flex h-screen min-h-0 items-start justify-center overflow-y-auto overflow-x-hidden bg-[#050505] px-4 py-6 font-sans text-emerald-50 selection:bg-emerald-500/30 selection:text-emerald-100 lg:px-6 lg:py-8">
-      <div className="pointer-events-none absolute top-[-10%] left-[-5%] h-125 w-125 animate-pulse rounded-full bg-emerald-600/10 blur-[150px]" />
-      <div className="pointer-events-none absolute right-[-5%] bottom-[-10%] h-125 w-125 rounded-full bg-cyan-900/10 blur-[150px]" />
-
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_right,#10b98105_1px,transparent_1px),linear-gradient(to_bottom,#10b98105_1px,transparent_1px)] bg-[size:40px_40px] mix-blend-screen" />
+    <div className="min-h-screen bg-[#050505] text-emerald-50 font-sans flex items-center justify-center p-3 lg:p-5 relative overflow-hidden selection:bg-emerald-500/30 selection:text-emerald-100">
+      <div className="absolute top-[-10%] left-[-5%] w-125 h-125 bg-emerald-600/10 blur-[150px] rounded-full pointer-events-none animate-pulse" />
+      <div className="absolute bottom-[-10%] right-[-5%] w-125 h-125 bg-cyan-900/10 blur-[150px] rounded-full pointer-events-none" />
+      <div className="absolute inset-0 bg-[linear-linear(to_right,#10b98105_1px,transparent_1px),linear-linear(to_bottom,#10b98105_1px,transparent_1px)] bg-size-[40px_40px] pointer-events-none mix-blend-screen" />
 
       <motion.div
         variants={containerVariants}
         initial="hidden"
         animate="show"
-        className="relative z-10 grid w-full max-w-7xl grid-cols-1 items-start gap-6 lg:grid-cols-12"
+        className="w-full max-w-7xl relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-5 items-center"
       >
         <motion.div
           variants={panelVariants}
-          className="relative col-span-3 hidden max-h-[calc(100vh-5rem)] min-h-[28rem] flex-col overflow-hidden rounded-2xl border border-white/5 bg-black/40 p-5 shadow-2xl backdrop-blur-md lg:flex"
+          className="hidden lg:flex col-span-3 flex-col h-[min(31rem,calc(100vh-7rem))] bg-black/40 backdrop-blur-md border border-white/5 rounded-2xl p-5 shadow-2xl relative overflow-hidden"
         >
-          <div className="mb-4 flex items-center gap-3 border-b border-white/10 pb-4">
-            <TerminalSquare className="h-5 w-5 text-emerald-500" />
-            <h3 className="text-xs font-bold uppercase tracking-[0.2em] text-zinc-400">
+          <div className="flex items-center gap-3 border-b border-white/10 pb-4 mb-4">
+            <TerminalSquare className="w-5 h-5 text-emerald-500" />
+            <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-400 uppercase">
               System Log
             </h3>
           </div>
-          <div className="flex flex-1 flex-col justify-end overflow-hidden font-mono text-[10px] leading-relaxed tracking-wider">
+          <div className="flex-1 flex flex-col justify-end font-mono text-[10px] leading-relaxed tracking-wider overflow-hidden">
             <AnimatePresence>
               {bootLogs.map((log, index) => (
                 <motion.div
                   key={index}
                   initial={{ opacity: 0, x: -10 }}
                   animate={{ opacity: 1, x: 0 }}
-                  className={`mb-2 ${index === bootLogs.length - 1 ? 'font-bold text-emerald-400 drop-shadow-[0_0_5px_rgba(16,185,129,0.5)]' : 'text-zinc-500'}`}
+                  className={`mb-2 ${index === bootLogs.length - 1 ? 'text-emerald-400 font-bold drop-shadow-[0_0_5px_rgba(16,185,129,0.5)]' : 'text-zinc-500'}`}
                 >
-                  <span className="mr-2 text-emerald-700 opacity-50">{'>'}</span> {log}
+                  <span className="opacity-50 mr-2 text-emerald-700">{`>`}</span> {log}
                 </motion.div>
               ))}
             </AnimatePresence>
@@ -344,7 +230,7 @@ export default function LoginPage() {
               <motion.div
                 animate={{ opacity: [0, 1, 0] }}
                 transition={{ repeat: Infinity, duration: 1 }}
-                className="mt-1 text-emerald-400"
+                className="text-emerald-400 mt-1"
               >
                 _
               </motion.div>
@@ -354,358 +240,204 @@ export default function LoginPage() {
 
         <motion.div
           variants={cardVariants}
-          className="col-span-1 flex flex-col items-center justify-center lg:col-span-6"
+          className="col-span-1 lg:col-span-6 flex flex-col items-center justify-center"
         >
-          <div className="mb-6 flex flex-col items-center text-center lg:mb-8">
-            <div className="relative mb-6 inline-flex h-20 w-20 items-center justify-center overflow-hidden rounded-2xl border border-emerald-500/30 bg-black shadow-[0_0_40px_rgba(16,185,129,0.15)]">
+          <div className="text-center mb-4 flex flex-col items-center">
+            <div className="relative inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-black border border-emerald-500/30 shadow-[0_0_40px_rgba(16,185,129,0.15)] mb-4 overflow-hidden">
               <motion.div
-                className="absolute left-0 h-0.5 w-full bg-emerald-400 shadow-[0_0_15px_#34d399]"
+                className="absolute left-0 w-full h-0.5 bg-emerald-400 shadow-[0_0_15px_#34d399]"
                 animate={{ top: ['-10%', '110%', '-10%'] }}
                 transition={{ duration: 4, repeat: Infinity, ease: 'linear' }}
               />
-              <Cpu className="relative z-10 h-10 w-10 text-emerald-400" />
+              <Cpu className="w-8 h-8 text-emerald-400 relative z-10" />
             </div>
 
-            <h1 className="mb-2 text-4xl font-black uppercase tracking-[0.2em] text-white drop-shadow-md">
-              Nexus <span className="text-emerald-500">OS</span>
+            <h1 className="text-3xl font-black tracking-[0.2em] uppercase text-white mb-1 drop-shadow-md">
+              NEXUS <span className="text-emerald-500">OS</span>
             </h1>
-            <p className="text-xs font-mono uppercase tracking-widest text-zinc-500">
-              Dual Path Authentication Surface
+            <p className="text-zinc-500 text-xs font-mono tracking-widest uppercase">
+              Supabase Email Access
             </p>
           </div>
 
-          <div className="relative w-full max-w-2xl rounded-3xl border border-white/10 bg-black/60 p-6 shadow-2xl backdrop-blur-xl sm:p-8">
-            <div className="absolute top-0 left-0 h-1 w-full bg-linear-to-r from-transparent via-emerald-500 to-transparent opacity-40" />
+          <form
+            onSubmit={handleSubmit}
+            className="w-full max-w-md bg-black/60 backdrop-blur-xl border border-white/10 rounded-3xl p-5 shadow-2xl relative"
+          >
+            <div className="absolute top-0 left-0 w-full h-1 bg-linear-to-r from-transparent via-emerald-500 to-transparent opacity-40" />
 
-            <div className="mb-6 grid grid-cols-2 gap-3 rounded-2xl border border-white/10 bg-black/45 p-2">
+            <div className="mb-4 p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/20 flex items-start gap-3">
+              <ShieldCheck className="w-6 h-6 text-emerald-400 shrink-0 mt-0.5" />
+              <p className="text-xs text-zinc-300 font-mono leading-relaxed">
+                Supabase Auth protects sign-in while Nexus stores profile, settings, and memory
+                rows under your account.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 mb-4 rounded-xl bg-white/5 border border-white/10 p-1">
               <button
                 type="button"
-                onClick={() => setAuthMode('cloud')}
-                className={`flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-[11px] font-black uppercase tracking-[0.18em] transition ${
-                  authMode === 'cloud'
-                    ? 'border border-emerald-400/40 bg-emerald-400/15 text-emerald-100 shadow-[0_0_20px_rgba(16,185,129,0.2)]'
-                    : 'border border-transparent bg-transparent text-zinc-500 hover:text-zinc-200'
-                }`}
+                onClick={() => setMode('signin')}
+                className={`h-10 rounded-lg text-[10px] font-black tracking-[0.18em] uppercase transition ${mode === 'signin' ? 'bg-emerald-500/20 text-emerald-100 border border-emerald-400/30' : 'text-zinc-500 hover:text-zinc-200'}`}
               >
-                <Cloud className="h-4 w-4" />
-                Cloud Access
+                Sign In
               </button>
               <button
                 type="button"
-                onClick={() => setAuthMode('app')}
-                className={`flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-[11px] font-black uppercase tracking-[0.18em] transition ${
-                  authMode === 'app'
-                    ? 'border border-emerald-400/40 bg-emerald-400/15 text-emerald-100 shadow-[0_0_20px_rgba(16,185,129,0.2)]'
-                    : 'border border-transparent bg-transparent text-zinc-500 hover:text-zinc-200'
-                }`}
+                onClick={() => setMode('create')}
+                className={`h-10 rounded-lg text-[10px] font-black tracking-[0.18em] uppercase transition ${mode === 'create' ? 'bg-emerald-500/20 text-emerald-100 border border-emerald-400/30' : 'text-zinc-500 hover:text-zinc-200'}`}
               >
-                <MonitorSmartphone className="h-4 w-4" />
-                App Account
+                Create
               </button>
             </div>
 
-            <AnimatePresence mode="wait">
-              {authMode === 'cloud' ? (
-                <motion.div
-                  key="cloud-auth"
-                  initial={{ opacity: 0, y: 14 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -14 }}
-                  transition={{ duration: 0.18 }}
-                >
-                  <div className="mb-6 flex items-start gap-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-                    <ShieldCheck className="mt-0.5 h-6 w-6 shrink-0 text-emerald-400" />
-                    <div>
-                      <p className="text-xs font-mono leading-relaxed text-zinc-300">
-                        Cloud Access uses your Nexus website plus Supabase account. It is the sync
-                        path for cloud data, paired devices, and the full online workspace.
-                      </p>
-                      <p className="mt-2 text-[11px] uppercase tracking-[0.18em] text-emerald-300/80">
-                        Browser handoff + one-time desktop code
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="group relative w-full">
-                    <div className="absolute -inset-0.5 rounded-xl bg-linear-to-r from-emerald-500 to-cyan-600 opacity-0 blur transition duration-300 group-hover:opacity-100" />
-
-                    <button
-                      onClick={handleWebsiteLogin}
-                      disabled={!isReady || isOpeningWebsite}
-                      className={`relative flex w-full items-center justify-center gap-3 rounded-xl border border-white/40 bg-black px-6 py-4 text-xs font-bold uppercase tracking-widest text-white shadow-lg transition-all duration-200 ease-in-out ${
-                        !isReady
-                          ? 'cursor-not-allowed opacity-50'
-                          : 'cursor-pointer hover:border-emerald-500/90 hover:bg-white hover:text-black'
-                      }`}
-                    >
-                      {isOpeningWebsite ? (
-                        <Loader2 className="h-5 w-5 animate-spin" />
-                      ) : (
-                        <LogIn className="h-5 w-5" />
-                      )}
-                      Open Website Login
-                    </button>
-                  </div>
-
-                  <div className="mt-4 rounded-xl border border-white/10 bg-black/35 p-4">
-                    <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-400">
-                      Desktop Login Code
-                    </label>
-                    <div className="flex flex-col gap-3 sm:flex-row">
-                      <input
-                        value={desktopLoginCode}
-                        onChange={(event) =>
-                          setDesktopLoginCode(normalizeDesktopLoginCode(event.target.value))
-                        }
-                        placeholder="NX-AB12-CD34"
-                        className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/55 px-4 py-3 text-center font-mono text-base font-black tracking-[0.26em] text-white outline-none transition focus:border-emerald-400/60"
-                      />
-                      <button
-                        type="button"
-                        onClick={verifyDesktopCode}
-                        disabled={!isReady || isVerifyingCode}
-                        className="rounded-xl border border-emerald-400/25 bg-emerald-400/15 px-5 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-emerald-100 transition hover:bg-emerald-400 hover:text-black disabled:cursor-not-allowed disabled:opacity-45"
-                      >
-                        {isVerifyingCode ? 'Verifying...' : 'Verify Code'}
-                      </button>
-                    </div>
-                    <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
-                      After website sign-in, Nexus shows a short-lived desktop code. Enter it here
-                      to finish login on this device.
-                    </p>
-                  </div>
-                </motion.div>
-              ) : (
-                <motion.div
-                  key="app-auth"
-                  initial={{ opacity: 0, y: 14 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -14 }}
-                  transition={{ duration: 0.18 }}
-                >
-                  <div className="mb-6 flex items-start gap-4 rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
-                    <KeyRound className="mt-0.5 h-6 w-6 shrink-0 text-cyan-300" />
-                    <div>
-                      <p className="text-xs font-mono leading-relaxed text-zinc-300">
-                        App Account lives inside Nexus itself. Users can create and use it fully
-                        from the desktop app with no browser redirect.
-                      </p>
-                      <p className="mt-2 text-[11px] uppercase tracking-[0.18em] text-cyan-300/80">
-                        Local sign-in surface for this PC
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="mb-4 grid grid-cols-2 gap-3 rounded-2xl border border-white/10 bg-black/35 p-2">
-                    <button
-                      type="button"
-                      onClick={() => setAppAuthStep('login')}
-                      className={`rounded-xl px-4 py-3 text-[11px] font-black uppercase tracking-[0.18em] transition ${
-                        appAuthStep === 'login'
-                          ? 'border border-emerald-400/35 bg-emerald-400/15 text-emerald-100'
-                          : 'text-zinc-500 hover:text-zinc-200'
-                      }`}
-                    >
-                      Sign In
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setAppAuthStep('register')}
-                      className={`rounded-xl px-4 py-3 text-[11px] font-black uppercase tracking-[0.18em] transition ${
-                        appAuthStep === 'register'
-                          ? 'border border-emerald-400/35 bg-emerald-400/15 text-emerald-100'
-                          : 'text-zinc-500 hover:text-zinc-200'
-                      }`}
-                    >
-                      Create Account
-                    </button>
-                  </div>
-
-                  <div className="grid gap-3">
-                    {appAuthStep === 'register' && (
-                      <label className="block">
-                        <span className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-400">
-                          <User className="h-4 w-4" />
-                          Display Name
-                        </span>
-                        <input
-                          value={appName}
-                          onChange={(event) => setAppName(event.target.value)}
-                          placeholder="Nexus Operator"
-                          className="w-full rounded-xl border border-white/10 bg-black/55 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/60"
-                        />
-                      </label>
-                    )}
-
-                    <label className="block">
-                      <span className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-400">
-                        <Mail className="h-4 w-4" />
-                        Email Address
-                      </span>
-                      <input
-                        value={appEmail}
-                        onChange={(event) => setAppEmail(event.target.value)}
-                        placeholder="operator@nexus.ai"
-                        autoComplete="email"
-                        className="w-full rounded-xl border border-white/10 bg-black/55 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/60"
-                      />
-                    </label>
-
-                    <label className="block">
-                      <span className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-400">
-                        <Lock className="h-4 w-4" />
-                        Password
-                      </span>
-                      <input
-                        type="password"
-                        value={appPassword}
-                        onChange={(event) => setAppPassword(event.target.value)}
-                        placeholder="Use at least 8 characters"
-                        autoComplete={appAuthStep === 'register' ? 'new-password' : 'current-password'}
-                        className="w-full rounded-xl border border-white/10 bg-black/55 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/60"
-                      />
-                    </label>
-
-                    {appAuthStep === 'register' && (
-                      <label className="block">
-                        <span className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-zinc-400">
-                          <Lock className="h-4 w-4" />
-                          Confirm Password
-                        </span>
-                        <input
-                          type="password"
-                          value={appConfirmPassword}
-                          onChange={(event) => setAppConfirmPassword(event.target.value)}
-                          placeholder="Repeat the same password"
-                          autoComplete="new-password"
-                          className="w-full rounded-xl border border-white/10 bg-black/55 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/60"
-                        />
-                      </label>
-                    )}
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={submitAppAuth}
-                    disabled={!isReady || isAppAuthBusy}
-                    className="mt-5 flex w-full items-center justify-center gap-3 rounded-xl border border-emerald-400/25 bg-emerald-400 px-6 py-4 text-xs font-black uppercase tracking-[0.18em] text-black transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-45"
-                  >
-                    {isAppAuthBusy ? (
-                      <Loader2 className="h-5 w-5 animate-spin" />
-                    ) : appAuthStep === 'register' ? (
-                      <UserPlus className="h-5 w-5" />
-                    ) : (
-                      <LogIn className="h-5 w-5" />
-                    )}
-                    {appAuthStep === 'register' ? 'Create App Account' : 'Sign In to App Account'}
-                  </button>
-
-                  <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
-                    This path keeps the whole account flow inside Nexus. Use Cloud Access when you
-                    want Supabase-backed sync and paired desktop login from the website.
-                  </p>
-                </motion.div>
+            <div className="space-y-3">
+              {mode === 'create' && (
+                <label className="block">
+                  <span className="flex items-center gap-2 text-[10px] font-black tracking-[0.2em] uppercase text-zinc-400 mb-2">
+                    <User size={14} /> Name
+                  </span>
+                  <input
+                    type="text"
+                    value={displayName}
+                    onChange={(event) => setDisplayName(event.target.value)}
+                    autoComplete="name"
+                    className="w-full h-11 bg-black/70 border border-white/15 rounded-xl px-4 text-sm text-white outline-none focus:border-emerald-400/70 focus:bg-emerald-950/10"
+                    placeholder="Operator name"
+                  />
+                </label>
               )}
-            </AnimatePresence>
 
-            {statusMessage && (
-              <div className="mt-4 rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-3 text-xs text-cyan-100">
-                <div>{statusMessage}</div>
-              </div>
-            )}
+              <label className="block">
+                <span className="flex items-center gap-2 text-[10px] font-black tracking-[0.2em] uppercase text-zinc-400 mb-2">
+                  <Mail size={14} /> Email
+                </span>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  autoComplete="email"
+                  className="w-full h-11 bg-black/70 border border-white/15 rounded-xl px-4 text-sm text-white outline-none focus:border-emerald-400/70 focus:bg-emerald-950/10"
+                  placeholder="operator@nexus.local"
+                />
+              </label>
 
-            {authError && (
-              <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200">
-                {authError}
-              </div>
-            )}
+              <label className="block">
+                <span className="flex items-center gap-2 text-[10px] font-black tracking-[0.2em] uppercase text-zinc-400 mb-2">
+                  <KeyRound size={14} /> Password
+                </span>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
+                  className="w-full h-11 bg-black/70 border border-white/15 rounded-xl px-4 text-sm text-white outline-none focus:border-emerald-400/70 focus:bg-emerald-950/10"
+                  placeholder="Minimum 6 characters"
+                />
+              </label>
 
-            <div className="mt-6 flex items-center justify-center gap-2 text-[10px] font-mono uppercase tracking-widest text-emerald-500/50">
-              <Fingerprint size={14} />
-              Dual Auth Handshake Ready
+              {mode === 'create' && (
+                <label className="block">
+                  <span className="flex items-center gap-2 text-[10px] font-black tracking-[0.2em] uppercase text-zinc-400 mb-2">
+                    <Lock size={14} /> Confirm
+                  </span>
+                  <input
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(event) => setConfirmPassword(event.target.value)}
+                    autoComplete="new-password"
+                    className="w-full h-11 bg-black/70 border border-white/15 rounded-xl px-4 text-sm text-white outline-none focus:border-emerald-400/70 focus:bg-emerald-950/10"
+                    placeholder="Repeat password"
+                  />
+                </label>
+              )}
             </div>
-          </div>
+
+            {error && (
+              <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-xs font-mono text-red-200">
+                {error}
+              </div>
+            )}
+            {notice && (
+              <div className="mt-4 rounded-xl border border-cyan-400/30 bg-cyan-500/10 px-4 py-3 text-xs font-mono text-cyan-100">
+                {notice}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={!isReady || isSubmitting}
+              className={`mt-4 relative flex w-full items-center justify-center gap-3 h-12 px-6 rounded-xl bg-emerald-500/15 border border-emerald-400/40 text-emerald-50 transition-all duration-200 ease-in-out font-bold text-xs tracking-widest uppercase shadow-lg ${!isReady || isSubmitting ? 'opacity-50 cursor-not-allowed' : 'hover:bg-emerald-400 hover:text-black hover:border-emerald-300 cursor-pointer'}`}
+            >
+              {mode === 'signin' ? <LogIn className="w-5 h-5" /> : <UserPlus className="w-5 h-5" />}
+              {isSubmitting ? 'Checking' : mode === 'signin' ? 'Sign In' : 'Create Account'}
+            </button>
+
+            <div className="mt-3 flex items-center justify-center gap-2 text-emerald-500/50 text-[10px] font-mono tracking-widest uppercase">
+              <Lock size={14} />
+              {isCloudConfigured ? 'Supabase Ready' : 'Supabase Config Missing'}
+            </div>
+          </form>
         </motion.div>
 
         <motion.div
           variants={rightPanelVariants}
-          className="col-span-3 hidden max-h-[calc(100vh-5rem)] min-h-[28rem] flex-col rounded-2xl border border-white/5 bg-black/40 p-5 shadow-2xl backdrop-blur-md lg:flex"
+          className="hidden lg:flex col-span-3 flex-col h-[min(31rem,calc(100vh-7rem))] bg-black/40 backdrop-blur-md border border-white/5 rounded-2xl p-5 shadow-2xl"
         >
-          <div className="mb-6 flex items-center gap-3 border-b border-white/10 pb-4">
-            <Activity className="h-5 w-5 text-emerald-500" />
-            <h3 className="text-xs font-bold uppercase tracking-[0.2em] text-zinc-400">
+          <div className="flex items-center gap-3 border-b border-white/10 pb-4 mb-6">
+            <Activity className="w-5 h-5 text-emerald-500" />
+            <h3 className="text-xs font-bold tracking-[0.2em] text-zinc-400 uppercase">
               Telemetry
             </h3>
           </div>
 
           <div className="flex flex-col gap-6 font-mono">
             <div className="flex flex-col gap-2">
-              <div className="flex items-center justify-between text-[10px] tracking-widest text-zinc-500">
+              <div className="flex justify-between items-center text-[10px] tracking-widest text-zinc-500">
                 <span className="flex items-center gap-2">
                   <Network size={12} /> NETWORK
                 </span>
-                <span className={isReady ? 'text-emerald-400' : 'text-yellow-500'}>
-                  {isReady ? 'SECURE' : 'WAITING'}
+                <span className="text-emerald-400">CLOUD</span>
+              </div>
+              <div className="w-full h-1 bg-white/5 rounded-full overflow-hidden">
+                <div className="w-full h-full bg-emerald-500" />
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <div className="flex justify-between items-center text-[10px] tracking-widest text-zinc-500">
+                <span className="flex items-center gap-2">
+                  <Database size={12} /> ACCOUNT
+                </span>
+                <span className={isCloudConfigured ? 'text-emerald-400' : 'text-yellow-500'}>
+                  {authStateLabel}
                 </span>
               </div>
-              <div className="h-1 w-full overflow-hidden rounded-full bg-white/5">
+              <div className="w-full h-1 bg-white/5 rounded-full overflow-hidden">
+                <div className="w-full h-full bg-emerald-500/50" />
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <div className="flex justify-between items-center text-[10px] tracking-widest text-zinc-500">
+                <span className="flex items-center gap-2">
+                  <Lock size={12} /> SESSION
+                </span>
+                <span className={isReady ? 'text-emerald-400' : 'text-zinc-400'}>
+                  {isReady ? 'OPEN' : 'BOOTING'}
+                </span>
+              </div>
+              <div className="w-full h-1 bg-white/5 rounded-full overflow-hidden">
                 <div
-                  className={`h-full transition-all duration-1000 ${isReady ? 'w-full bg-emerald-500' : 'w-1/3 animate-pulse bg-yellow-500'}`}
+                  className={`h-full transition-all duration-1000 ${isReady ? 'w-full bg-emerald-500/70' : 'w-1/3 bg-yellow-500 animate-pulse'}`}
                 />
               </div>
             </div>
-
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center justify-between text-[10px] tracking-widest text-zinc-500">
-                <span className="flex items-center gap-2">
-                  <Database size={12} /> CLOUD FABRIC
-                </span>
-                <span className="text-zinc-400">SYNC READY</span>
-              </div>
-              <div className="h-1 w-full overflow-hidden rounded-full bg-white/5">
-                <div className="h-full w-full bg-emerald-500/50" />
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center justify-between text-[10px] tracking-widest text-zinc-500">
-                <span className="flex items-center gap-2">
-                  <Lock size={12} /> APP ACCOUNT
-                </span>
-                <span className="text-zinc-400">LOCAL MODE</span>
-              </div>
-              <div className="h-1 w-full overflow-hidden rounded-full bg-white/5">
-                <div className="h-full w-[85%] bg-cyan-400/60" />
-              </div>
-            </div>
           </div>
 
-          <div className="mt-6 grid gap-3">
-            <div className="rounded-xl border border-white/10 bg-black/45 p-4">
-              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.18em] text-emerald-300">
-                <Cloud className="h-4 w-4" />
-                Cloud Access
-              </div>
-              <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
-                Supabase-backed auth, web pairing, synced data, and cross-device continuity.
-              </p>
-            </div>
-            <div className="rounded-xl border border-white/10 bg-black/45 p-4">
-              <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.18em] text-cyan-300">
-                <MonitorSmartphone className="h-4 w-4" />
-                App Account
-              </div>
-              <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
-                Desktop-only sign-in that stays inside Nexus, with account creation handled in the
-                app itself.
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-auto rounded-xl border border-emerald-500/20 bg-emerald-900/10 p-4">
-            <p className="text-[9px] uppercase tracking-widest text-emerald-400/80">
-              Choose cloud when you need sync. Choose app when you need fast local entry with no
-              browser redirect.
+          <div className="mt-auto p-4 bg-emerald-900/10 border border-emerald-500/20 rounded-xl">
+            <p className="text-[9px] text-emerald-400/80 tracking-widest uppercase leading-relaxed">
+              Nexus AI stores operator state in private Supabase rows guarded by account identity.
             </p>
           </div>
         </motion.div>

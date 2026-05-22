@@ -1,6 +1,4 @@
 import { useAuthStore } from '@renderer/store/auth-store'
-import { SECURITY_VERIFICATIONS_PAUSED } from '@renderer/config/security-flags'
-import { nexusSupabase } from '@renderer/lib/supabase'
 import axios, { AxiosError, AxiosRequestConfig } from 'axios'
 
 interface CustomAxiosRequestConfig extends AxiosRequestConfig {
@@ -16,11 +14,9 @@ const AxiosInstance = axios.create({
 })
 
 AxiosInstance.interceptors.request.use((config) => {
-  if (SECURITY_VERIFICATIONS_PAUSED) return config
+  const accessToken = useAuthStore.getState().accessToken
 
-  const { accessToken, authMode } = useAuthStore.getState()
-
-  if (accessToken && authMode === 'cloud') {
+  if (accessToken) {
     config.headers = config.headers || {}
     config.headers.Authorization = `Bearer ${accessToken}`
   }
@@ -45,13 +41,10 @@ const processQueue = (error: any, token: string | null = null) => {
 AxiosInstance.interceptors.response.use(
   (response) => response,
   async (error: AxiosError) => {
-    if (SECURITY_VERIFICATIONS_PAUSED) return Promise.reject(error)
-
     const originalRequest = error.config as CustomAxiosRequestConfig
 
     if (
       error.response?.status === 401 &&
-      useAuthStore.getState().authMode === 'cloud' &&
       !originalRequest?._retry &&
       !originalRequest?.url?.includes('/refresh-token') &&
       !originalRequest?.url?.includes('/users/login')
@@ -73,14 +66,21 @@ AxiosInstance.interceptors.response.use(
       isRefreshing = true
 
       try {
-        if (!nexusSupabase) throw new Error('Supabase is not configured.')
+        const currentRefreshToken = localStorage.getItem('nexus_cloud_token')
 
-        const { data, error: refreshError } = await nexusSupabase.auth.refreshSession()
-        if (refreshError || !data.session) {
-          throw new Error(refreshError?.message || 'Unable to refresh the cloud session.')
+        if (!currentRefreshToken) {
+          throw new Error('No refresh token found in local storage.')
         }
 
-        const newAccessToken = data.session.access_token
+        const res = await axios.post(`${import.meta.env.VITE_BACKEND_KEY}/users/refresh-token`, {
+          refreshToken: currentRefreshToken
+        })
+
+        const newAccessToken = res.data.accessToken
+
+        if (res.data.refreshToken) {
+          localStorage.setItem('nexus_cloud_token', res.data.refreshToken)
+        }
 
         useAuthStore.getState().setAccessToken(newAccessToken)
 
@@ -94,6 +94,7 @@ AxiosInstance.interceptors.response.use(
         processQueue(err, null)
 
         useAuthStore.getState().logout()
+        localStorage.removeItem('nexus_cloud_token')
         window.location.hash = '#/login'
 
         return Promise.reject(err)

@@ -1,6 +1,5 @@
 * text=auto eol=lf
 
-
 *.js text
 *.ts text
 *.tsx text

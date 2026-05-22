@@ -1,22 +1,21 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
-import { motion } from 'framer-motion'
+import { FormEvent, useEffect, useRef, useState } from 'react'
 import {
-  RiBrainLine,
-  RiSendPlane2Line,
   RiRobot2Line,
-  RiUserVoiceLine,
+  RiSendPlane2Line,
+  RiRefreshLine,
   RiVolumeUpLine,
   RiStopCircleLine,
-  RiRefreshLine
+  RiMicLine,
+  RiMicOffLine
 } from 'react-icons/ri'
-import {
-  DEFAULT_NVIDIA_MODEL_DEFAULTS,
-  getModelsForCategory,
-  getNvidiaModelById,
-  getStoredNvidiaModelDefaults,
-  NvidiaModelDefaults
-} from '@renderer/config/nvidia-models'
 import MarkdownMath from '@renderer/components/MarkdownMath'
+import {
+  AI_GATEWAY_PROVIDERS,
+  AiGatewayProvider,
+  DEFAULT_AI_GATEWAY_MODEL,
+  DEFAULT_AI_GATEWAY_MODELS,
+  AiGatewayModel
+} from '@renderer/config/ai-provider-models'
 import { saveMessage } from '@renderer/services/nexus-ai-brain'
 import {
   createWhiteboardPayload,
@@ -24,31 +23,20 @@ import {
   isWhiteboardCommand,
   publishWhiteboardWrite
 } from '@renderer/services/whiteboard'
+import { nexusService } from '@renderer/services/nexus-voice-ai'
 
-type ChatRole = 'user' | 'assistant'
+type ChatMessage = { role: 'user' | 'assistant'; content: string }
 
-interface ChatMessage {
-  role: ChatRole
-  content: string
+interface AiChatViewProps {
+  isSystemActive: boolean
+  isSystemStarting: boolean
+  isMicMuted: boolean
+  toggleSystem: () => void | Promise<void>
+  toggleMic: () => void
 }
 
-const defaultWelcome =
-  'Nexus AI is online. Pick a model and type a prompt. All chat traffic runs through the configured Nexus AI API gateway.'
-
-const systemPrompt = `You are Nexus, a precise AI chat assistant inside a Windows desktop app. Be helpful, concise, technical when useful, and keep a confident but warm tone. Security verification prompts are paused for these builds: do not ask the user to verify identity before coding or completing requested work.`
-
-const categories: Array<keyof NvidiaModelDefaults> = [
-  'chat',
-  'coding',
-  'reasoning',
-  'vision',
-  'translation'
-]
-
-const getInitialVoiceReplies = () => {
-  const stored = localStorage.getItem('nexus_nvidia_voice_replies')
-  return stored === null ? true : stored === 'true'
-}
+const systemPrompt =
+  'You are Nexus AI inside the desktop app. Be concise, useful, and write math with LaTeX when needed.'
 
 const cleanSpeechText = (text: string) =>
   text
@@ -60,77 +48,152 @@ const cleanSpeechText = (text: string) =>
     .replace(/\s+/g, ' ')
     .trim()
 
-export default function AiChatView() {
+export default function AiChatView({
+  isSystemActive,
+  isSystemStarting,
+  isMicMuted,
+  toggleSystem,
+  toggleMic
+}: AiChatViewProps) {
+  const [provider, setProvider] = useState<AiGatewayProvider>(
+    (localStorage.getItem('nexus_ai_chat_provider') as AiGatewayProvider) || 'gemini'
+  )
+  const [model, setModel] = useState(
+    localStorage.getItem('nexus_ai_chat_model') || DEFAULT_AI_GATEWAY_MODEL.gemini
+  )
+  const [modelsByProvider, setModelsByProvider] =
+    useState<Record<AiGatewayProvider, AiGatewayModel[]>>(DEFAULT_AI_GATEWAY_MODELS)
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: 'assistant', content: defaultWelcome }
+    {
+      role: 'assistant',
+      content: 'Nexus AI Chat is online. Choose Gemini or Groq and send a prompt.'
+    }
   ])
   const [input, setInput] = useState('')
-  const [category, setCategory] = useState<keyof NvidiaModelDefaults>('chat')
-  const [defaults, setDefaults] = useState<NvidiaModelDefaults>(DEFAULT_NVIDIA_MODEL_DEFAULTS)
-  const [selectedModel, setSelectedModel] = useState(DEFAULT_NVIDIA_MODEL_DEFAULTS.chat)
   const [isSending, setIsSending] = useState(false)
   const [error, setError] = useState('')
-  const [voiceReplies, setVoiceReplies] = useState(getInitialVoiceReplies)
-
+  const [voiceReplies, setVoiceReplies] = useState(
+    localStorage.getItem('nexus_ai_chat_main_voice') !== 'false'
+  )
+  const [voiceStatus, setVoiceStatus] = useState('Main voice ready')
+  const [voiceProfile, setVoiceProfile] = useState(
+    localStorage.getItem('nexus_voice_profile') === 'FEMALE' ? 'Aoede' : 'Puck'
+  )
   const scrollRef = useRef<HTMLDivElement>(null)
-
-  const models = useMemo(() => getModelsForCategory(category), [category])
-  const activeModel = getNvidiaModelById(selectedModel)
-
-  useEffect(() => {
-    const storedDefaults = getStoredNvidiaModelDefaults()
-    setDefaults(storedDefaults)
-    setSelectedModel(storedDefaults.chat)
-    if (localStorage.getItem('nexus_nvidia_voice_replies') === null) {
-      localStorage.setItem('nexus_nvidia_voice_replies', 'true')
-    }
-  }, [])
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
   }, [messages, isSending])
 
-  const speak = (text: string) => {
-    if (!('speechSynthesis' in window)) return
+  useEffect(() => {
+    localStorage.setItem('nexus_ai_chat_provider', provider)
+    localStorage.setItem('nexus_ai_chat_model', model)
+  }, [provider, model])
 
-    window.speechSynthesis.cancel()
-    const spokenText = cleanSpeechText(text)
-    if (!spokenText) return
+  useEffect(() => {
+    localStorage.setItem('nexus_ai_chat_main_voice', String(voiceReplies))
+  }, [voiceReplies])
 
-    const speakNow = () => {
-      const utterance = new SpeechSynthesisUtterance(spokenText)
-      const voiceProfile = localStorage.getItem('nexus_voice_profile') || 'MALE'
-      const voices = window.speechSynthesis.getVoices()
-      const preferredVoice = voices.find((voice) =>
-        voiceProfile === 'FEMALE'
-          ? /female|zira|aria|jenny|susan|eva/i.test(voice.name)
-          : /male|david|guy|mark|ravi/i.test(voice.name)
+  useEffect(() => {
+    const syncVoiceProfile = () => {
+      setVoiceProfile(localStorage.getItem('nexus_voice_profile') === 'FEMALE' ? 'Aoede' : 'Puck')
+    }
+
+    syncVoiceProfile()
+    const timer = window.setInterval(syncVoiceProfile, 1000)
+    window.addEventListener('storage', syncVoiceProfile)
+
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('storage', syncVoiceProfile)
+    }
+  }, [])
+
+  useEffect(() => {
+    const handleVoiceMessage = (event: any) => {
+      const detail = event.detail || {}
+      if (!detail.content || (detail.role !== 'user' && detail.role !== 'assistant')) return
+
+      setMessages((current) => {
+        const last = current[current.length - 1]
+        if (last?.role === detail.role && last.content === detail.content) return current
+        return [...current, { role: detail.role, content: detail.content }]
+      })
+    }
+
+    window.addEventListener('nexus-voice-message', handleVoiceMessage)
+    return () => window.removeEventListener('nexus-voice-message', handleVoiceMessage)
+  }, [])
+
+  useEffect(() => {
+    AI_GATEWAY_PROVIDERS.forEach(async (nextProvider) => {
+      if (nextProvider === 'gemini') return
+      try {
+        const result = await window.electron.ipcRenderer.invoke('ai-gateway:list-models', {
+          provider: nextProvider
+        })
+        if (result?.success && Array.isArray(result.models) && result.models.length > 0) {
+          setModelsByProvider((current) => ({ ...current, [nextProvider]: result.models }))
+        }
+      } catch {}
+    })
+  }, [])
+
+  const ensureMainVoiceOnline = async () => {
+    if (!nexusService.isConnected) {
+      setVoiceStatus(isSystemStarting ? 'Main voice starting' : 'Starting main voice')
+      if (!isSystemStarting && !isSystemActive) await toggleSystem()
+
+      const deadline = Date.now() + 12000
+      while (!nexusService.isConnected && Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, 250))
+      }
+    }
+
+    if (!nexusService.isConnected) throw new Error('Main voice assistant is not online.')
+    setVoiceStatus('Main voice online')
+  }
+
+  const speakWithMainVoice = async (text: string) => {
+    if (!voiceReplies) return
+    const clean = cleanSpeechText(text)
+    if (!clean) return
+
+    try {
+      await ensureMainVoiceOnline()
+      nexusService.speakInstruction(
+        `Read this AI Chat response aloud using the current Nexus assistant voice. Keep the wording faithful and do not add new information:\n\n${clean.slice(0, 5000)}`,
+        { persistTranscript: false }
       )
-
-      if (preferredVoice) utterance.voice = preferredVoice
-      utterance.rate = 1
-      utterance.pitch = voiceProfile === 'FEMALE' ? 1.05 : 0.92
-      window.speechSynthesis.speak(utterance)
-    }
-
-    if (window.speechSynthesis.getVoices().length > 0) {
-      speakNow()
-      return
-    }
-
-    window.speechSynthesis.onvoiceschanged = () => {
-      window.speechSynthesis.onvoiceschanged = null
-      speakNow()
+      setVoiceStatus(`Speaking with ${voiceProfile}`)
+    } catch (error: any) {
+      setVoiceStatus(error?.message || 'Main voice unavailable')
     }
   }
 
   const stopSpeaking = () => {
-    if ('speechSynthesis' in window) window.speechSynthesis.cancel()
+    nexusService.stopAudioOutput()
+    setVoiceStatus('Main voice stopped')
   }
 
-  const handleCategoryChange = (nextCategory: keyof NvidiaModelDefaults) => {
-    setCategory(nextCategory)
-    setSelectedModel(defaults[nextCategory] || getModelsForCategory(nextCategory)[0]?.id || '')
+  const toggleMainVoice = async () => {
+    if (isSystemStarting) {
+      setVoiceStatus('Main voice starting')
+      return
+    }
+
+    try {
+      if (!isSystemActive || !nexusService.isConnected) {
+        await ensureMainVoiceOnline()
+        setVoiceStatus('Main voice online')
+        return
+      }
+
+      toggleMic()
+      setVoiceStatus(isMicMuted ? 'Main voice mic live' : 'Main voice mic muted')
+    } catch (error: any) {
+      setVoiceStatus(error?.message || 'Main voice unavailable')
+    }
   }
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -140,50 +203,72 @@ export default function AiChatView() {
 
     setError('')
     setInput('')
-
-    const nextMessages: ChatMessage[] = [...messages, { role: 'user', content: prompt }]
+    const nextMessages = [...messages, { role: 'user' as const, content: prompt }]
     setMessages(nextMessages)
     setIsSending(true)
     await saveMessage('user', prompt)
 
     try {
-      const result = await window.electron.ipcRenderer.invoke('nvidia:chat-completion', {
-        useNexusServers: true,
-        model: selectedModel,
+      const result = await window.electron.ipcRenderer.invoke('ai-gateway:chat', {
+        provider,
+        model,
+        modelsByProvider: {
+          gemini: DEFAULT_AI_GATEWAY_MODEL.gemini,
+          groq: localStorage.getItem('nexus_default_groq_model') || DEFAULT_AI_GATEWAY_MODEL.groq,
+          fireworks:
+            localStorage.getItem('nexus_default_fireworks_model') ||
+            DEFAULT_AI_GATEWAY_MODEL.fireworks
+        },
         system: systemPrompt,
         messages: nextMessages
-          .filter((message) => message.content !== defaultWelcome)
+          .filter((message) => !message.content.includes('Nexus AI Chat is online'))
           .slice(-12)
-          .map((message) => ({
-            role: message.role,
-            content: message.content
-          }))
       })
 
-      if (!result?.success) {
-        throw new Error(result?.error || 'Nexus AI API chat request failed.')
-      }
+      if (!result?.success) throw new Error(result?.error || 'AI gateway request failed.')
 
-      const response = result.content || 'No response content returned.'
+      const response =
+        result.provider && result.provider !== provider
+          ? `[Fallback: ${result.provider}]\n\n${result.content || 'No response returned.'}`
+          : result.content || 'No response returned.'
       setMessages((current) => [...current, { role: 'assistant', content: response }])
       await saveMessage('nexus', response)
+
       if (isWhiteboardCommand(prompt)) {
         publishWhiteboardWrite(
           createWhiteboardPayload(extractWhiteboardQuestion(prompt), response, 'chat')
         )
       }
-      if (voiceReplies) speak(response)
+
+      if (voiceReplies) await speakWithMainVoice(response)
     } catch (err: any) {
-      const message = err?.message || 'Unable to reach the Nexus AI API.'
+      const message = err?.message || 'Unable to reach the AI gateway.'
       setError(message)
-      setMessages((current) => [
-        ...current,
-        {
-          role: 'assistant',
-          content: `Nexus AI API failed: ${message}`
-        }
-      ])
-      if (voiceReplies) speak(`Nexus AI API chat failed. ${message}`)
+      setMessages((current) => [...current, { role: 'assistant', content: `Error: ${message}` }])
+      if (voiceReplies) await speakWithMainVoice(`AI chat failed. ${message}`)
+    } finally {
+      setIsSending(false)
+    }
+  }
+
+  const sendToMainVoiceAssistant = async () => {
+    const prompt = input.trim()
+    if (!prompt || isSending) return
+
+    setError('')
+    setInput('')
+    setIsSending(true)
+    setMessages((current) => [...current, { role: 'user', content: prompt }])
+
+    try {
+      await ensureMainVoiceOnline()
+      await nexusService.sendTextPrompt(`[AI CHAT PAGE]\n${prompt}`, 'queue')
+      setVoiceStatus('Sent to main voice assistant')
+    } catch (err: any) {
+      const message = err?.message || 'Unable to reach the main voice assistant.'
+      setError(message)
+      setMessages((current) => [...current, { role: 'assistant', content: `Error: ${message}` }])
+      setVoiceStatus(message)
     } finally {
       setIsSending(false)
     }
@@ -192,196 +277,149 @@ export default function AiChatView() {
   return (
     <div className="h-full w-full overflow-hidden p-4 text-zinc-100">
       <div className="grid h-full min-h-0 grid-cols-12 gap-3">
-        <motion.aside
-          initial={{ opacity: 0, x: -18 }}
-          animate={{ opacity: 1, x: 0 }}
-          className="col-span-12 flex min-h-0 flex-col gap-4 overflow-hidden rounded-2xl border border-emerald-500/15 bg-[linear-gradient(180deg,rgba(12,20,18,0.95),rgba(4,8,8,0.82))] p-4 shadow-[0_0_45px_rgba(16,185,129,0.08)] lg:col-span-4 xl:col-span-3"
-        >
-          <div className="border-b border-white/10 pb-4">
-            <div className="flex items-center gap-3">
-              <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-3 text-emerald-300">
-                <RiRobot2Line size={24} />
-              </div>
-              <div>
-                <h2 className="text-lg font-black tracking-[0.16em] uppercase">AI Chat</h2>
-                <p className="text-[10px] font-mono tracking-widest text-emerald-500/70">
-                  NEXUS AI API
-                </p>
-              </div>
+        <aside className="col-span-12 flex min-h-0 flex-col gap-4 overflow-hidden rounded-2xl border border-emerald-500/15 bg-black/55 p-4 lg:col-span-3">
+          <div className="flex items-center gap-3 border-b border-white/10 pb-4">
+            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3 text-emerald-300">
+              <RiRobot2Line size={24} />
+            </div>
+            <div>
+              <h2 className="text-lg font-black uppercase tracking-[0.16em]">AI Chat</h2>
+              <p className="text-[10px] font-mono tracking-widest text-emerald-400/70">
+                GATEWAY + MAIN VOICE
+              </p>
             </div>
           </div>
 
-          <div className="space-y-3">
-            <label className="text-[10px] font-mono uppercase tracking-[0.22em] text-zinc-500">
-              Category
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              {categories.map((item) => (
-                <button
-                  key={item}
-                  onClick={() => handleCategoryChange(item)}
-                  className={`rounded-lg border px-3 py-2 text-[10px] font-bold uppercase tracking-widest transition-all ${
-                    category === item
-                      ? 'border-emerald-400/50 bg-emerald-500/15 text-emerald-200'
-                      : 'border-white/10 bg-black/50 text-zinc-500 hover:text-zinc-200'
-                  }`}
-                >
-                  {item}
-                </button>
-              ))}
+          <label className="text-[10px] font-mono uppercase tracking-[0.22em] text-zinc-500">
+            Provider
+          </label>
+          <select
+            value={provider}
+            onChange={(event) => {
+              const nextProvider = event.target.value as AiGatewayProvider
+              setProvider(nextProvider)
+              setModel(DEFAULT_AI_GATEWAY_MODEL[nextProvider])
+            }}
+            className="rounded-lg border border-white/10 bg-black/80 p-3 text-xs font-bold text-zinc-100 outline-none"
+          >
+            <option value="gemini">Gemini API</option>
+            <option value="groq">Groq API</option>
+            <option value="fireworks">Fireworks API</option>
+          </select>
+
+          <label className="text-[10px] font-mono uppercase tracking-[0.22em] text-zinc-500">
+            Model
+          </label>
+          <select
+            value={model}
+            onChange={(event) => setModel(event.target.value)}
+            className="rounded-lg border border-white/10 bg-black/80 p-3 text-xs font-bold text-zinc-100 outline-none"
+          >
+            {(modelsByProvider[provider] || DEFAULT_AI_GATEWAY_MODELS[provider]).map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+
+          <div className="mt-auto rounded-xl border border-cyan-400/15 bg-cyan-400/5 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] font-black uppercase tracking-widest text-cyan-200">
+                Main Voice
+              </span>
+              <span className="rounded-full border border-cyan-400/20 bg-black/50 px-2 py-0.5 text-[8px] font-mono uppercase text-cyan-200/80">
+                {voiceProfile}
+              </span>
             </div>
-          </div>
-
-          <div className="space-y-3">
-            <label className="text-[10px] font-mono uppercase tracking-[0.22em] text-zinc-500">
-              Model
-            </label>
-            <select
-              value={selectedModel}
-              onChange={(event) => setSelectedModel(event.target.value)}
-              className="w-full rounded-lg border border-white/10 bg-black px-3 py-3 text-xs font-mono text-zinc-100 outline-none focus:border-emerald-500/50"
-            >
-              {models.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.id}
-                </option>
-              ))}
-            </select>
-            <p className="min-h-14 rounded-lg border border-white/5 bg-black/40 p-3 text-[11px] leading-relaxed text-zinc-400">
-              {activeModel?.description || 'Live Nexus AI API model selected.'}
-            </p>
-          </div>
-
-          <div className="mt-auto space-y-3 rounded-xl border border-white/5 bg-black/40 p-4">
-            <button
-              onClick={() => {
-                const next = !voiceReplies
-                setVoiceReplies(next)
-                localStorage.setItem('nexus_nvidia_voice_replies', String(next))
-              }}
-              className={`flex w-full items-center justify-center gap-2 rounded-lg border px-4 py-3 text-[10px] font-black tracking-widest transition-all ${
-                voiceReplies
-                  ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-300'
-                  : 'border-white/10 bg-zinc-950 text-zinc-500 hover:text-white'
-              }`}
-            >
-              <RiUserVoiceLine size={16} /> VOICE REPLIES {voiceReplies ? 'ON' : 'OFF'}
-            </button>
+            <div className="mt-2 truncate text-[9px] font-mono uppercase tracking-widest text-zinc-500">
+              {voiceStatus}
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button
+                onClick={toggleMainVoice}
+                className={`flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-[10px] font-bold uppercase tracking-widest transition ${
+                  nexusService.isConnected && !isMicMuted
+                    ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200'
+                    : 'border-white/10 bg-white/5 text-zinc-300 hover:text-cyan-200'
+                }`}
+              >
+                {nexusService.isConnected && !isMicMuted ? <RiMicLine /> : <RiMicOffLine />}
+                {nexusService.isConnected ? (isMicMuted ? 'Muted' : 'Live') : 'Start'}
+              </button>
+              <button
+                onClick={() => setVoiceReplies((current) => !current)}
+                className={`flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-[10px] font-bold uppercase tracking-widest transition ${
+                  voiceReplies
+                    ? 'border-cyan-400/30 bg-cyan-400/10 text-cyan-200'
+                    : 'border-white/10 bg-white/5 text-zinc-400'
+                }`}
+              >
+                <RiVolumeUpLine /> {voiceReplies ? 'Replies' : 'Silent'}
+              </button>
+            </div>
             <button
               onClick={stopSpeaking}
-              className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-zinc-950 px-4 py-3 text-[10px] font-black tracking-widest text-zinc-500 transition-all hover:border-red-500/30 hover:text-red-300"
+              className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-red-200 transition hover:bg-red-500/20"
             >
-              <RiStopCircleLine size={16} /> STOP VOICE
+              <RiStopCircleLine /> Stop Voice
             </button>
           </div>
-        </motion.aside>
+        </aside>
 
-        <motion.main
-          initial={{ opacity: 0, scale: 0.985 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="col-span-12 flex min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.12),transparent_35%),linear-gradient(180deg,rgba(24,24,27,0.85),rgba(0,0,0,0.92))] lg:col-span-8 xl:col-span-9"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-5 py-4">
-            <div>
-              <p className="flex items-center gap-2 text-[10px] font-mono font-bold uppercase tracking-[0.24em] text-emerald-400">
-                <RiBrainLine /> Nexus AI API Gateway
-              </p>
-              <h3 className="mt-1 text-base font-bold text-white">
-                {selectedModel}
-                <span className="ml-3 rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-[10px] uppercase tracking-widest text-emerald-200">
-                  API Only
-                </span>
-              </h3>
-              <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
-                Text prompt in, voice response out. Model state and playback controls stay in one lane.
-              </p>
-            </div>
-            <button
-              onClick={() => setMessages([{ role: 'assistant', content: defaultWelcome }])}
-              className="rounded-lg border border-white/10 bg-black/50 p-3 text-zinc-500 transition-all hover:text-white"
-              title="Reset chat"
-            >
-              <RiRefreshLine />
-            </button>
-          </div>
-
-          <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto p-5 scrollbar-small">
-            {messages.map((message, index) => (
-              <div
-                key={`${message.role}-${index}`}
-                className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
+        <main className="col-span-12 flex min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-black/45 lg:col-span-9">
+          <div ref={scrollRef} className="flex-1 overflow-y-auto p-5 scrollbar-small">
+            <div className="space-y-4">
+              {messages.map((message, index) => (
                 <div
-                  className={`max-w-[78%] rounded-xl border px-4 py-3 text-[13px] leading-relaxed ${
+                  key={`${message.role}-${index}`}
+                  className={`max-w-[86%] rounded-xl border p-4 ${
                     message.role === 'user'
-                      ? 'rounded-br-sm border-emerald-500/25 bg-emerald-500/10 text-emerald-50'
-                      : 'rounded-bl-sm border-white/10 bg-black/45 text-zinc-200'
+                      ? 'ml-auto border-emerald-400/20 bg-emerald-400/10'
+                      : 'border-white/10 bg-white/5'
                   }`}
                 >
                   <MarkdownMath content={message.content} />
-                  {message.role === 'assistant' && message.content !== defaultWelcome && (
-                    <button
-                      onClick={() => speak(message.content)}
-                      className="mt-3 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500 transition-all hover:text-emerald-300"
-                    >
-                      <RiVolumeUpLine /> Speak
-                    </button>
-                  )}
                 </div>
-              </div>
-            ))}
-
-            {isSending && (
-              <div className="flex justify-start">
-                <div className="rounded-2xl border border-white/10 bg-black/45 px-4 py-3 text-xs font-mono text-emerald-300">
-                  Nexus AI API is thinking...
+              ))}
+              {isSending && (
+                <div className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-xs text-zinc-400">
+                  <RiRefreshLine className="animate-spin" /> Thinking...
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
-          {error && (
-            <div className="border-t border-red-500/20 bg-red-950/20 px-5 py-2 text-[11px] font-mono text-red-300">
+          {error ? (
+            <div className="border-t border-red-400/20 bg-red-500/10 px-4 py-2 text-xs text-red-200">
               {error}
             </div>
-          )}
+          ) : null}
 
-          <form onSubmit={handleSubmit} className="border-t border-white/10 p-4">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-[10px] font-black uppercase tracking-[0.2em]">
-              <span className="text-zinc-500">Text Command</span>
-              <span
-                className={`rounded-full border px-3 py-1 ${
-                  voiceReplies
-                    ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300'
-                    : 'border-white/10 bg-white/5 text-zinc-500'
-                }`}
-              >
-                Voice Reply {voiceReplies ? 'On' : 'Off'}
-              </span>
-            </div>
-            <div className="flex items-end gap-3 rounded-xl border border-white/10 bg-black/60 p-3 focus-within:border-emerald-500/40">
-              <textarea
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault()
-                    event.currentTarget.form?.requestSubmit()
-                  }
-                }}
-                placeholder="Ask Nexus through the Nexus AI API..."
-                className="max-h-40 min-h-12 flex-1 resize-none bg-transparent px-2 py-2 text-sm text-white outline-none placeholder:text-zinc-600"
-              />
-              <button
-                type="submit"
-                disabled={isSending || input.trim().length === 0}
-                className="rounded-xl bg-emerald-400 px-5 py-3 text-black transition-all hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <RiSendPlane2Line size={20} />
-              </button>
-            </div>
+          <form onSubmit={handleSubmit} className="flex gap-2 border-t border-white/10 p-3">
+            <input
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              placeholder="Ask Nexus AI..."
+              className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/70 px-4 py-3 text-sm text-zinc-100 outline-none focus:border-emerald-400/50"
+            />
+            <button
+              type="button"
+              onClick={sendToMainVoiceAssistant}
+              disabled={isSending || !input.trim()}
+              className="rounded-lg border border-cyan-400/25 bg-cyan-400/10 px-4 py-3 text-cyan-200 transition hover:bg-cyan-300 hover:text-black disabled:opacity-40"
+              title="Ask the main voice assistant"
+            >
+              <RiVolumeUpLine />
+            </button>
+            <button
+              disabled={isSending || !input.trim()}
+              className="rounded-lg bg-emerald-500 px-5 py-3 text-black disabled:opacity-40"
+              title="Send to AI chat gateway"
+            >
+              <RiSendPlane2Line />
+            </button>
           </form>
-        </motion.main>
+        </main>
       </div>
     </div>
   )

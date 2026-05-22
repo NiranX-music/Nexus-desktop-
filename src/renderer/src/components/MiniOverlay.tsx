@@ -1,36 +1,31 @@
-import { FormEvent, MouseEvent, useEffect, useRef, useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
-  RiChat3Line,
   RiMicLine,
   RiMicOffLine,
   RiComputerLine,
   RiCameraLine,
   RiFullscreenLine,
-  RiDragMove2Fill,
-  RiLoader4Line,
-  RiSendPlane2Line,
-  RiSparklingLine
+  RiDragMove2Fill
 } from 'react-icons/ri'
 import { GiPowerButton } from 'react-icons/gi'
-import type { AssistantVisualState, VisionMode } from '@renderer/IndexRoot'
-import { IS_TRIAL_BUILD } from '@renderer/config/app-mode'
+import { nexusService } from '@renderer/services/nexus-voice-ai'
+import { VisionMode } from '@renderer/IndexRoot'
 
 interface OverlayProps {
-  assistantVisualState: AssistantVisualState
+  assistantVisualState?: string
   isSystemActive: boolean
   isSystemStarting: boolean
-  toggleSystem: () => void
+  toggleSystem: () => void | Promise<void>
   isMicMuted: boolean
   toggleMic: () => void
   isVideoOn: boolean
   visionMode: VisionMode
   startVision: (mode: 'camera' | 'screen') => void
   stopVision: () => void
-  sendTextCommand: (command: string) => Promise<void>
+  sendTextCommand?: (command: string) => Promise<void>
 }
 
 const MiniOverlay = ({
-  assistantVisualState,
   isSystemActive,
   isSystemStarting,
   toggleSystem,
@@ -39,83 +34,29 @@ const MiniOverlay = ({
   isVideoOn,
   visionMode,
   startVision,
-  stopVision,
-  sendTextCommand
+  stopVision
 }: OverlayProps) => {
-  const dockRef = useRef<HTMLDivElement | null>(null)
-  const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [textCommand, setTextCommand] = useState('')
-  const [isSendingText, setIsSendingText] = useState(false)
-  const [isDockExpanded, setIsDockExpanded] = useState(false)
-  const [isComposerFocused, setIsComposerFocused] = useState(false)
+  const [isTalking, setIsTalking] = useState(false)
+  const analyzerRef = useRef<AnalyserNode | null>(null)
+  const dataArrayRef = useRef<Uint8Array | any | null>(null)
 
-  const isSpeaking = assistantVisualState === 'speaking'
-  const isRunning = assistantVisualState === 'running' || assistantVisualState === 'speaking'
-  const dockStateClass = isSpeaking
-    ? 'is-speaking'
-    : isRunning || isSystemStarting
-      ? 'is-running'
-      : 'is-offline'
-
-  const clearCollapseTimer = () => {
-    if (collapseTimerRef.current) {
-      clearTimeout(collapseTimerRef.current)
-      collapseTimerRef.current = null
-    }
-  }
-
-  const setDockExpanded = (expanded: boolean) => {
-    setIsDockExpanded((current) => {
-      if (current !== expanded) {
-        window.electron.ipcRenderer.send('overlay-dock:set-expanded', expanded)
+  useEffect(() => {
+    if (isSystemActive && nexusService.analyser) {
+      analyzerRef.current = nexusService.analyser
+      dataArrayRef.current = new Uint8Array(nexusService.analyser.frequencyBinCount)
+      const checkAudio = () => {
+        if (analyzerRef.current && dataArrayRef.current) {
+          analyzerRef.current.getByteFrequencyData(dataArrayRef.current)
+          const avg = dataArrayRef.current.reduce((a, b) => a + b) / dataArrayRef.current.length
+          setIsTalking(avg > 10)
+        }
+        if (isSystemActive) requestAnimationFrame(checkAudio)
       }
-
-      return expanded
-    })
-  }
-
-  const resetDockMotion = () => {
-    if (!dockRef.current) return
-
-    dockRef.current.style.setProperty('--dock-cursor-x', '50%')
-    dockRef.current.style.setProperty('--dock-cursor-y', '18%')
-    dockRef.current.style.setProperty('--dock-pan-x', '0px')
-    dockRef.current.style.setProperty('--dock-lift-y', '0px')
-    dockRef.current.style.setProperty('--dock-tilt-x', '0deg')
-    dockRef.current.style.setProperty('--dock-tilt-y', '0deg')
-  }
-
-  const collapseDock = () => {
-    if (textCommand.trim() || isSendingText || isComposerFocused) return
-    setDockExpanded(false)
-    resetDockMotion()
-  }
-
-  const scheduleCollapse = () => {
-    clearCollapseTimer()
-    collapseTimerRef.current = setTimeout(() => {
-      collapseDock()
-    }, 140)
-  }
-
-  useEffect(() => {
-    resetDockMotion()
-
-    return () => {
-      clearCollapseTimer()
-      window.electron.ipcRenderer.send('overlay-dock:set-expanded', false)
+      checkAudio()
+    } else {
+      setIsTalking(false)
     }
-  }, [])
-
-  useEffect(() => {
-    if (textCommand.trim()) {
-      clearCollapseTimer()
-      setDockExpanded(true)
-      return
-    }
-
-    if (!isComposerFocused && !isSendingText) scheduleCollapse()
-  }, [textCommand, isComposerFocused, isSendingText])
+  }, [isSystemActive])
 
   const handleVisionClick = (mode: 'camera' | 'screen') => {
     if (isVideoOn && visionMode === mode) {
@@ -129,180 +70,65 @@ const MiniOverlay = ({
     window.electron.ipcRenderer.send('toggle-overlay')
   }
 
-  const handlePointerMove = (event: MouseEvent<HTMLDivElement>) => {
-    const element = dockRef.current
-    if (!element) return
-
-    const bounds = element.getBoundingClientRect()
-    const x = (event.clientX - bounds.left) / bounds.width
-    const y = (event.clientY - bounds.top) / bounds.height
-    const offsetX = (x - 0.5) * (isDockExpanded ? 18 : 6)
-    const offsetY = (0.5 - y) * (isDockExpanded ? 6 : 2)
-
-    element.style.setProperty('--dock-cursor-x', `${(x * 100).toFixed(2)}%`)
-    element.style.setProperty('--dock-cursor-y', `${(y * 100).toFixed(2)}%`)
-    element.style.setProperty('--dock-pan-x', `${offsetX.toFixed(2)}px`)
-    element.style.setProperty('--dock-lift-y', `${offsetY.toFixed(2)}px`)
-    element.style.setProperty('--dock-tilt-x', `${((0.5 - y) * 2.4).toFixed(2)}deg`)
-    element.style.setProperty('--dock-tilt-y', `${((x - 0.5) * 4.6).toFixed(2)}deg`)
-  }
-
-  const submitTextCommand = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    const command = textCommand.trim()
-    if (!command || isSendingText) return
-
-    setIsSendingText(true)
-    try {
-      sendTextCommand(command).catch(() => {})
-      setTextCommand('')
-    } finally {
-      setIsSendingText(false)
-    }
-  }
-
   return (
-    <div
-      ref={dockRef}
-      onMouseEnter={() => {
-        clearCollapseTimer()
-        setDockExpanded(true)
-      }}
-      onMouseLeave={() => {
-        scheduleCollapse()
-      }}
-      onMouseMove={handlePointerMove}
-      className={`nexus-dock-shell ${dockStateClass} ${isDockExpanded ? 'is-expanded' : 'is-collapsed'} drag-region inline-flex max-w-[calc(100vw-10px)] items-center text-zinc-100 backdrop-blur-2xl`}
-    >
-      <div className="nexus-dock-spectrum" />
-      <div className="nexus-dock-scan" />
-      <div className="nexus-dock-cursor-glow" />
-
-      <div className="nexus-dock-core no-drag">
+    <div className="w-full h-full flex items-center justify-between px-3 bg-zinc-950/90 backdrop-blur-xl rounded-full border border-emerald-500/30 drag-region overflow-hidden">
+      <div className="flex items-center gap-3 no-drag">
         <div
-          className={`relative grid shrink-0 place-items-center rounded-full border transition-all duration-300 ${isDockExpanded ? 'h-10 w-10' : 'h-6 w-6'} ${isSystemActive ? (isSpeaking ? 'border-emerald-300 bg-emerald-400/20 shadow-[0_0_24px_rgba(52,211,153,0.55)]' : 'border-emerald-400/45 bg-emerald-900/25') : 'border-zinc-700 bg-zinc-900'}`}
-          title={
-            isSystemActive ? (isSpeaking ? 'Nexus speaking' : 'Nexus online') : 'Nexus standby'
-          }
+          className={`w-8 h-8 rounded-full flex items-center justify-center border transition-all duration-300 ${isSystemStarting ? 'border-amber-400/70 bg-amber-500/10' : isSystemActive ? (isTalking ? 'border-emerald-500 bg-emerald-500/20 shadow-[0_0_15px_#10b981]' : 'border-emerald-500/50 bg-emerald-900/20') : 'border-zinc-700 bg-zinc-900'}`}
         >
-          <RiSparklingLine
-            className={`${isDockExpanded ? 'text-[18px]' : 'text-[12px]'} absolute ${isSpeaking ? 'text-emerald-100 animate-pulse' : 'text-emerald-500/70'}`}
-          />
           <div
-            className={`absolute rounded-full border border-black transition-colors duration-300 ${isDockExpanded ? 'bottom-1.5 right-1.5 h-2.5 w-2.5' : 'bottom-0.5 right-0.5 h-1.5 w-1.5'} ${isSystemActive ? (isSpeaking ? 'bg-emerald-200' : 'bg-emerald-500') : 'bg-red-700'}`}
+            className={`w-2.5 h-2.5 rounded-full transition-colors duration-300 ${isSystemStarting ? 'bg-amber-300 animate-pulse' : isSystemActive ? (isTalking ? 'bg-emerald-400' : 'bg-emerald-600') : 'bg-red-900'}`}
           />
-        </div>
-
-        <div className="nexus-dock-core-copy min-w-0 pr-1">
-          <p className="truncate text-[10px] font-black uppercase tracking-[0.18em] text-emerald-200">
-            {IS_TRIAL_BUILD ? 'Nexus Trial Dock' : 'Nexus Dock'}
-          </p>
-          <p className="mt-0.5 truncate text-[8px] font-bold uppercase tracking-[0.16em] text-zinc-500">
-            {IS_TRIAL_BUILD
-              ? 'Local core controls'
-              : isSpeaking
-                ? 'Voice live'
-                : isRunning
-                  ? 'Always ready'
-                  : 'Win+Shift+N'}
-          </p>
         </div>
       </div>
 
-      <div className="nexus-dock-expanded-content no-drag">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <button
-            onClick={toggleMic}
-            disabled={!isSystemActive}
-            className={`grid h-10 w-10 shrink-0 place-items-center rounded-full border transition-all ${!isSystemActive ? 'cursor-not-allowed border-white/5 bg-white/5 text-zinc-700' : isMicMuted ? 'border-red-400/25 bg-red-500/10 text-red-300 hover:bg-red-500/20' : 'border-emerald-300/25 bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/20'}`}
-            title={isMicMuted ? 'Unmute voice' : 'Mute voice'}
-            aria-label={isMicMuted ? 'Unmute voice' : 'Mute voice'}
-          >
-            {isMicMuted ? <RiMicOffLine size={18} /> : <RiMicLine size={18} />}
-          </button>
+      <div className="flex items-center gap-2 no-drag">
+        <button
+          onClick={toggleMic}
+          disabled={!isSystemActive}
+          className={`p-2.5 rounded-full transition-all ml-1 ${!isSystemActive ? 'opacity-30' : isMicMuted ? 'text-red-500 bg-red-500/10' : 'text-emerald-400 bg-emerald-500/10'}`}
+        >
+          {isMicMuted ? <RiMicOffLine size={18} /> : <RiMicLine size={18} />}
+        </button>
 
-          <button
-            onClick={toggleSystem}
-            className={`grid h-11 w-11 shrink-0 place-items-center rounded-full border transition-all duration-500 shadow-lg ${isSystemActive ? 'border-emerald-300 bg-emerald-400/18 text-emerald-100 shadow-emerald-500/20' : isSystemStarting ? 'border-amber-300/70 bg-amber-400/15 text-amber-100' : 'border-zinc-600 bg-zinc-900 text-zinc-500 hover:border-emerald-300/35 hover:text-emerald-200'}`}
-            title={isSystemActive ? 'Turn voice assistant off' : 'Start voice assistant'}
-            aria-label={isSystemActive ? 'Turn voice assistant off' : 'Start voice assistant'}
-          >
-            <GiPowerButton
-              size={20}
-              className={isSystemActive || isSystemStarting ? 'animate-pulse' : ''}
-            />
-          </button>
+        <button
+          onClick={toggleSystem}
+          className={`p-3 rounded-full border transition-all duration-500 shadow-lg mx-1 ${isSystemStarting ? 'bg-amber-500/10 border-amber-400/70 text-amber-300' : isSystemActive ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400' : 'bg-zinc-800 border-zinc-600 text-zinc-500 hover:text-red-400'}`}
+        >
+          <GiPowerButton
+            size={20}
+            className={isSystemActive || isSystemStarting ? 'animate-pulse' : ''}
+          />
+        </button>
 
-          <button
-            onClick={() => handleVisionClick('camera')}
-            disabled={!isSystemActive}
-            className={`grid h-10 w-10 shrink-0 place-items-center rounded-full border transition-all ${!isSystemActive ? 'cursor-not-allowed border-white/5 bg-white/5 text-zinc-700' : isVideoOn && visionMode === 'camera' ? 'animate-pulse border-cyan-300/45 bg-cyan-300/15 text-cyan-100' : 'border-white/10 bg-white/[0.03] text-zinc-400 hover:border-cyan-300/25 hover:bg-cyan-300/10 hover:text-cyan-100'}`}
-            title="Toggle Camera"
-            aria-label="Toggle camera"
-          >
-            <RiCameraLine size={18} />
-          </button>
+        <button
+          onClick={() => handleVisionClick('camera')}
+          disabled={!isSystemActive}
+          className={`p-2.5 rounded-full transition-all ${!isSystemActive ? 'opacity-30' : isVideoOn && visionMode === 'camera' ? 'text-red-400 bg-red-500/10 animate-pulse border border-red-500/30' : 'text-zinc-400 hover:text-white hover:bg-white/10'}`}
+          title="Toggle Camera"
+        >
+          <RiCameraLine size={18} />
+        </button>
 
-          <form
-            onSubmit={submitTextCommand}
-            className={`nexus-dock-text-command flex h-11 min-w-0 items-center overflow-hidden rounded-full border border-emerald-300/18 bg-black/55 text-zinc-100 transition-all duration-300 ease-out ${textCommand || isComposerFocused ? 'is-active' : ''}`}
-            title="Text command"
-          >
-            <div className="grid h-11 w-11 shrink-0 place-items-center text-emerald-200">
-              <RiChat3Line size={17} />
-            </div>
-            <input
-              value={textCommand}
-              onChange={(event) => setTextCommand(event.target.value)}
-              onFocus={() => {
-                clearCollapseTimer()
-                setIsComposerFocused(true)
-                setDockExpanded(true)
-              }}
-              onBlur={() => {
-                setIsComposerFocused(false)
-                scheduleCollapse()
-              }}
-              placeholder="Type command..."
-              className="min-w-0 flex-1 bg-transparent pr-2 text-xs font-semibold text-white outline-none placeholder:text-zinc-600"
-            />
-            <button
-              type="submit"
-              disabled={!textCommand.trim() || isSendingText}
-              className="mr-1 grid h-9 w-9 shrink-0 place-items-center rounded-full border border-emerald-300/20 bg-emerald-400/10 text-emerald-200 transition hover:bg-emerald-400 hover:text-black disabled:cursor-not-allowed disabled:opacity-35"
-              aria-label="Send text command"
-            >
-              {isSendingText ? (
-                <RiLoader4Line className="animate-spin" size={15} />
-              ) : (
-                <RiSendPlane2Line size={15} />
-              )}
-            </button>
-          </form>
+        <button
+          onClick={() => handleVisionClick('screen')}
+          disabled={!isSystemActive}
+          className={`p-2.5 rounded-full transition-all ${!isSystemActive ? 'opacity-30' : isVideoOn && visionMode === 'screen' ? 'text-red-400 bg-red-500/10 animate-pulse border border-red-500/30' : 'text-zinc-400 hover:text-white hover:bg-white/10'}`}
+          title="Toggle Screen"
+        >
+          <RiComputerLine size={18} />
+        </button>
+      </div>
 
-          <button
-            onClick={() => handleVisionClick('screen')}
-            disabled={!isSystemActive}
-            className={`grid h-10 w-10 shrink-0 place-items-center rounded-full border transition-all ${!isSystemActive ? 'cursor-not-allowed border-white/5 bg-white/5 text-zinc-700' : isVideoOn && visionMode === 'screen' ? 'animate-pulse border-orange-300/45 bg-orange-300/15 text-orange-100' : 'border-white/10 bg-white/[0.03] text-zinc-400 hover:border-orange-300/25 hover:bg-orange-300/10 hover:text-orange-100'}`}
-            title="Toggle Screen"
-            aria-label="Toggle screen capture"
-          >
-            <RiComputerLine size={18} />
-          </button>
-        </div>
-
-        <div className="ml-1 flex shrink-0 items-center gap-1 border-l border-emerald-300/15 pl-2">
-          <button
-            onClick={expand}
-            className="grid h-9 w-9 place-items-center rounded-full text-zinc-500 transition-all hover:bg-emerald-500/10 hover:text-emerald-300"
-            title="Expand Nexus"
-            aria-label="Expand Nexus"
-          >
-            <RiFullscreenLine size={16} />
-          </button>
-          <div className="drag-region cursor-move px-1 text-emerald-500/30" title="Drag dock">
-            <RiDragMove2Fill size={14} />
-          </div>
+      <div className="pl-4 border-l border-emerald-500/20 no-drag flex items-center gap-2">
+        <button
+          onClick={expand}
+          className="p-2 rounded-full text-zinc-500 hover:text-emerald-400 hover:bg-emerald-500/10 transition-all"
+        >
+          <RiFullscreenLine size={16} />
+        </button>
+        <div className="drag-region cursor-move text-emerald-500/30">
+          <RiDragMove2Fill size={14} />
         </div>
       </div>
     </div>

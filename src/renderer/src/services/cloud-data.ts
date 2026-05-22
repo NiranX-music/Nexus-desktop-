@@ -12,6 +12,18 @@ export type NexusCloudDataRow<T = NexusCloudValue> = {
   updated_at?: string
 }
 
+export type NexusCloudChatMessage = {
+  role: 'user' | 'model'
+  parts: [{ text: string }]
+}
+
+export type NexusCloudMemory = {
+  fact: string
+  timestamp: string
+  source?: string
+  cloudId?: string
+}
+
 const DEVICE_ID_STORAGE_KEY = 'nexus_desktop_device_id'
 
 const createDeviceId = () =>
@@ -25,6 +37,15 @@ const getDeviceId = () => {
   }
   return deviceId
 }
+
+const createCloudItemKey = (prefix: string, timestamp = new Date().toISOString()) => {
+  const safeTimestamp = timestamp.replace(/[^a-zA-Z0-9]/g, '-')
+  const uniqueId = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  return `${prefix}:${safeTimestamp}:${uniqueId}`
+}
+
+const readRecord = (value: NexusCloudValue): Record<string, any> =>
+  value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, any>) : {}
 
 export const isCloudDataReady = () => Boolean(nexusSupabase)
 
@@ -56,6 +77,25 @@ export const bootstrapCloudAccount = async () => {
   }
 
   await nexusSupabase.from('nexus_profiles').upsert(profile, { onConflict: 'id' })
+
+  await nexusSupabase.from('nexus_user_data').upsert(
+    {
+      user_id: user.id,
+      device_id: getDeviceId(),
+      collection: 'account',
+      item_key: 'details',
+      value: {
+        email: user.email,
+        display_name: displayName,
+        provider: 'email',
+        created_at: user.created_at,
+        last_sign_in_at: user.last_sign_in_at || null,
+        updated_at: new Date().toISOString()
+      },
+      updated_at: new Date().toISOString()
+    },
+    { onConflict: 'user_id,collection,item_key' }
+  )
 
   await nexusSupabase.from('nexus_desktop_devices').upsert(
     {
@@ -151,6 +191,72 @@ export const loadCloudSettings = async () => {
     settings[row.item_key] = row.value
     return settings
   }, {})
+}
+
+export const saveCloudMemory = async (fact: string, timestamp = new Date().toISOString()) => {
+  const cleanFact = String(fact || '').trim()
+  if (!cleanFact) return { ok: false, error: 'Memory fact is empty.' }
+
+  return saveCloudData('core_memory', createCloudItemKey('memory', timestamp), {
+    fact: cleanFact,
+    timestamp,
+    source: 'nexus-core-memory'
+  })
+}
+
+export const listCloudMemories = async (): Promise<NexusCloudMemory[]> => {
+  const rows = await listCloudData('core_memory')
+  const memories: NexusCloudMemory[] = []
+
+  for (const row of rows) {
+    const value = readRecord(row.value)
+    const fact = String(value.fact || value.content || '').trim()
+    if (!fact) continue
+
+    memories.push({
+      fact,
+      timestamp: String(value.timestamp || row.updated_at || new Date().toISOString()),
+      source: String(value.source || 'supabase'),
+      cloudId: row.id
+    })
+  }
+
+  return memories
+}
+
+export const saveCloudChatMessage = async (
+  role: 'user' | 'model' | 'nexus',
+  text: string,
+  timestamp = new Date().toISOString()
+) => {
+  const cleanText = String(text || '').trim()
+  if (!cleanText) return { ok: false, error: 'Chat message is empty.' }
+
+  return saveCloudData('chat_history', createCloudItemKey('message', timestamp), {
+    role: role === 'nexus' ? 'model' : role,
+    content: cleanText,
+    timestamp
+  })
+}
+
+export const listCloudChatHistory = async (limit = 20): Promise<NexusCloudChatMessage[]> => {
+  const rows = await listCloudData('chat_history')
+
+  return rows
+    .slice(0, limit)
+    .reverse()
+    .map((row) => {
+      const value = readRecord(row.value)
+      const role = value.role === 'user' ? 'user' : 'model'
+      const text = String(value.content || value.text || '').trim()
+      if (!text) return null
+
+      return {
+        role,
+        parts: [{ text }]
+      }
+    })
+    .filter((message): message is NexusCloudChatMessage => Boolean(message))
 }
 
 export const syncLocalSettingsToCloud = async () => {

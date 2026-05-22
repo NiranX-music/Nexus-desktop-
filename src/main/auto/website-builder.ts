@@ -2,7 +2,6 @@ import { ipcMain, BrowserWindow, app } from 'electron'
 import path from 'path'
 import fs from 'fs/promises'
 import { GoogleGenAI } from '@google/genai'
-import { generateWithNexusGemini } from '../services/nexus-gemini-api'
 
 let previewWin: BrowserWindow | null = null
 
@@ -13,7 +12,7 @@ export default function registerWebsiteBuilder() {
       previewWin = new BrowserWindow({
         width: 1280,
         height: 720,
-        title: 'Nexus Live Forge :: Web Synthesis',
+        title: 'NEXUS Live Forge :: Web Synthesis',
         backgroundColor: '#050505',
         autoHideMenuBar: true,
         webPreferences: {
@@ -26,13 +25,21 @@ export default function registerWebsiteBuilder() {
         <html>
           <body style="margin:0; overflow:hidden; background: #050505;">
             <div id="loader" style="position:absolute; top:10px; left:10px; color:#00ffaa; font-family:monospace; font-size:12px; z-index:9999; text-shadow: 0 0 5px #00ffaa;">
-              [ Nexus LIVE FORGE :: SYNTHESIZING UI... ]
+              [ NEXUS LIVE FORGE :: SYNTHESIZING UI... ]
             </div>
             <iframe id="live-frame" style="width:100vw; height:100vh; border:none;"></iframe>
           </body>
         </html>
       `
       await previewWin.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(shellHtml)}`)
+
+      if (!geminiKey || geminiKey.trim() === '') {
+        throw new Error(
+          'Missing Gemini API Key. Please configure it in the Command Center Vault (Settings Tab).'
+        )
+      }
+
+      const ai = new GoogleGenAI({ apiKey: geminiKey })
 
       const sysPrompt = `You are an elite, Awwwards-winning frontend developer and UI/UX designer. 
 Build a highly animated, visually stunning, clean, and premium website based on the user prompt.
@@ -69,36 +76,6 @@ CRITICAL RULES:
 
 OUTPUT ONLY RAW HTML.`
 
-      if (!geminiKey || geminiKey.trim() === '') {
-        const fullCode = await generateWithNexusGemini({
-          model: 'gemini-2.5-flash',
-          prompt: `${sysPrompt}\n\nUSER PROMPT: ${prompt}`,
-          maxOutputTokens: 65536
-        })
-        const cleanCode = fullCode.replace(/^```html\n?/, '').replace(/```$/, '')
-        const safeCode = encodeURIComponent(cleanCode)
-
-        if (previewWin && !previewWin.isDestroyed()) {
-          await previewWin.webContents
-            .executeJavaScript(
-              `
-              document.getElementById('live-frame').srcdoc = decodeURIComponent('${safeCode.replace(/'/g, "\\'")}');
-              document.getElementById('loader').innerText = '[ SYNTHESIS COMPLETE ]';
-              setTimeout(() => document.getElementById('loader').style.display = 'none', 3000);
-            `
-            )
-            .catch(() => {})
-        }
-
-        const dirPath = path.join(app.getPath('userData'), 'Websites')
-        await fs.mkdir(dirPath, { recursive: true })
-        const filePath = path.join(dirPath, `website_${Date.now()}.html`)
-        await fs.writeFile(filePath, cleanCode.trim(), 'utf-8')
-
-        return { success: true, filePath }
-      }
-
-      const ai = new GoogleGenAI({ apiKey: geminiKey })
       const response = await ai.models.generateContentStream({
         model: 'gemini-3-flash-preview',
         contents: `${sysPrompt}\n\nUSER PROMPT: ${prompt}`

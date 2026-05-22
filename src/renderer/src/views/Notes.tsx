@@ -1,8 +1,6 @@
 import { useState, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
-import rehypeKatex from 'rehype-katex'
 import remarkGfm from 'remark-gfm'
-import remarkMath from 'remark-math'
 import {
   RiStickyNoteLine,
   RiDeleteBinLine,
@@ -13,9 +11,6 @@ import {
   RiCloseLine,
   RiEditLine 
 } from 'react-icons/ri'
-import { deleteCloudData, listCloudData, saveCloudData } from '@renderer/services/cloud-data'
-import { normalizeMathMarkdown } from '@renderer/components/MarkdownMath'
-import 'katex/dist/katex.min.css'
 
 interface Note {
   filename: string
@@ -24,28 +19,7 @@ interface Note {
   createdAt: Date
 }
 
-type CloudNoteValue = {
-  title?: string
-  content?: string
-  timestamp?: string
-}
-
-const createNoteKey = (title: string) => title.replace(/[^a-z0-9]/gi, '_').toLowerCase()
-
 const MarkdownComponents = {
-  a({ href, children, ...props }: any) {
-    return (
-      <a
-        href={href}
-        target="_blank"
-        rel="noreferrer noopener"
-        className="text-emerald-300 underline decoration-emerald-500/40 underline-offset-3 hover:text-emerald-100"
-        {...props}
-      >
-        {children}
-      </a>
-    )
-  },
   code({ node, inline, className, children, ...props }: any) {
     return !inline ? (
       <div className="bg-black/50 rounded-lg p-3 my-2 border border-white/10 font-mono text-xs overflow-x-auto">
@@ -73,33 +47,8 @@ const NotesView = ({ glassPanel }: { glassPanel?: string }) => {
 
   const fetchNotes = async () => {
     try {
-      const data: Note[] = await window.electron.ipcRenderer.invoke('get-notes')
-      const cloudRows = await listCloudData<CloudNoteValue>('notes')
-      const notesByFilename = new Map<string, Note>()
-
-      for (const note of data || []) {
-        notesByFilename.set(note.filename, {
-          ...note,
-          createdAt: new Date(note.createdAt)
-        })
-      }
-
-      for (const row of cloudRows) {
-        const value = row.value || {}
-        const title = value.title || row.item_key.replace(/_/g, ' ')
-        const filename = `${row.item_key}.md`
-        notesByFilename.set(filename, {
-          filename,
-          title,
-          content: value.content || '',
-          createdAt: new Date(value.timestamp || row.updated_at || Date.now())
-        })
-      }
-
-      const mergedNotes = Array.from(notesByFilename.values()).sort(
-        (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
-      )
-      setNotes(mergedNotes)
+      const data = await window.electron.ipcRenderer.invoke('get-notes')
+      setNotes(data)
     } catch (e) {
     }
   }
@@ -140,14 +89,10 @@ const NotesView = ({ glassPanel }: { glassPanel?: string }) => {
     if (!newTitle.trim() || !newContent.trim()) return
 
 
-    await window.electron.ipcRenderer.invoke('save-note', {
+    await window.electron.ipcRenderer.invoke(editOriginalFilename ? 'update-note' : 'save-note', {
+      originalFilename: editOriginalFilename,
       title: newTitle,
       content: newContent
-    })
-    await saveCloudData('notes', createNoteKey(newTitle), {
-      title: newTitle,
-      content: newContent,
-      timestamp: new Date().toISOString()
     })
 
     setIsEditorOpen(false)
@@ -167,7 +112,6 @@ const NotesView = ({ glassPanel }: { glassPanel?: string }) => {
   const deleteNote = async (filename: string, e: React.MouseEvent) => {
     e.stopPropagation()
     await window.electron.ipcRenderer.invoke('delete-note', filename)
-    await deleteCloudData('notes', filename.replace(/\.md$/i, ''))
     fetchNotes()
     if (selectedNote?.filename === filename) setSelectedNote(null)
   }
@@ -197,7 +141,7 @@ const NotesView = ({ glassPanel }: { glassPanel?: string }) => {
           {notes.length === 0 ? (
             <div className="text-center text-zinc-400 text-xs mt-10">
               <p>No memories saved.</p>
-              <p className="mt-2 opacity-50">Click + or ask Nexus.</p>
+              <p className="mt-2 opacity-50">Click + or ask NEXUS.</p>
             </div>
           ) : (
             notes.map((note) => (
@@ -300,12 +244,8 @@ const NotesView = ({ glassPanel }: { glassPanel?: string }) => {
 
             <div className="flex-1 overflow-y-auto p-8 scrollbar-small bg-zinc-950/30">
               <div className="prose prose-invert prose-sm max-w-none text-zinc-300">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm, remarkMath]}
-                  rehypePlugins={[rehypeKatex]}
-                  components={MarkdownComponents}
-                >
-                  {normalizeMathMarkdown(selectedNote.content)}
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>
+                  {selectedNote.content}
                 </ReactMarkdown>
               </div>
             </div>

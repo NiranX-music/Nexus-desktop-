@@ -1,56 +1,50 @@
 import { useEffect } from 'react'
 import { useAuthStore } from '../store/auth-store'
-import { SECURITY_VERIFICATIONS_PAUSED } from '../config/security-flags'
-import { IS_TRIAL_BUILD } from '../config/app-mode'
-import { clearDesktopAuthArtifacts, resolvePreferredDesktopAuthSession } from '../services/auth-session'
+import { resolvePreferredDesktopAuthSession } from '../services/auth-session'
+import { bootstrapCloudAccount, syncLocalSettingsToCloud } from '../services/cloud-data'
 
 export default function AuthInitializer() {
-  const setAccessToken = useAuthStore((s) => s.setAccessToken)
   const setAuthSession = useAuthStore((s) => s.setAuthSession)
   const setIsAuthInitialized = useAuthStore((s: any) => s.setIsAuthInitialized)
 
   useEffect(() => {
-    const init = async () => {
-      if (SECURITY_VERIFICATIONS_PAUSED || IS_TRIAL_BUILD) {
-        clearDesktopAuthArtifacts()
-        setAccessToken(null)
-        if (setIsAuthInitialized) setIsAuthInitialized(true)
-        return
-      }
+    let isCancelled = false
 
+    const init = async () => {
       try {
         const session = await resolvePreferredDesktopAuthSession()
+        if (isCancelled) return
 
         if (!session) {
-          clearDesktopAuthArtifacts()
-          setAccessToken(null)
+          setAuthSession({ token: null, mode: null, user: null })
           return
         }
 
+        localStorage.setItem('nexus_user_name', session.user.name)
         setAuthSession({
           token: session.accessToken,
           mode: session.mode,
           user: session.user
         })
-        localStorage.setItem('nexus_user_name', session.user.name)
 
         if (session.mode === 'cloud') {
-          const { bootstrapCloudAccount, syncLocalSettingsToCloud } = await import(
-            '@renderer/services/cloud-data'
-          )
-          await bootstrapCloudAccount()
-          await syncLocalSettingsToCloud()
+          void Promise.allSettled([bootstrapCloudAccount(), syncLocalSettingsToCloud()])
         }
       } catch (err) {
-        clearDesktopAuthArtifacts()
-        setAccessToken(null)
+        if (!isCancelled) {
+          setAuthSession({ token: null, mode: null, user: null })
+        }
       } finally {
-        if (setIsAuthInitialized) setIsAuthInitialized(true)
+        if (!isCancelled && setIsAuthInitialized) setIsAuthInitialized(true)
       }
     }
 
     init()
-  }, [setAccessToken, setAuthSession, setIsAuthInitialized])
+
+    return () => {
+      isCancelled = true
+    }
+  }, [setAuthSession, setIsAuthInitialized])
 
   return null
 }

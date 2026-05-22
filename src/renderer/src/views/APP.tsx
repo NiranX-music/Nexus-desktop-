@@ -6,14 +6,12 @@ import {
   RiCodeLine,
   RiSpotifyLine,
   RiDiscordLine,
-  RiGamepadLine,
-  RiSearchLine,
-  RiArrowRightUpLine
+  RiGamepadLine
 } from 'react-icons/ri'
 import { getAllApps, AppItem } from '@renderer/services/system-info'
 
 const SmartIcon = ({ name }: { name: string }) => {
-  if (!name) return <div className="h-10 w-10 rounded-lg border border-white/5 bg-zinc-800" />
+  if (!name) return <div className="w-10 h-10 bg-zinc-800 rounded-lg border border-white/5" />
 
   const lower = name.toLowerCase()
   let icon = <RiTerminalBoxLine size={20} />
@@ -44,7 +42,7 @@ const SmartIcon = ({ name }: { name: string }) => {
 
   return (
     <div
-      className={`flex h-10 w-10 items-center justify-center rounded-lg border border-white/5 ${bg} ${color} shadow-sm transition-transform group-hover:scale-110`}
+      className={`w-10 h-10 rounded-lg flex items-center justify-center border border-white/5 ${bg} ${color} shadow-sm group-hover:scale-110 transition-transform`}
     >
       {icon}
     </div>
@@ -52,24 +50,20 @@ const SmartIcon = ({ name }: { name: string }) => {
 }
 
 const AppCard = ({ app }: { app: AppItem }) => (
-  <button
-    type="button"
+  <div
     onClick={() => window.electron.ipcRenderer.invoke('open-app', app.name)}
-    className="group flex w-full items-center gap-4 rounded-xl border border-white/5 bg-zinc-950/40 p-4 text-left backdrop-blur-xl transition-all hover:border-emerald-500/30 hover:bg-white/10 active:scale-[0.99]"
+    className="bg-zinc-950/40 backdrop-blur-xl border border-white/5 rounded-xl p-4 flex items-center gap-4 hover:bg-white/10 hover:border-emerald-500/30 transition-all cursor-pointer group active:scale-95"
   >
     <SmartIcon name={app.name} />
-    <div className="min-w-0 flex-1 overflow-hidden">
-      <div className="truncate text-sm font-bold text-zinc-200 transition-colors group-hover:text-emerald-400">
+    <div className="flex-1 overflow-hidden">
+      <div className="text-xs font-bold text-zinc-200 truncate group-hover:text-emerald-400 transition-colors">
         {app.name}
       </div>
-      <div className="mt-1 truncate font-mono text-[9px] text-zinc-600 opacity-70 transition-opacity group-hover:opacity-100">
-        READY TO LAUNCH
+      <div className="text-[8px] text-zinc-600 truncate font-mono mt-1 opacity-70 group-hover:opacity-100">
+        INSTALLED
       </div>
     </div>
-    <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/8 bg-black/30 text-zinc-600 transition-all group-hover:border-emerald-500/25 group-hover:text-emerald-300">
-      <RiArrowRightUpLine size={16} />
-    </div>
-  </button>
+  </div>
 )
 
 const AppsView = () => {
@@ -77,26 +71,21 @@ const AppsView = () => {
   const [visibleApps, setVisibleApps] = useState<AppItem[]>([])
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
-  const [query, setQuery] = useState('')
 
   const observer = useRef<IntersectionObserver | null>(null)
-  const normalizedQuery = query.trim().toLowerCase()
-  const filteredApps = allApps.filter((app) => app.name.toLowerCase().includes(normalizedQuery))
-
   const lastAppElementRef = useCallback(
-    (node: HTMLDivElement | null) => {
+    (node: HTMLDivElement) => {
       if (loading) return
       if (observer.current) observer.current.disconnect()
 
       observer.current = new IntersectionObserver((entries) => {
-        if (entries[0].isIntersecting && visibleApps.length < filteredApps.length) {
+        if (entries[0].isIntersecting && visibleApps.length < allApps.length) {
           setPage((prev) => prev + 1)
         }
       })
-
       if (node) observer.current.observe(node)
     },
-    [loading, visibleApps.length, filteredApps.length]
+    [loading, visibleApps.length, allApps.length]
   )
 
   useEffect(() => {
@@ -106,81 +95,37 @@ const AppsView = () => {
       )
 
       setAllApps(cleanData)
-      setVisibleApps(cleanData.slice(0, 18))
+      setVisibleApps(cleanData.slice(0, 15))
       setLoading(false)
     })
   }, [])
 
   useEffect(() => {
-    setPage(1)
-  }, [normalizedQuery])
-
-  useEffect(() => {
-    setVisibleApps(filteredApps.slice(0, page * 12 + 6))
-  }, [page, filteredApps])
+    if (page > 1) {
+      const nextBatch = allApps.slice(0, page * 12 + 6)
+      setVisibleApps(nextBatch)
+    }
+  }, [page, allApps])
 
   return (
-    <div className="flex h-full flex-1 flex-col gap-4 p-4 animate-in fade-in zoom-in duration-300">
-      <div className="shrink-0 rounded-2xl border border-emerald-500/15 bg-[linear-gradient(180deg,rgba(10,18,16,0.92),rgba(3,8,7,0.78))] p-4 shadow-[0_18px_44px_rgba(0,0,0,0.24)]">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-          <div className="flex items-center gap-3">
-            <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 shadow-[0_0_10px_rgba(16,185,129,0.1)]">
-              <RiAppsLine className="text-emerald-400" size={22} />
-            </div>
-            <div>
-              <h2 className="text-lg font-black uppercase tracking-[0.14em] text-zinc-100">
-                System Applications
-              </h2>
-              <p className="mt-1 text-[10px] font-mono uppercase tracking-[0.22em] text-zinc-500">
-                Indexed software library with direct launch
-              </p>
-            </div>
+    <div className="flex-1 bg-white/8 p-8 h-full flex flex-col animate-in fade-in zoom-in duration-300">
+      <div className="flex items-center justify-between mb-6 shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-emerald-500/10 rounded-lg border border-emerald-500/20 shadow-[0_0_10px_rgba(16,185,129,0.1)]">
+            <RiAppsLine className="text-emerald-400" size={20} />
           </div>
-
-          <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] xl:min-w-[28rem]">
-            <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-black/35 px-4 py-3 focus-within:border-emerald-500/35">
-              <RiSearchLine className="shrink-0 text-zinc-500" size={18} />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search installed apps..."
-                className="w-full bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
-              />
-            </label>
-
-            <div className="flex items-center justify-between gap-3 rounded-xl border border-emerald-500/20 bg-emerald-500/8 px-4 py-3">
-              <div>
-                <p className="text-[9px] font-black uppercase tracking-[0.18em] text-emerald-300/70">
-                  Visible
-                </p>
-                <p className="mt-1 text-sm font-black text-emerald-200">
-                  {loading ? 'Indexing...' : `${visibleApps.length} / ${filteredApps.length}`}
-                </p>
-              </div>
-              <div className="text-right">
-                <p className="text-[9px] font-black uppercase tracking-[0.18em] text-zinc-500">
-                  Total
-                </p>
-                <p className="mt-1 text-sm font-black text-zinc-100">{allApps.length}</p>
-              </div>
-            </div>
+          <div>
+            <h2 className="text-sm font-bold text-zinc-200 tracking-widest">SYSTEM APPLICATIONS</h2>
+            <p className="text-[10px] text-zinc-500 font-mono">INDEXED SOFTWARE LIBRARY</p>
           </div>
         </div>
-
-        <div className="mt-4 flex flex-wrap items-center gap-2 text-[10px] font-semibold text-zinc-500">
-          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">Browsers</span>
-          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">
-            Developer tools
-          </span>
-          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">Media</span>
-          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">
-            Launchers
-          </span>
+        <div className="text-xs font-mono text-emerald-500 bg-emerald-500/5 px-3 py-1 rounded-full border border-emerald-500/20">
+          {loading ? 'INDEXING...' : `${allApps.length} FOUND`}
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto pr-1 scrollbar-small">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+      <div className="flex-1 overflow-y-auto pr-4 pb-4 scrollbar-small min-h-0">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
           {visibleApps.map((app, index) => {
             const safeKey = `${app.id}-${index}`
 
@@ -190,24 +135,20 @@ const AppsView = () => {
                   <AppCard app={app} />
                 </div>
               )
+            } else {
+              return <AppCard key={safeKey} app={app} />
             }
-
-            return <AppCard key={safeKey} app={app} />
           })}
 
           {loading && (
-            <div className="col-span-full rounded-xl border border-white/10 bg-black/25 p-8 text-center text-xs text-zinc-500">
-              Scanning system library...
+            <div className="text-zinc-500 text-xs p-4 text-center col-span-full">
+              Scanning System...
             </div>
           )}
 
           {!loading && visibleApps.length === 0 && (
-            <div className="col-span-full rounded-xl border border-white/10 bg-black/25 p-10 text-center">
-              <div className="space-y-2 text-zinc-500">
-                <RiAppsLine className="mx-auto text-2xl" />
-                <p className="text-xs font-bold uppercase tracking-[0.18em]">No apps found</p>
-                <p className="text-[11px]">Try a different search term.</p>
-              </div>
+            <div className="text-zinc-500 text-xs p-10 text-center col-span-full">
+              No Apps Found.
             </div>
           )}
         </div>

@@ -22,58 +22,33 @@ import {
   RiRefreshLine,
   RiDownloadCloud2Line,
   RiRocketLine,
-  RiExternalLinkLine
+  RiRobot2Line,
+  RiVideoLine
 } from 'react-icons/ri'
 import {
-  DEFAULT_NVIDIA_MODEL_DEFAULTS,
-  getModelsForCategory,
-  getNvidiaModelById,
-  getStoredNvidiaModelDefaults,
-  NEXUS_AI_PROVIDER_MODE_STORAGE_KEY,
-  NVIDIA_API_KEY_STORAGE_KEY,
-  NVIDIA_BUILD_MODELS,
-  NVIDIA_DEFAULTS_STORAGE_KEY,
-  NVIDIA_MODEL_CATEGORIES,
-  NvidiaModelDefaults
-} from '@renderer/config/nvidia-models'
-import { IS_TRIAL_BUILD } from '@renderer/config/app-mode'
+  DEFAULT_LIVE_GEMINI_MODEL,
+  GEMINI_MODEL_OPTIONS,
+  normalizeGeminiLiveModel
+} from '@renderer/config/gemini-models'
+import {
+  AI_GATEWAY_PROVIDERS,
+  AiGatewayModel,
+  DEFAULT_AI_GATEWAY_MODEL,
+  DEFAULT_AI_GATEWAY_MODELS
+} from '@renderer/config/ai-provider-models'
+import {
+  DEFAULT_LANCE_MODEL_PATH,
+  DEFAULT_LANCE_REPO_PATH,
+  VIDEO_GENERATION_MODELS
+} from '@renderer/config/video-models'
 
 interface SettingsProps {
   isSystemActive: boolean
 }
 
-type TabType = 'updates' | 'general' | 'keys' | 'models' | 'security' | 'about'
+type TabType = 'updates' | 'general' | 'keys' | 'security'
 
-const ADMIN_PASS = '05122010'
-const DEVELOPER_PROFILE_STORAGE_KEY = 'nexus_developer_profile'
-const DEFAULT_DEVELOPER_PROFILE = {
-  developer: 'NiranX',
-  team: 'Resolute Team',
-  company: 'Nexus tech',
-  role: 'Lead Developer / AI Systems',
-  website: 'https://niranx-nexus-agent.vercel.app',
-  note: 'Nexus AI is maintained by NiranX and Resolute Team.'
-}
-
-const getDeveloperProfile = () => {
-  try {
-    return {
-      ...DEFAULT_DEVELOPER_PROFILE,
-      ...JSON.parse(localStorage.getItem(DEVELOPER_PROFILE_STORAGE_KEY) || '{}')
-    }
-  } catch {
-    return DEFAULT_DEVELOPER_PROFILE
-  }
-}
-
-const readCloudString = (value: unknown) => {
-  if (!value) return ''
-  if (typeof value === 'string') return value
-  if (typeof value === 'object' && 'value' in value) return String((value as any).value || '')
-  return ''
-}
-
-const loadCloudDataModule = () => import('@renderer/services/cloud-data')
+const liveGeminiModelOptions = GEMINI_MODEL_OPTIONS.filter((model) => model.live)
 
 const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const [activeTab, setActiveTab] = useState<TabType>('updates')
@@ -86,15 +61,20 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
 
   const [geminiKey, setGeminiKey] = useState(localStorage.getItem('nexus_custom_api_key') || '')
   const [groqKey, setGroqKey] = useState(localStorage.getItem('nexus_groq_api_key') || '')
+  const [fireworksKey, setFireworksKey] = useState(
+    localStorage.getItem('nexus_fireworks_api_key') || ''
+  )
   const [hfKey, setHfKey] = useState(localStorage.getItem('nexus_hf_api_key') || '')
   const [tailvyKey, setTailvyKey] = useState(localStorage.getItem('nexus_tailvy_api_key') || '')
-  const [nvidiaKey, setNvidiaKey] = useState('')
-  const [aiProviderMode, setAiProviderMode] = useState('nexus')
-  const [nvidiaDefaults, setNvidiaDefaults] = useState<NvidiaModelDefaults>(
-    DEFAULT_NVIDIA_MODEL_DEFAULTS
+  const [defaultModel, setDefaultModel] = useState(
+    normalizeGeminiLiveModel(localStorage.getItem('nexus_default_ai_model')) ||
+      DEFAULT_LIVE_GEMINI_MODEL
   )
-  const [nvidiaSyncStatus, setNvidiaSyncStatus] = useState(
-    `${NVIDIA_BUILD_MODELS.length} bundled Build models`
+  const [lanceRepoPath, setLanceRepoPath] = useState(
+    localStorage.getItem('nexus_lance_repo_path') || DEFAULT_LANCE_REPO_PATH
+  )
+  const [lanceModelPath, setLanceModelPath] = useState(
+    localStorage.getItem('nexus_lance_model_path') || DEFAULT_LANCE_MODEL_PATH
   )
 
   const [isSecurityUnlocked, setIsSecurityUnlocked] = useState(false)
@@ -108,92 +88,18 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const [enrollStatus, setEnrollStatus] = useState('')
   const videoRef = useRef<HTMLVideoElement>(null)
 
-  const [appVersion, setAppVersion] = useState('Loading')
-  const [updateFeedUrl, setUpdateFeedUrl] = useState('https://niranx-nexus-agent.vercel.app/updates/win')
+  const [appVersion, setAppVersion] = useState('1.1.5')
   const [updateStatus, setUpdateStatus] = useState<
-    'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'installing' | 'error'
+    'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error'
   >('idle')
   const [updateVersion, setUpdateVersion] = useState('')
   const [updateNotes, setUpdateNotes] = useState('No new updates detected.')
   const [downloadProgress, setDownloadProgress] = useState(0)
-  const [isInstallPromptOpen, setIsInstallPromptOpen] = useState(false)
-  const [developerProfile, setDeveloperProfile] = useState(getDeveloperProfile())
-  const [aboutAdminPass, setAboutAdminPass] = useState('')
-  const [isAboutAdminUnlocked, setIsAboutAdminUnlocked] = useState(false)
-  const [aboutStatus, setAboutStatus] = useState('')
-  const [cloudSyncStatus, setCloudSyncStatus] = useState(
-    IS_TRIAL_BUILD
-      ? 'Trial build active. Settings stay local on this PC and do not require Supabase login.'
-      : 'Cloud sync pending.'
-  )
+  const [gatewayModels, setGatewayModels] =
+    useState<Record<string, AiGatewayModel[]>>(DEFAULT_AI_GATEWAY_MODELS)
 
   useEffect(() => {
-    setNvidiaDefaults(getStoredNvidiaModelDefaults())
-    localStorage.removeItem(NVIDIA_API_KEY_STORAGE_KEY)
-    localStorage.setItem(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY, 'nexus')
-
-    const hydrateCloudSettings = async () => {
-      if (IS_TRIAL_BUILD) {
-        setCloudSyncStatus(
-          'Trial build active. Settings stay local on this PC and do not require Supabase login.'
-        )
-        return
-      }
-
-      const { bootstrapCloudAccount, loadCloudSettings, syncLocalSettingsToCloud } =
-        await loadCloudDataModule()
-      const boot = await bootstrapCloudAccount()
-      if (!boot.ok) {
-        setCloudSyncStatus(boot.error || 'Cloud account is not connected.')
-        return
-      }
-
-      const settings = await loadCloudSettings()
-      const cloudUserName = readCloudString(settings.nexus_user_name)
-      const cloudVoice = readCloudString(settings.nexus_voice_profile)
-      const cloudProviderMode = readCloudString(settings.nexus_ai_provider_mode)
-      const cloudModelDefaults = readCloudString(settings.nexus_nvidia_default_models)
-
-      if (cloudUserName) {
-        setUserName(cloudUserName)
-        localStorage.setItem('nexus_user_name', cloudUserName)
-      }
-
-      if (cloudVoice === 'MALE' || cloudVoice === 'FEMALE') {
-        setVoice(cloudVoice)
-        localStorage.setItem('nexus_voice_profile', cloudVoice)
-      }
-
-      if (cloudProviderMode) {
-        setAiProviderMode('nexus')
-        localStorage.setItem(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY, 'nexus')
-      }
-
-      if (cloudModelDefaults) {
-        try {
-          const parsedDefaults = {
-            ...DEFAULT_NVIDIA_MODEL_DEFAULTS,
-            ...JSON.parse(cloudModelDefaults)
-          }
-          setNvidiaDefaults(parsedDefaults)
-          localStorage.setItem(NVIDIA_DEFAULTS_STORAGE_KEY, JSON.stringify(parsedDefaults))
-        } catch {}
-      }
-
-      await syncLocalSettingsToCloud()
-      setCloudSyncStatus('Cloud sync active. Settings and operator data are stored in Supabase.')
-    }
-
-    hydrateCloudSettings()
-
     if (window.electron?.ipcRenderer) {
-      window.electron.ipcRenderer.invoke('secure-get-keys').then((keys) => {
-        if (keys?.nvidiaKey) {
-          setNvidiaKey('')
-          localStorage.removeItem(NVIDIA_API_KEY_STORAGE_KEY)
-        }
-      })
-
       window.electron.ipcRenderer.invoke('get-personality').then((res) => {
         if (res) setPersonality(res)
       })
@@ -201,25 +107,14 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
         .invoke('check-vault-status')
         .then((res) => setFaceCount(res?.faceCount || 0))
 
-      window.electron.ipcRenderer
-        .invoke('get-app-version')
-        .then((v) => setAppVersion(v || 'Unknown'))
-        .catch(() => setAppVersion('Unknown'))
+      window.electron.ipcRenderer.invoke('get-app-version').then((v) => setAppVersion(v))
 
-      window.electron.ipcRenderer
-        .invoke('get-update-feed-url')
-        .then((url) => {
-          if (url) setUpdateFeedUrl(url)
-        })
-        .catch(() => {})
-
-      window.electron.ipcRenderer.on('updater-event', (_e, event = {}) => {
-        const { status, data = {}, error = '' } = event
+      window.electron.ipcRenderer.on('updater-event', (_e, { status, data, error }) => {
         if (status === 'checking') setUpdateStatus('checking')
         if (status === 'available') {
           setUpdateStatus('available')
-          setUpdateVersion(String(data.version || ''))
-          setUpdateNotes(String(data.releaseNotes || 'Bug fixes and performance improvements.'))
+          setUpdateVersion(data.version)
+          setUpdateNotes(data.releaseNotes || 'Bug fixes and performance improvements.')
         }
         if (status === 'not-available') {
           setUpdateStatus('idle')
@@ -227,20 +122,12 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
         }
         if (status === 'downloading') {
           setUpdateStatus('downloading')
-          setIsInstallPromptOpen(false)
-          setDownloadProgress(Math.round(Number(data.percent || 0)))
+          setDownloadProgress(Math.round(data.percent))
         }
-        if (status === 'downloaded') {
-          setUpdateStatus('ready')
-          setDownloadProgress(100)
-          if (data.version) setUpdateVersion(String(data.version))
-          setUpdateNotes(String(data.releaseNotes || 'Update downloaded and ready to install.'))
-          setIsInstallPromptOpen(true)
-        }
+        if (status === 'downloaded') setUpdateStatus('ready')
         if (status === 'error') {
           setUpdateStatus('error')
-          setIsInstallPromptOpen(false)
-          setUpdateNotes(`Error: ${error || 'Unable to reach the update server.'}`)
+          setUpdateNotes(`Error: ${error}`)
         }
       })
     }
@@ -250,106 +137,28 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
     }
   }, [])
 
-  const saveCloudSettingIfAvailable = async (
-    key: string,
-    value: Record<string, unknown>,
-    successMessage: string
-  ) => {
-    if (IS_TRIAL_BUILD) {
-      setCloudSyncStatus('Trial build stores this setting locally on the current PC only.')
-      return { ok: true, localOnly: true }
-    }
+  useEffect(() => {
+    AI_GATEWAY_PROVIDERS.forEach(async (provider) => {
+      if (provider === 'gemini') return
+      try {
+        const result = await window.electron?.ipcRenderer?.invoke('ai-gateway:list-models', {
+          provider
+        })
+        if (result?.success && Array.isArray(result.models) && result.models.length > 0) {
+          setGatewayModels((current) => ({ ...current, [provider]: result.models }))
+        }
+      } catch {}
+    })
+  }, [])
 
-    const { saveCloudSetting } = await loadCloudDataModule()
-    const result = await saveCloudSetting(key, value)
-    setCloudSyncStatus(result.ok ? successMessage : result.error || 'Cloud sync failed.')
-    return result
-  }
-
-  const syncCloudSettingsIfAvailable = async (statusMessage = 'Manual cloud sync complete.') => {
-    if (IS_TRIAL_BUILD) {
-      setCloudSyncStatus('Trial build keeps settings local, so there is nothing to sync upstream.')
-      return
-    }
-
-    const { syncLocalSettingsToCloud } = await loadCloudDataModule()
-    await syncLocalSettingsToCloud()
-    setCloudSyncStatus(statusMessage)
-  }
-
-  const checkAndDownloadUpdate = async () => {
-    if (!window.electron?.ipcRenderer) return
-    setIsInstallPromptOpen(false)
-    setUpdateStatus('checking')
-    setUpdateNotes(`Checking firmware feed and preparing in-app download:\n${updateFeedUrl}`)
-
-    try {
-      const result = await window.electron.ipcRenderer.invoke('check-and-download-update')
-      if (result?.success === false) {
-        throw new Error(result.error || 'Unable to download the update.')
-      }
-
-      if (result?.updateAvailable === false) {
-        setUpdateStatus('idle')
-        setUpdateNotes('System is up to date.')
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to download the update.'
-      setUpdateStatus('error')
-      setUpdateNotes(`Error: ${message}`)
-    }
-  }
-
-  const downloadUpdate = async () => {
-    if (!window.electron?.ipcRenderer) return
-    setIsInstallPromptOpen(false)
-    setUpdateStatus('downloading')
-    setDownloadProgress(0)
-
-    try {
-      const result = await window.electron.ipcRenderer.invoke('download-update')
-      if (result?.success === false) {
-        throw new Error(result.error || 'Unable to download the update.')
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to download the update.'
-      setUpdateStatus('error')
-      setUpdateNotes(`Error: ${message}`)
-    }
-  }
-
-  const installUpdate = async () => {
-    if (!window.electron?.ipcRenderer) return
-
-    try {
-      setIsInstallPromptOpen(false)
-      setUpdateStatus('installing')
-      const result = await window.electron.ipcRenderer.invoke('install-update')
-      if (result?.success === false) {
-        throw new Error(result.error || 'Unable to install the update.')
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to install the update.'
-      setUpdateStatus('error')
-      setUpdateNotes(`Error: ${message}`)
-    }
-  }
-
-  const installLater = () => {
-    setIsInstallPromptOpen(false)
-    setUpdateStatus('ready')
-    setUpdateNotes('Update downloaded. You can install it from this Settings screen when ready.')
-  }
+  const checkForUpdates = () => window.electron.ipcRenderer.invoke('check-for-updates')
+  const downloadUpdate = () => window.electron.ipcRenderer.invoke('download-update')
+  const installUpdate = () => window.electron.ipcRenderer.invoke('install-update')
 
   const handleVoiceChange = (v: 'MALE' | 'FEMALE') => {
     if (isSystemActive) return
     setVoice(v)
     localStorage.setItem('nexus_voice_profile', v)
-    void saveCloudSettingIfAvailable(
-      'nexus_voice_profile',
-      { value: v },
-      'Voice profile synced to Supabase.'
-    )
   }
 
   const handlePersonalityChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -364,115 +173,43 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const savePersonality = async () => {
     if (window.electron?.ipcRenderer) {
       await window.electron.ipcRenderer.invoke('set-personality', personality)
-      await saveCloudSettingIfAvailable(
-        'nexus_personality',
-        { value: personality },
-        'Personality matrix synced to Supabase.'
-      )
       alert('Personality Matrix Saved Securely to OS.')
     }
   }
 
-  const saveUserName = async () => {
+  const saveUserName = () => {
     localStorage.setItem('nexus_user_name', userName)
-    await saveCloudSettingIfAvailable(
-      'nexus_user_name',
-      { value: userName },
-      'User designation synced to Supabase.'
-    )
     alert('User Designation Saved.')
   }
 
   const saveApiKeys = async () => {
-    const enforcedProviderMode = 'nexus'
-    const cleanNvidiaKey = ''
-    setAiProviderMode(enforcedProviderMode)
-    setNvidiaKey(cleanNvidiaKey)
-
     localStorage.setItem('nexus_custom_api_key', geminiKey)
     localStorage.setItem('nexus_groq_api_key', groqKey)
+    localStorage.setItem('nexus_fireworks_api_key', fireworksKey)
     localStorage.setItem('nexus_hf_api_key', hfKey)
     localStorage.setItem('nexus_tailvy_api_key', tailvyKey)
-    localStorage.removeItem(NVIDIA_API_KEY_STORAGE_KEY)
-    localStorage.setItem(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY, enforcedProviderMode)
+    localStorage.setItem('nexus_default_ai_model', normalizeGeminiLiveModel(defaultModel))
+    localStorage.setItem('nexus_lance_repo_path', lanceRepoPath)
+    localStorage.setItem('nexus_lance_model_path', lanceModelPath)
 
     if (window.electron?.ipcRenderer) {
       try {
         await window.electron.ipcRenderer.invoke('secure-save-keys', {
           groqKey,
           geminiKey,
-          nvidiaKey: cleanNvidiaKey
+          fireworksKey
         })
       } catch (e) {}
     }
-    if (IS_TRIAL_BUILD) {
-      setCloudSyncStatus('Trial build saved API routing preferences locally in the OS vault only.')
-    } else {
-      const { saveCloudSetting } = await loadCloudDataModule()
-      await Promise.all([
-        saveCloudSetting(NEXUS_AI_PROVIDER_MODE_STORAGE_KEY, { value: enforcedProviderMode }),
-        saveCloudSetting('nexus_key_status', {
-          gemini: Boolean(geminiKey),
-          groq: Boolean(groqKey),
-          hf: Boolean(hfKey),
-          tavily: Boolean(tailvyKey),
-          nvidia: false
-        })
-      ])
-      setCloudSyncStatus(
-        'AI routing preferences synced. Secret API values remain in the OS vault.'
-      )
-    }
-
-    alert('Neural uplinks saved. AI Chat will use the Nexus AI API gateway only.')
-  }
-
-  const saveNvidiaDefaults = async () => {
-    localStorage.setItem(NVIDIA_DEFAULTS_STORAGE_KEY, JSON.stringify(nvidiaDefaults))
-    await saveCloudSettingIfAvailable(
-      NVIDIA_DEFAULTS_STORAGE_KEY,
-      { value: JSON.stringify(nvidiaDefaults) },
-      'Nexus AI model defaults synced to Supabase.'
+    alert(
+      'All Neural Uplinks (API Keys) secured locally and in OS Vault. Restart AI modules to apply.'
     )
-    alert('Nexus AI model defaults saved.')
-  }
-
-  const syncNvidiaModels = async () => {
-    if (!window.electron?.ipcRenderer) return
-    setNvidiaSyncStatus('Syncing Nexus AI API model list...')
-    const result = await window.electron.ipcRenderer.invoke('nvidia:list-models', {
-      useNexusServers: true
-    })
-
-    if (result?.success) {
-      setNvidiaSyncStatus(
-        `Live endpoint returned ${result.models.length} models. Bundled catalog remains categorized.`
-      )
-    } else {
-      setNvidiaSyncStatus(result?.error || 'Unable to sync Nexus AI models.')
-    }
   }
 
   const currentWordCount = personality
     .trim()
     .split(/\s+/)
     .filter((w) => w.length > 0).length
-
-  const unlockAboutAdmin = () => {
-    if (aboutAdminPass === ADMIN_PASS) {
-      setIsAboutAdminUnlocked(true)
-      setAboutStatus('Developer panel unlocked.')
-      setAboutAdminPass('')
-      return
-    }
-
-    setAboutStatus('Invalid admin pass.')
-  }
-
-  const saveDeveloperProfile = () => {
-    localStorage.setItem(DEVELOPER_PROFILE_STORAGE_KEY, JSON.stringify(developerProfile))
-    setAboutStatus('Developer profile saved locally. Rebuild to ship as a new default.')
-  }
 
   const unlockSecurityModule = async () => {
     if (!window.electron?.ipcRenderer) return
@@ -544,7 +281,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const titleClass = 'text-sm font-semibold text-white flex items-center gap-2'
 
   return (
-    <div className="min-h-full p-6 md:p-10 lg:p-16 flex flex-col items-center bg-black text-zinc-100">
+    <div className="flex-1 p-6 md:p-10 lg:p-16 flex flex-col items-center bg-black min-h-screen text-zinc-100 overflow-y-auto scrollbar-small">
       <motion.div
         className="w-full max-w-4xl flex flex-col gap-8"
         initial={{ opacity: 0 }}
@@ -587,27 +324,15 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
               <RiPlugLine size={16} /> API KEYS
             </button>
             <button
-              onClick={() => setActiveTab('models')}
-              className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-3 text-xs font-bold tracking-widest rounded-lg transition-all duration-300 ${activeTab === 'models' ? 'bg-white text-black shadow-md' : 'text-zinc-500 hover:text-white hover:bg-white/5'}`}
-            >
-              <RiBrainLine size={16} /> MODELS
-            </button>
-            <button
               onClick={() => setActiveTab('security')}
               className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-3 text-xs font-bold tracking-widest rounded-lg transition-all duration-300 ${activeTab === 'security' ? 'bg-white text-black shadow-md' : 'text-zinc-500 hover:text-white hover:bg-white/5'}`}
             >
               <RiShieldKeyholeLine size={16} /> SECURITY
             </button>
-            <button
-              onClick={() => setActiveTab('about')}
-              className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-3 text-xs font-bold tracking-widest rounded-lg transition-all duration-300 ${activeTab === 'about' ? 'bg-white text-black shadow-md' : 'text-zinc-500 hover:text-white hover:bg-white/5'}`}
-            >
-              <RiUserLine size={16} /> ABOUT
-            </button>
           </div>
         </div>
 
-        <div className="relative pb-12 mt-2">
+        <div className="relative min-h-125 pb-12 mt-2">
           <AnimatePresence mode="wait">
             {activeTab === 'updates' && (
               <motion.div
@@ -616,12 +341,12 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
-                className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full"
+                className="grid grid-cols-1 md:grid-cols-2 gap-6 absolute w-full"
               >
                 <div className={`${cardClass} md:col-span-1 border-emerald-500/20`}>
                   <div className="flex justify-between items-center border-b border-white/10 pb-4">
                     <span className={titleClass}>
-                      <RiRocketLine className="text-emerald-400" size={18} /> Update Firmware
+                      <RiRocketLine className="text-emerald-400" size={18} /> OS Firmware
                     </span>
                     <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-3 py-1 rounded font-mono font-bold tracking-widest">
                       v{appVersion}
@@ -631,25 +356,13 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                   <div className="flex flex-col gap-4 items-center justify-center flex-1 py-4 text-center">
                     {updateStatus === 'idle' || updateStatus === 'error' ? (
                       <>
-                        <RiTerminalWindowLine
-                          size={48}
-                          className={updateStatus === 'error' ? 'text-red-400' : 'text-zinc-700'}
-                        />
-                        <p
-                          className={`text-xs font-mono ${updateStatus === 'error' ? 'text-red-300' : 'text-zinc-400'}`}
-                        >
-                          {updateStatus === 'error'
-                            ? 'Update check failed.'
-                            : 'Current build is stable.'}
-                        </p>
-                        <p className="w-full break-all rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-[10px] leading-relaxed text-zinc-500">
-                          Website feed: {updateFeedUrl}
-                        </p>
+                        <RiTerminalWindowLine size={48} className="text-zinc-700" />
+                        <p className="text-xs text-zinc-400 font-mono">Current build is stable.</p>
                         <button
-                          onClick={checkAndDownloadUpdate}
+                          onClick={checkForUpdates}
                           className="mt-2 w-full py-3 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-white font-bold tracking-widest text-[11px] flex items-center justify-center gap-2 transition-all cursor-pointer"
                         >
-                          <RiDownloadCloud2Line size={16} /> CHECK & DOWNLOAD FIRMWARE
+                          <RiRefreshLine size={16} /> CHECK FOR UPDATES
                         </button>
                       </>
                     ) : updateStatus === 'checking' ? (
@@ -669,7 +382,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                           onClick={downloadUpdate}
                           className="mt-2 w-full py-3 rounded-lg bg-cyan-500/20 hover:bg-cyan-500 text-cyan-400 hover:text-black font-bold tracking-widest text-[11px] flex items-center justify-center gap-2 transition-all border border-cyan-500/50 cursor-pointer"
                         >
-                          <RiDownloadCloud2Line size={16} /> DOWNLOAD FIRMWARE
+                          <RiDownloadCloud2Line size={16} /> INITIALIZE DOWNLOAD
                         </button>
                       </>
                     ) : updateStatus === 'downloading' ? (
@@ -685,31 +398,16 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                           />
                         </div>
                       </div>
-                    ) : updateStatus === 'installing' ? (
-                      <>
-                        <RiRocketLine size={48} className="text-emerald-400 animate-pulse" />
-                        <p className="text-xs text-emerald-400 font-mono">
-                          RESTARTING TO INSTALL...
-                        </p>
-                      </>
                     ) : (
                       <>
                         <RiRecordCircleLine size={48} className="text-emerald-400 animate-pulse" />
                         <p className="text-xs text-emerald-400 font-mono">PATCH DOWNLOADED</p>
-                        <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
-                          <button
-                            onClick={installUpdate}
-                            className="mt-2 w-full py-3 rounded-lg bg-emerald-500 text-black font-bold tracking-widest text-[11px] flex items-center justify-center gap-2 transition-all shadow-[0_0_20px_rgba(16,185,129,0.4)] cursor-pointer"
-                          >
-                            <RiRocketLine size={16} /> INSTALL NOW
-                          </button>
-                          <button
-                            onClick={installLater}
-                            className="mt-2 w-full py-3 rounded-lg bg-white/5 text-zinc-300 hover:text-white border border-white/10 font-bold tracking-widest text-[11px] flex items-center justify-center gap-2 transition-all cursor-pointer"
-                          >
-                            LATER
-                          </button>
-                        </div>
+                        <button
+                          onClick={installUpdate}
+                          className="mt-2 w-full py-3 rounded-lg bg-emerald-500 text-black font-bold tracking-widest text-[11px] flex items-center justify-center gap-2 transition-all shadow-[0_0_20px_rgba(16,185,129,0.4)] cursor-pointer"
+                        >
+                          <RiRocketLine size={16} /> EXECUTE RESTART
+                        </button>
                       </>
                     )}
                   </div>
@@ -718,7 +416,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                 <div className={`${cardClass} md:col-span-1`}>
                   <div className="flex justify-between items-center border-b border-white/10 pb-4">
                     <span className={titleClass}>
-                      <RiTerminalWindowLine className="text-zinc-400" size={18} /> Firmware Notes
+                      <RiTerminalWindowLine className="text-zinc-400" size={18} /> Patch Notes
                     </span>
                   </div>
                   <div className="flex-1 bg-[#050505] border border-white/5 rounded-xl p-4 overflow-y-auto max-h-60 scrollbar-small">
@@ -738,7 +436,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
-                className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full"
+                className="grid grid-cols-1 md:grid-cols-2 gap-6 absolute w-full"
               >
                 <div className={`${cardClass} md:col-span-2`}>
                   <div className="flex justify-between items-center">
@@ -762,7 +460,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                   <textarea
                     value={personality}
                     onChange={handlePersonalityChange}
-                    placeholder="Define who Nexus is. Example: 'You are a sassy, highly technical assistant...'"
+                    placeholder="Define who NEXUS is. Example: 'You are a sassy, highly technical assistant...'"
                     className="bg-[#050505] border border-white/10 rounded-lg p-4 text-sm text-zinc-200 h-32 resize-none focus:border-white/30 outline-none transition-all scrollbar-small"
                   />
                 </div>
@@ -797,7 +495,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                     </span>
                     {isSystemActive && (
                       <span className="text-[10px] text-red-400 font-mono tracking-widest flex items-center gap-1 bg-red-500/10 px-2 py-1 rounded border border-red-500/20">
-                        <RiLock2Line /> LOCKED AS Nexus IS CONNECTED
+                        <RiLock2Line /> LOCKED AS NEXUS IS CONNECTED
                       </span>
                     )}
                   </div>
@@ -826,29 +524,6 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                     ></div>
                   )}
                 </div>
-
-                <div className={`${cardClass} md:col-span-2`}>
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <span className={titleClass}>
-                      <RiCloudLine className="text-cyan-300" size={18} />{' '}
-                      {IS_TRIAL_BUILD ? 'Trial Storage Mode' : 'Nexus 2.0 Cloud Data'}
-                    </span>
-                    {!IS_TRIAL_BUILD && (
-                      <button
-                        onClick={async () => {
-                          setCloudSyncStatus('Syncing local Nexus settings to Supabase...')
-                          await syncCloudSettingsIfAvailable('Manual cloud sync complete.')
-                        }}
-                        className="inline-flex items-center gap-2 rounded-lg border border-cyan-500/25 bg-cyan-500/10 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-cyan-200 transition-colors hover:bg-cyan-500/20"
-                      >
-                        <RiRefreshLine size={14} /> Sync Now
-                      </button>
-                    )}
-                  </div>
-                  <p className="rounded-lg border border-white/10 bg-black/30 px-4 py-3 text-xs leading-relaxed text-zinc-300">
-                    {cloudSyncStatus}
-                  </p>
-                </div>
               </motion.div>
             )}
 
@@ -860,7 +535,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
-                className="grid grid-cols-1 gap-6 w-full"
+                className="grid grid-cols-1 gap-6 absolute w-full"
               >
                 <div className={`${cardClass} gap-6`}>
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-4">
@@ -875,32 +550,30 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-2xl border border-emerald-500/15 bg-emerald-500/5 p-4">
-                    {[
-                      {
-                        id: 'nexus',
-                        title: 'Use Nexus AI API gateway',
-                        text: 'Required API-only mode. Desktop requests go to the gateway; the gateway owns the upstream key.'
-                      }
-                    ].map((mode) => (
-                      <button
-                        key={mode.id}
-                        onClick={() => setAiProviderMode(mode.id)}
-                        className={`rounded-xl border p-4 text-left transition-all ${
-                          aiProviderMode === mode.id
-                            ? 'border-emerald-400/50 bg-emerald-500/15 text-white'
-                            : 'border-white/10 bg-black/40 text-zinc-400 hover:border-white/20'
-                        }`}
-                      >
-                        <span className="text-xs font-black uppercase tracking-widest">
-                          {mode.title}
-                        </span>
-                        <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">{mode.text}</p>
-                      </button>
-                    ))}
-                  </div>
-
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="flex flex-col gap-2 md:col-span-2">
+                      <label className="text-[10px] text-zinc-400 font-mono tracking-widest uppercase flex items-center gap-2">
+                        <RiRobot2Line size={14} /> Default Gemini Live Voice Model
+                      </label>
+                      <div className={inputContainerClass}>
+                        <select
+                          value={defaultModel}
+                          onChange={(e) => {
+                            const nextModel = normalizeGeminiLiveModel(e.target.value)
+                            setDefaultModel(nextModel)
+                            localStorage.setItem('nexus_default_ai_model', nextModel)
+                          }}
+                          className="bg-transparent border-none outline-none text-sm font-mono text-zinc-100 w-full"
+                        >
+                          {liveGeminiModelOptions.map((model) => (
+                            <option key={model.id} className="bg-black" value={model.id}>
+                              {model.label} - {model.limits}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
                     <div className="flex flex-col gap-2">
                       <label className="text-[10px] text-zinc-400 font-mono tracking-widest uppercase flex items-center gap-2">
                         <RiBrainLine size={14} /> Gemini Pro Core
@@ -911,22 +584,6 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                           value={geminiKey}
                           onChange={(e) => setGeminiKey(e.target.value)}
                           placeholder="AIzaSy_..."
-                          className="bg-transparent border-none outline-none text-sm font-mono text-zinc-100 w-full placeholder:text-zinc-700"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col gap-2">
-                      <label className="text-[10px] text-zinc-400 font-mono tracking-widest uppercase flex items-center gap-2">
-                      <RiBrainLine size={14} /> Gateway Upstream Key
-                      </label>
-                      <div className={inputContainerClass}>
-                        <input
-                          type="password"
-                          value={nvidiaKey}
-                          disabled
-                          onChange={(e) => setNvidiaKey(e.target.value)}
-                          placeholder="Set NEXUS_AI_UPSTREAM_API_KEY on the API host"
                           className="bg-transparent border-none outline-none text-sm font-mono text-zinc-100 w-full placeholder:text-zinc-700"
                         />
                       </div>
@@ -945,6 +602,110 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                           className="bg-transparent border-none outline-none text-sm font-mono text-zinc-100 w-full placeholder:text-zinc-700"
                         />
                       </div>
+                    </div>
+
+                    <div className="flex flex-col gap-2 md:col-span-2">
+                      <label className="text-[10px] text-zinc-400 font-mono tracking-widest uppercase flex items-center gap-2">
+                        <RiCloudLine size={14} /> Fireworks AI Fallback
+                      </label>
+                      <div className={inputContainerClass}>
+                        <input
+                          type="password"
+                          value={fireworksKey}
+                          onChange={(e) => setFireworksKey(e.target.value)}
+                          placeholder="fw_..."
+                          className="bg-transparent border-none outline-none text-sm font-mono text-zinc-100 w-full placeholder:text-zinc-700"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-3 md:col-span-2 rounded-xl border border-white/5 bg-[#050505] p-4">
+                      <div className="text-[10px] text-zinc-400 font-mono tracking-widest uppercase">
+                        AI Gateway fallback models
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        {AI_GATEWAY_PROVIDERS.map((provider) => {
+                          const storageKey = `nexus_default_${provider}_model`
+                          const selected =
+                            localStorage.getItem(storageKey) || DEFAULT_AI_GATEWAY_MODEL[provider]
+                          return (
+                            <label key={provider} className="flex flex-col gap-2">
+                              <span className="text-[9px] text-zinc-500 font-mono uppercase tracking-widest">
+                                {provider}
+                              </span>
+                              <select
+                                defaultValue={selected}
+                                onChange={(e) => localStorage.setItem(storageKey, e.target.value)}
+                                className="bg-black border border-white/10 rounded-lg px-3 py-2 text-[10px] font-mono text-zinc-200 outline-none"
+                              >
+                                {(
+                                  gatewayModels[provider] || DEFAULT_AI_GATEWAY_MODELS[provider]
+                                ).map((model) => (
+                                  <option key={model.id} className="bg-black" value={model.id}>
+                                    {model.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-3 md:col-span-2 rounded-xl border border-cyan-400/10 bg-[#050505] p-4">
+                      <div className="flex items-center gap-2 text-[10px] text-zinc-400 font-mono tracking-widest uppercase">
+                        <RiVideoLine size={14} /> Video generation models
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <label className="flex flex-col gap-2">
+                          <span className="text-[9px] text-zinc-500 font-mono uppercase tracking-widest">
+                            Default model
+                          </span>
+                          <select
+                            defaultValue={VIDEO_GENERATION_MODELS[0].id}
+                            className="bg-black border border-white/10 rounded-lg px-3 py-2 text-[10px] font-mono text-zinc-200 outline-none"
+                          >
+                            {VIDEO_GENERATION_MODELS.map((model) => (
+                              <option key={model.id} className="bg-black" value={model.id}>
+                                {model.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="flex flex-col gap-2">
+                          <span className="text-[9px] text-zinc-500 font-mono uppercase tracking-widest">
+                            Runtime mode
+                          </span>
+                          <input
+                            value="Local CUDA repo"
+                            readOnly
+                            className="bg-black border border-white/10 rounded-lg px-3 py-2 text-[10px] font-mono text-zinc-200 outline-none"
+                          />
+                        </label>
+                      </div>
+                      <label className="flex flex-col gap-2">
+                        <span className="text-[9px] text-zinc-500 font-mono uppercase tracking-widest">
+                          Lance repo path
+                        </span>
+                        <input
+                          value={lanceRepoPath}
+                          onChange={(e) => setLanceRepoPath(e.target.value)}
+                          className="bg-black border border-white/10 rounded-lg px-3 py-2 text-[10px] font-mono text-zinc-200 outline-none"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-2">
+                        <span className="text-[9px] text-zinc-500 font-mono uppercase tracking-widest">
+                          Lance weights path
+                        </span>
+                        <input
+                          value={lanceModelPath}
+                          onChange={(e) => setLanceModelPath(e.target.value)}
+                          className="bg-black border border-white/10 rounded-lg px-3 py-2 text-[10px] font-mono text-zinc-200 outline-none"
+                        />
+                      </label>
+                      <p className="text-[10px] leading-5 text-zinc-500">
+                        {VIDEO_GENERATION_MODELS[0].requirements}
+                      </p>
                     </div>
 
                     <div className="flex flex-col gap-2 md:col-span-2">
@@ -978,196 +739,19 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                     </div>
                   </div>
 
-                  <div className="bg-[#050505] border border-emerald-500/15 p-5 rounded-xl mt-2 flex flex-col gap-4">
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-white/5 pb-4">
-                      <div>
-                        <span className={titleClass}>
-                          <RiBrainLine className="text-emerald-400" size={18} /> Nexus AI API Key
-                          Guide
-                        </span>
-                        <p className="text-[10px] text-zinc-500 font-mono mt-1 tracking-widest uppercase">
-                          Server-side only. Desktop never stores the upstream model key.
-                        </p>
-                      </div>
-                      <a
-                        href="https://build.nvidia.com/settings/api-keys"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-[10px] font-bold tracking-widest text-emerald-300 transition-all hover:bg-emerald-500/20"
-                      >
-                        OPEN PROVIDER KEYS <RiExternalLinkLine size={14} />
-                      </a>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                      {[
-                        {
-                          step: '01',
-                          title: 'Gateway Mode',
-                          text: 'Desktop chat always calls the Nexus AI API gateway.'
-                        },
-                        {
-                          step: '02',
-                          title: 'Server Key',
-                          text: 'Put your real upstream key in provider hosting env vars.'
-                        },
-                        {
-                          step: '03',
-                          title: 'No Local Key',
-                          text: 'The desktop app does not save or send provider secrets.'
-                        },
-                        {
-                          step: '04',
-                          title: 'Save & Chat',
-                          text: 'Click Save All Keys, then open the AI Chat tab.'
-                        }
-                      ].map((item) => (
-                        <div
-                          key={item.step}
-                          className="rounded-xl border border-white/5 bg-black/40 p-4"
-                        >
-                          <span className="text-[10px] font-mono text-emerald-400">
-                            {item.step}
-                          </span>
-                          <h4 className="mt-2 text-xs font-black tracking-widest text-white uppercase">
-                            {item.title}
-                          </h4>
-                          <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">
-                            {item.text}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-
-                    <div className="rounded-xl border border-white/5 bg-black/50 p-4 text-[10px] font-mono text-zinc-400">
-                      Gateway upstream base URL is configured on the API host:{' '}
-                      <span className="text-emerald-300">
-                        https://integrate.api.nvidia.com/v1
-                      </span>
-                    </div>
-                  </div>
-
                   <div className="bg-[#050505] border border-white/5 p-4 rounded-xl mt-2 flex items-start gap-3">
                     <RiShieldKeyholeLine className="text-zinc-500 shrink-0 mt-0.5" size={16} />
                     <p className="text-[10px] text-zinc-400 font-mono leading-relaxed">
-                      [SECURITY NOTICE]: AI Chat uses the Nexus AI API gateway only. Upstream
-                      provider secrets must stay in Vercel/Netlify or your API host as
-                      NEXUS_AI_UPSTREAM_API_KEY.
+                      [SECURITY NOTICE]: All API keys are encrypted and stored strictly in your
+                      local OS. NEXUS does not transmit these keys to any centralized server. You
+                      maintain full ownership and billing control over your provider endpoints.
                     </p>
                   </div>
                 </div>
               </motion.div>
             )}
 
-            {/* --- TAB 4: AI MODELS --- */}
-            {activeTab === 'models' && (
-              <motion.div
-                key="models"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.2 }}
-                className="grid grid-cols-1 gap-6 w-full"
-              >
-                <div className={`${cardClass} gap-6`}>
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-4">
-                    <div>
-                      <span className={titleClass}>
-                        <RiBrainLine className="text-emerald-400" size={18} /> Nexus AI Model
-                        Defaults
-                      </span>
-                      <p className="text-[10px] text-zinc-500 font-mono mt-2 tracking-widest uppercase">
-                        Chat uses the OpenAI-compatible Nexus AI API gateway. Voice assistant reads
-                        these defaults at startup.
-                      </p>
-                    </div>
-                    <div className="flex flex-col sm:flex-row gap-3">
-                      <button
-                        onClick={syncNvidiaModels}
-                        className="bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 px-5 py-2.5 rounded-lg text-xs font-bold tracking-widest hover:bg-emerald-500/20 transition-colors flex items-center justify-center gap-2 cursor-pointer"
-                      >
-                        <RiRefreshLine size={16} /> SYNC LIVE MODELS
-                      </button>
-                      <button
-                        onClick={saveNvidiaDefaults}
-                        className="bg-white text-black px-5 py-2.5 rounded-lg text-xs font-bold tracking-widest hover:bg-zinc-200 transition-colors flex items-center justify-center gap-2 cursor-pointer"
-                      >
-                        <RiSave3Line size={16} /> SAVE DEFAULTS
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border border-white/5 bg-[#050505] p-4 text-[10px] font-mono text-zinc-400 leading-relaxed">
-                    {nvidiaSyncStatus}
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                    {NVIDIA_MODEL_CATEGORIES.map((category) => {
-                      const options = getModelsForCategory(category.id)
-                      const selected = getNvidiaModelById(nvidiaDefaults[category.id])
-
-                      return (
-                        <div
-                          key={category.id}
-                          className="bg-[#050505] border border-white/10 rounded-2xl p-5 flex flex-col gap-3"
-                        >
-                          <div className="flex items-start justify-between gap-4">
-                            <div>
-                              <label className="text-[10px] text-white font-bold font-mono tracking-widest uppercase">
-                                {category.label}
-                              </label>
-                              <p className="text-[10px] text-zinc-500 mt-1 leading-relaxed">
-                                {category.hint}
-                              </p>
-                            </div>
-                            <span className="text-[9px] text-emerald-400/70 border border-emerald-500/20 rounded-full px-2 py-1 font-mono">
-                              {options.length}
-                            </span>
-                          </div>
-
-                          <select
-                            value={nvidiaDefaults[category.id]}
-                            onChange={(event) =>
-                              setNvidiaDefaults((current) => ({
-                                ...current,
-                                [category.id]: event.target.value
-                              }))
-                            }
-                            className="w-full bg-black border border-white/10 rounded-lg px-3 py-3 text-xs font-mono text-zinc-100 outline-none focus:border-emerald-500/50"
-                          >
-                            {options.map((model) => (
-                              <option key={model.id} value={model.id}>
-                                {model.id}
-                              </option>
-                            ))}
-                          </select>
-
-                          <div className="min-h-20 rounded-xl border border-white/5 bg-black/40 p-3">
-                            <p className="text-[11px] text-zinc-300 font-semibold">
-                              {selected?.provider || 'Nexus AI'} / {selected?.name || 'model'}
-                            </p>
-                            <p className="text-[10px] text-zinc-500 mt-1 leading-relaxed">
-                              {selected?.description || 'Model selected from the Nexus AI API.'}
-                            </p>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-
-                  <div className="bg-[#050505] border border-white/5 p-4 rounded-xl flex items-start gap-3">
-                    <RiShieldKeyholeLine className="text-zinc-500 shrink-0 mt-0.5" size={16} />
-                    <p className="text-[10px] text-zinc-400 font-mono leading-relaxed">
-                      The bundled catalog includes current LLM, coding, reasoning, multimodal,
-                      speech, translation, image, and retrieval models. The live sync button queries
-                      the hosted Nexus AI API models route only.
-                    </p>
-                  </div>
-                </div>
-              </motion.div>
-            )}
-
-            {/* --- TAB 5: SECURITY --- */}
+            {/* --- TAB 4: SECURITY --- */}
             {activeTab === 'security' && (
               <motion.div
                 key="security"
@@ -1175,7 +759,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
-                className="w-full rounded-3xl overflow-hidden shadow-2xl border border-white/5"
+                className="w-full rounded-3xl overflow-hidden shadow-2xl border border-white/5 absolute"
               >
                 <AnimatePresence>
                   {!isSecurityUnlocked && (
@@ -1278,206 +862,6 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                     )}
                   </div>
                 </div>
-              </motion.div>
-            )}
-
-            {/* --- TAB 6: ABOUT --- */}
-            {activeTab === 'about' && (
-              <motion.div
-                key="about"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.2 }}
-                className="grid grid-cols-1 gap-6 w-full"
-              >
-                <div className="rounded-3xl border border-emerald-500/20 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.16),transparent_32rem),#070808] p-8 shadow-2xl">
-                  <div className="flex flex-col md:flex-row md:items-start justify-between gap-6 border-b border-white/10 pb-6">
-                    <div>
-                      <p className="text-[10px] font-mono font-black uppercase tracking-[0.35em] text-emerald-400">
-                        Developer Registry
-                      </p>
-                      <h3 className="mt-3 text-4xl font-black uppercase tracking-tight text-white">
-                        {developerProfile.developer}
-                      </h3>
-                      <p className="mt-2 text-sm font-semibold text-zinc-400">
-                        {developerProfile.role} / {developerProfile.team}
-                      </p>
-                    </div>
-                    <div className="rounded-2xl border border-white/10 bg-black/40 p-4 text-right">
-                      <p className="text-[10px] font-mono uppercase tracking-[0.24em] text-zinc-500">
-                        Company
-                      </p>
-                      <p className="mt-2 text-lg font-black text-emerald-200">
-                        {developerProfile.company}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {[
-                      ['Developer', developerProfile.developer],
-                      ['Team', developerProfile.team],
-                      ['Website', developerProfile.website]
-                    ].map(([label, value]) => (
-                      <div key={label} className="rounded-2xl border border-white/10 bg-black/35 p-4">
-                        <p className="text-[10px] font-mono uppercase tracking-[0.2em] text-zinc-500">
-                          {label}
-                        </p>
-                        <p className="mt-2 break-words text-sm font-bold text-white">{value}</p>
-                      </div>
-                    ))}
-                  </div>
-
-                  <p className="mt-5 rounded-2xl border border-white/10 bg-black/35 p-5 text-sm leading-relaxed text-zinc-300">
-                    {developerProfile.note}
-                  </p>
-                </div>
-
-                <div className={`${cardClass} gap-5`}>
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-4">
-                    <div>
-                      <span className={titleClass}>
-                        <RiShieldKeyholeLine className="text-emerald-400" size={18} /> Admin Edit
-                        Panel
-                      </span>
-                      <p className="mt-1 text-[10px] font-mono uppercase tracking-widest text-zinc-500">
-                        Default universal admin pass: 05122010
-                      </p>
-                    </div>
-                    {!isAboutAdminUnlocked && (
-                      <div className="flex gap-2">
-                        <input
-                          type="password"
-                          value={aboutAdminPass}
-                          onChange={(event) => setAboutAdminPass(event.target.value)}
-                          placeholder="Admin pass"
-                          className="rounded-lg border border-white/10 bg-black px-4 py-2 text-xs text-white outline-none focus:border-emerald-500/40"
-                        />
-                        <button
-                          onClick={unlockAboutAdmin}
-                          className="rounded-lg bg-emerald-400 px-5 py-2 text-xs font-black tracking-widest text-black"
-                        >
-                          UNLOCK
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  {isAboutAdminUnlocked ? (
-                    <>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {(
-                          [
-                            ['developer', 'Developer'],
-                            ['team', 'Team'],
-                            ['company', 'Company'],
-                            ['role', 'Role'],
-                            ['website', 'Website']
-                          ] as Array<[keyof typeof DEFAULT_DEVELOPER_PROFILE, string]>
-                        ).map(([key, label]) => (
-                          <label key={key} className="flex flex-col gap-2">
-                            <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">
-                              {label}
-                            </span>
-                            <input
-                              value={developerProfile[key]}
-                              onChange={(event) =>
-                                setDeveloperProfile((current) => ({
-                                  ...current,
-                                  [key]: event.target.value
-                                }))
-                              }
-                              className="rounded-xl border border-white/10 bg-black px-4 py-3 text-sm text-white outline-none focus:border-emerald-500/40"
-                            />
-                          </label>
-                        ))}
-                      </div>
-                      <label className="flex flex-col gap-2">
-                        <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">
-                          About Note
-                        </span>
-                        <textarea
-                          value={developerProfile.note}
-                          onChange={(event) =>
-                            setDeveloperProfile((current) => ({
-                              ...current,
-                              note: event.target.value
-                            }))
-                          }
-                          className="min-h-28 resize-none rounded-xl border border-white/10 bg-black px-4 py-3 text-sm text-white outline-none focus:border-emerald-500/40"
-                        />
-                      </label>
-                      <button
-                        onClick={saveDeveloperProfile}
-                        className="w-full rounded-xl bg-white px-5 py-3 text-xs font-black uppercase tracking-widest text-black"
-                      >
-                        Save Developer Profile
-                      </button>
-                    </>
-                  ) : (
-                    <p className="rounded-xl border border-white/5 bg-black/40 p-4 text-xs leading-relaxed text-zinc-500">
-                      Developer profile editing is locked. Enter the admin pass to edit this app's
-                      local About section.
-                    </p>
-                  )}
-
-                  {aboutStatus && (
-                    <p className="rounded-xl border border-emerald-500/15 bg-emerald-500/5 p-3 text-[11px] font-mono text-emerald-300">
-                      {aboutStatus}
-                    </p>
-                  )}
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <AnimatePresence>
-            {isInstallPromptOpen && (
-              <motion.div
-                className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-6 backdrop-blur-sm"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-              >
-                <motion.div
-                  className="w-full max-w-md rounded-2xl border border-emerald-500/30 bg-[#0b0f0d] p-6 shadow-[0_0_40px_rgba(16,185,129,0.18)]"
-                  initial={{ scale: 0.96, y: 12 }}
-                  animate={{ scale: 1, y: 0 }}
-                  exit={{ scale: 0.96, y: 12 }}
-                >
-                  <div className="mb-5 flex items-center gap-3">
-                    <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3">
-                      <RiDownloadCloud2Line className="text-emerald-400" size={24} />
-                    </div>
-                    <div>
-                      <h3 className="text-lg font-bold text-white">Update ready</h3>
-                      <p className="text-xs font-mono uppercase tracking-widest text-emerald-300">
-                        v{updateVersion || 'latest'} downloaded in app
-                      </p>
-                    </div>
-                  </div>
-
-                  <p className="mb-6 text-sm leading-relaxed text-zinc-300">
-                    Nexus has downloaded the update. Install now to restart and apply it, or keep
-                    working and install it later from this screen.
-                  </p>
-
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <button
-                      onClick={installLater}
-                      className="rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-xs font-bold tracking-widest text-zinc-300 transition hover:bg-white/10 hover:text-white"
-                    >
-                      LATER
-                    </button>
-                    <button
-                      onClick={installUpdate}
-                      className="rounded-lg bg-emerald-500 px-4 py-3 text-xs font-bold tracking-widest text-black shadow-[0_0_20px_rgba(16,185,129,0.35)] transition hover:bg-emerald-400"
-                    >
-                      INSTALL NOW
-                    </button>
-                  </div>
-                </motion.div>
               </motion.div>
             )}
           </AnimatePresence>

@@ -17,4 +17,4 @@ nsis:
 
 publish:
   provider: generic
-  url: https://niranx-nexus-agent.vercel.app/updates/win
+  url: https://nexus-desktop-app.vercel.app/updates/win

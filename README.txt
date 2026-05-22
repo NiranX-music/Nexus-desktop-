@@ -1,5 +1,5 @@
 ================================================================================
-Nexus
+NEXUS
 The Autonomous Neural OS Agent
 A local-first neural execution system that turns intent into real OS actions.
 
@@ -20,7 +20,7 @@ Development Philosophy
 
 Contributing
 
-Extending Nexus
+Extending NEXUS
 
 Roadmap
 
@@ -33,12 +33,12 @@ License
 OVERVIEW
 
 
-Nexus is not a chatbot.
+NEXUS is not a chatbot.
 
 It is a local-first AI Operating System layer that executes real-world actions
 across your system, applications, and devices.
 
-"Speak your command. Nexus executes it."
+"Speak your command. NEXUS executes it."
 
 CORE FEATURES & SYSTEM CAPABILITIES
 
@@ -225,7 +225,7 @@ INSTALLATION & SETUP
 
 Step 1. Clone Repo
 git clone https://github.com/NiranX-music/Nexus-desktop-.git
-cd Nexus-desktop-
+cd NEXUS-AI
 
 Step 2. Environment Setup
 cp .env.example .env
@@ -273,7 +273,7 @@ Real-world usability
 
 CONTRIBUTING
 
-Nexus is built for the community. If you want to expand the neural forge,
+NEXUS is built for the community. If you want to expand the neural forge,
 submit a PR.
 
 Quick Start:
@@ -295,7 +295,7 @@ Keep your commit messages clean, descriptive, and easy to understand. Clearly
 state what the commit accomplishes and always include the relevant Issue ID.
 Example: git commit -m "feat: integrated new desktop widget (#45)"
 
-EXTENDING Nexus
+EXTENDING NEXUS
 
 You can:
 
@@ -317,15 +317,15 @@ ROADMAP
 
 DISCLAIMER
 
-Nexus has deep system-level execution capabilities.
+NEXUS has deep system-level execution capabilities.
 Use responsibly. The maintainers are not liable for misuse.
 
-DEVELOPER
+ARCHITECT
 
 NiranX
-Lead Developer / AI Systems
+AI Systems Engineer
 
-Team: Resolute Team
+Company: Resolute Nexus
 GitHub: @NiranX-music (https://github.com/NiranX-music)
 
 LICENSE
@@ -334,9 +334,8 @@ MIT License - see LICENSE file.
 
 ================================================================================
 FINAL NOTE
-Nexus is not a chatbot. It is a neural extension of your operating system.
+NEXUS is not a chatbot. It is a neural extension of your operating system.
 
 "System Online."
 
-
-Made with love from NiranX, Resolute Team
+Developed by NiranX for Resolute Nexus

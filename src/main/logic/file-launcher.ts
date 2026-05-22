@@ -4,25 +4,17 @@ import os from 'os'
 
 const runCommand = (cmd: string): Promise<string> => {
   return new Promise((resolve) => {
-    exec(cmd, { windowsHide: true }, (err, stdout) => {
+    exec(cmd, (err, stdout) => {
       resolve(err ? '' : stdout.trim())
     })
   })
 }
 
-const RUNNING_APPS_CACHE_MS = 15_000
-let runningAppsCache: { value: string[]; updatedAt: number } | null = null
-let runningAppsRequest: Promise<string[]> | null = null
+export default function registerFileScanner(ipcMain: IpcMain) {
 
-const getCachedRunningApps = async () => {
-  const now = Date.now()
-  if (runningAppsCache && now - runningAppsCache.updatedAt < RUNNING_APPS_CACHE_MS) {
-    return runningAppsCache.value
-  }
+  ipcMain.removeHandler('get-running-apps')
 
-  if (runningAppsRequest) return runningAppsRequest
-
-  runningAppsRequest = (async () => {
+  ipcMain.handle('get-running-apps', async () => {
     try {
       if (os.platform() === 'win32') {
         const cmd = `powershell "Get-Process | Where-Object {$_.MainWindowTitle -ne ''} | Select-Object -ExpandProperty ProcessName"`
@@ -31,36 +23,18 @@ const getCachedRunningApps = async () => {
           .split(/\r?\n/)
           .map((a) => a.trim())
           .filter((a) => a)
-        const uniqueApps = [...new Set(apps)]
-        runningAppsCache = { value: uniqueApps, updatedAt: Date.now() }
-        return uniqueApps
+        return [...new Set(apps)]
       }
 
       if (os.platform() === 'darwin') {
         const cmd = `osascript -e 'tell application "System Events" to get name of (processes where background only is false)'`
         const output = await runCommand(cmd)
-        const apps = output.split(', ').map((s) => s.trim())
-        runningAppsCache = { value: apps, updatedAt: Date.now() }
-        return apps
+        return output.split(', ').map((s) => s.trim())
       }
 
-      runningAppsCache = { value: [], updatedAt: Date.now() }
+      return [] 
+    } catch (e) {
       return []
-    } catch {
-      return []
-    } finally {
-      runningAppsRequest = null
     }
-  })()
-
-  return runningAppsRequest
-}
-
-export default function registerFileScanner(ipcMain: IpcMain) {
-
-  ipcMain.removeHandler('get-running-apps')
-
-  ipcMain.handle('get-running-apps', async () => {
-    return getCachedRunningApps()
   })
 }

@@ -19,15 +19,11 @@ interface LockScreenProps {
   onUnlock: () => void
 }
 
-type AuthMode = 'face' | 'manual'
+type AuthMode = 'face' | 'pin'
 
 export default function LockScreen({ onUnlock }: LockScreenProps) {
   const [authMode, setAuthMode] = useState<AuthMode>('face')
-  const [manualPass, setManualPass] = useState('')
-  const [manualConfirm, setManualConfirm] = useState('')
-  const [manualMessage, setManualMessage] = useState('')
-  const [isSettingDefaultPass, setIsSettingDefaultPass] = useState(false)
-  const [isManualBusy, setIsManualBusy] = useState(false)
+  const [pin, setPin] = useState('')
 
   const [needsPinSetup, setNeedsPinSetup] = useState(false)
   const [needsFaceSetup, setNeedsFaceSetup] = useState(false)
@@ -42,7 +38,6 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
   const [decryptProgress, setDecryptProgress] = useState(0)
 
   const inputRef = useRef<HTMLInputElement>(null)
-  const confirmInputRef = useRef<HTMLInputElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const scanIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const laserRef = useRef<HTMLDivElement>(null)
@@ -122,7 +117,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
       ])
       startScanning(isFaceSetup)
     } catch (err) {
-      setAiStatus('AI OFFLINE - USE MANUAL OVERRIDE')
+      setAiStatus('AI OFFLINE - USE PIN BACKUP')
     }
   }
 
@@ -201,79 +196,31 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
     }, 800)
   }
 
-  const openManualOverride = () => {
-    setAuthMode('manual')
-    setManualPass('')
-    setManualConfirm('')
-    setManualMessage(
-      needsPinSetup ? 'CREATE A DEFAULT VAULT PASS' : 'ENTER DEFAULT VAULT PASS'
-    )
-    setIsSettingDefaultPass(needsPinSetup)
-    setTimeout(() => inputRef.current?.focus(), 400)
+  const handlePinChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (error || authMode !== 'pin' || isAuthorized) return
+    const value = e.target.value.replace(/\D/g, '')
+    if (value.length <= 4) {
+      setPin(value)
+      if (value.length === 4) processPin(value)
+    }
   }
 
-  const handleManualSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault()
-    if (error || authMode !== 'manual' || isAuthorized || isManualBusy) return
-
-    const isSetupFlow = needsPinSetup || isSettingDefaultPass
-    const passIsValid = manualPass.trim().length >= 4
-
-    if (!window.electron?.ipcRenderer) {
-      setManualMessage('LOCAL SECURITY BRIDGE OFFLINE')
-      return
-    }
-
-    if (isSetupFlow) {
-      if (!passIsValid) {
-        setManualMessage('PASS MUST BE AT LEAST 4 CHARACTERS')
-        return
-      }
-      if (manualPass !== manualConfirm) {
-        setManualMessage('PASS CONFIRMATION DOES NOT MATCH')
-        setTimeout(() => confirmInputRef.current?.focus(), 0)
-        return
-      }
-
-      setIsManualBusy(true)
-      const didSave = await window.electron.ipcRenderer
-        .invoke('setup-vault-pass', manualPass)
-        .catch(() => false)
-      setIsManualBusy(false)
-
-      if (didSave) {
-        setNeedsPinSetup(false)
-        setIsSettingDefaultPass(false)
-        setManualMessage('DEFAULT PASS SEALED')
-        triggerAccessGranted()
-      } else {
-        setManualMessage('DEFAULT PASS REJECTED')
-      }
-      return
-    }
-
-    if (!passIsValid) {
-      setManualMessage('ENTER DEFAULT VAULT PASS')
-      return
-    }
-
-    setIsManualBusy(true)
-    const isValid = await window.electron.ipcRenderer
-      .invoke('verify-vault-pass', manualPass)
-      .catch(() => false)
-    setIsManualBusy(false)
-
-    if (isValid) {
-      setManualMessage('MANUAL OVERRIDE ACCEPTED')
+  const processPin = async (currentPin: string) => {
+    if (needsPinSetup) {
+      await window.electron.ipcRenderer.invoke('setup-vault-pin', currentPin)
       triggerAccessGranted()
     } else {
-      setError(true)
-      setManualMessage('INVALID DEFAULT PASS')
-      setTimeout(() => {
-        setManualPass('')
-        setError(false)
-        inputRef.current?.focus()
-      }, 900)
+      const isValid = await window.electron.ipcRenderer.invoke('verify-vault-pin', currentPin)
+      if (isValid) {
+        triggerAccessGranted()
+      } else {
+        setError(true)
+        setTimeout(() => {
+          setPin('')
+          setError(false)
+          inputRef.current?.focus()
+        }, 800)
+      }
     }
   }
 
@@ -290,11 +237,7 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
   return (
     <div
       className="flex flex-col items-center justify-center w-screen h-screen bg-[#030303] relative overflow-hidden select-none font-sans"
-      onClick={(event) => {
-        if (event.target === event.currentTarget && authMode === 'manual' && !isAuthorized) {
-          inputRef.current?.focus()
-        }
-      }}
+      onClick={() => authMode === 'pin' && !isAuthorized && inputRef.current?.focus()}
     >
       <div
         className={`absolute inset-0 transition-colors duration-700 bg-[radial-gradient(circle_at_center,var(--tw-gradient-stops))] ${
@@ -482,14 +425,14 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
               </motion.div>
             )}
 
-            {!isAuthorized && authMode === 'manual' && (
+            {!isAuthorized && authMode === 'pin' && (
               <motion.div
-                key="manual-view"
+                key="pin-view"
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20, filter: 'blur(10px)' }}
                 transition={{ duration: 0.3 }}
-                className="flex flex-col items-center justify-center h-full gap-6 w-full"
+                className="flex flex-col items-center justify-center h-full gap-10 w-full"
               >
                 <div
                   className={`p-6 rounded-2xl border transition-colors duration-500 ${
@@ -498,98 +441,47 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
                       : 'border-white/10 text-zinc-400 bg-black/60'
                   }`}
                 >
-                  {needsPinSetup || isSettingDefaultPass ? (
+                  {needsPinSetup ? (
                     <RiLockPasswordLine size={48} />
                   ) : (
                     <RiShieldKeyholeLine size={48} />
                   )}
                 </div>
 
-                <form
-                  onSubmit={handleManualSubmit}
-                  onClick={(event) => event.stopPropagation()}
-                  className="w-full max-w-sm space-y-3"
-                >
-                  <div className="space-y-2">
-                    <label className="text-[9px] font-mono tracking-[0.22em] text-zinc-500 uppercase">
-                      {needsPinSetup || isSettingDefaultPass
-                        ? 'Default Vault Pass'
-                        : 'Manual Override Pass'}
-                    </label>
-                    <input
-                      ref={inputRef}
-                      type="password"
-                      value={manualPass}
-                      onChange={(event) => setManualPass(event.target.value)}
-                      placeholder={
-                        needsPinSetup || isSettingDefaultPass
-                          ? 'Set default pass'
-                          : 'Enter default pass'
-                      }
-                      className="w-full rounded-xl border border-white/10 bg-black/70 px-4 py-3 text-sm font-mono tracking-[0.12em] text-white outline-none transition-all placeholder:text-zinc-700 focus:border-emerald-500/50 focus:shadow-[0_0_25px_rgba(16,185,129,0.15)]"
-                      autoComplete="current-password"
-                      disabled={isManualBusy}
-                    />
-                  </div>
-
-                  {(needsPinSetup || isSettingDefaultPass) && (
-                    <div className="space-y-2">
-                      <label className="text-[9px] font-mono tracking-[0.22em] text-zinc-500 uppercase">
-                        Confirm Default Pass
-                      </label>
-                      <input
-                        ref={confirmInputRef}
-                        type="password"
-                        value={manualConfirm}
-                        onChange={(event) => setManualConfirm(event.target.value)}
-                        placeholder="Repeat default pass"
-                        className="w-full rounded-xl border border-white/10 bg-black/70 px-4 py-3 text-sm font-mono tracking-[0.12em] text-white outline-none transition-all placeholder:text-zinc-700 focus:border-emerald-500/50 focus:shadow-[0_0_25px_rgba(16,185,129,0.15)]"
-                        autoComplete="new-password"
-                        disabled={isManualBusy}
-                      />
-                    </div>
-                  )}
-
-                  <p
-                    className={`min-h-4 text-center text-[9px] font-mono tracking-[0.2em] uppercase ${
-                      error ? 'text-red-400' : 'text-emerald-500/70'
-                    }`}
-                  >
-                    {manualMessage}
-                  </p>
-
-                  <button
-                    type="submit"
-                    disabled={isManualBusy}
-                    className="w-full rounded-xl border border-emerald-500/20 bg-emerald-950/20 px-4 py-3 text-[10px] font-black tracking-[0.22em] text-emerald-300 transition-all hover:border-emerald-400/50 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {isManualBusy
-                      ? 'PROCESSING...'
-                      : needsPinSetup || isSettingDefaultPass
-                        ? 'SET DEFAULT PASS'
-                        : 'UNLOCK WITH DEFAULT PASS'}
-                  </button>
-
-                  {!needsPinSetup && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsSettingDefaultPass((value) => !value)
-                        setManualPass('')
-                        setManualConfirm('')
-                        setManualMessage(
-                          isSettingDefaultPass
-                            ? 'ENTER DEFAULT VAULT PASS'
-                            : 'LOCAL OVERWRITE MODE ENABLED'
-                        )
-                        setTimeout(() => inputRef.current?.focus(), 100)
-                      }}
-                      className="w-full rounded-xl border border-white/5 bg-black/40 px-4 py-2.5 text-[9px] font-bold tracking-[0.2em] text-zinc-500 transition-all hover:border-amber-400/30 hover:text-amber-300"
-                    >
-                      {isSettingDefaultPass ? 'RETURN TO UNLOCK' : 'OVERWRITE DEFAULT PASS'}
-                    </button>
-                  )}
-                </form>
+                <div className="flex gap-4">
+                  {[0, 1, 2, 3].map((index) => {
+                    const isFilled = pin.length > index
+                    const isActive = pin.length === index && !error
+                    return (
+                      <div
+                        key={index}
+                        className={`w-16 h-20 flex items-center justify-center text-2xl rounded-xl border transition-all duration-300 ${
+                          isFilled
+                            ? error
+                              ? 'border-red-500 bg-red-500/10 text-red-500 shadow-[0_0_30px_rgba(239,68,68,0.3)]'
+                              : 'border-emerald-500/50 bg-emerald-950/30 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.2)]'
+                            : isActive
+                              ? 'border-emerald-500/70 bg-black shadow-[0_0_15px_rgba(16,185,129,0.1)] scale-105'
+                              : 'border-white/10 bg-black/40 text-zinc-700'
+                        }`}
+                      >
+                        {isFilled ? (
+                          <motion.span
+                            initial={{ scale: 0 }}
+                            animate={{ scale: 1 }}
+                            className="text-3xl"
+                          >
+                            ●
+                          </motion.span>
+                        ) : isActive ? (
+                          <span className="animate-pulse text-emerald-500/50 text-3xl font-light">
+                            |
+                          </span>
+                        ) : null}
+                      </div>
+                    )
+                  })}
+                </div>
               </motion.div>
             )}
           </AnimatePresence>
@@ -599,13 +491,11 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
           <button
             onClick={() => {
               if (authMode === 'face') {
-                openManualOverride()
+                setAuthMode('pin')
+                setTimeout(() => inputRef.current?.focus(), 400)
               } else {
                 setAuthMode('face')
-                setManualPass('')
-                setManualConfirm('')
-                setManualMessage('')
-                setIsSettingDefaultPass(false)
+                setPin('')
               }
             }}
             className="mt-2 px-6 py-3 rounded-lg border border-white/5 bg-black/50 text-[10px] font-bold tracking-[0.15em] text-zinc-400 hover:text-emerald-400 hover:border-emerald-500/30 hover:bg-emerald-950/30 transition-all flex items-center gap-3 backdrop-blur-md"
@@ -618,11 +508,23 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
             {authMode === 'face' ? 'INITIATE MANUAL OVERRIDE' : 'ENGAGE OPTICAL SCANNER'}
           </button>
         )}
+
+        <input
+          ref={inputRef}
+          type="text"
+          pattern="\d*"
+          value={pin}
+          onChange={handlePinChange}
+          className="opacity-0 absolute -left-2499.75"
+          maxLength={4}
+          autoComplete="off"
+          disabled={isAuthorized}
+        />
       </motion.div>
 
       <div className="absolute bottom-6 flex flex-col items-center gap-1 z-50">
         <span className="text-[9px] font-mono tracking-widest text-zinc-600 uppercase">
-          Nexus Kernel Security Engine V3.5
+          NEXUS Kernel Security Engine V3.5
         </span>
         <span className="text-[8px] font-mono tracking-widest text-emerald-700/50 uppercase">
           100% Local Execution Environment

@@ -4,23 +4,6 @@ import bcrypt from 'bcryptjs'
 
 const StoreClass = (Store as any).default || Store
 const store = new StoreClass()
-const MIN_VAULT_PASS_LENGTH = 4
-
-const isValidVaultSecret = (secret: unknown) =>
-  typeof secret === 'string' && secret.trim().length >= MIN_VAULT_PASS_LENGTH
-
-const saveVaultSecret = async (secret: string) => {
-  const salt = await bcrypt.genSalt(10)
-  const hash = await bcrypt.hash(secret, salt)
-  store.set('nexus_vault_hash', hash)
-  return true
-}
-
-const verifyVaultSecret = async (secret: string) => {
-  const hash = store.get('nexus_vault_hash') as string
-  if (!hash) return false
-  return await bcrypt.compare(secret, hash)
-}
 
 export default function registerSecurityVault() {
   const legacyFace = store.get('nexus_vault_face') as number[] | undefined
@@ -33,7 +16,7 @@ export default function registerSecurityVault() {
     const hasPin = !!store.get('nexus_vault_hash')
     const faces = store.get('nexus_vault_faces') as number[][] | undefined
     const hasFace = faces && faces.length > 0
-    return { hasPin, hasDefaultPass: hasPin, hasFace, faceCount: faces ? faces.length : 0 }
+    return { hasPin, hasFace, faceCount: faces ? faces.length : 0 }
   })
 
   ipcMain.handle('get-personality', () => {
@@ -46,23 +29,16 @@ export default function registerSecurityVault() {
   })
 
   ipcMain.handle('setup-vault-pin', async (_, pin: string) => {
-    if (!isValidVaultSecret(pin)) return false
-    return await saveVaultSecret(pin)
+    const salt = await bcrypt.genSalt(10)
+    const hash = await bcrypt.hash(pin, salt)
+    store.set('nexus_vault_hash', hash)
+    return true
   })
 
   ipcMain.handle('verify-vault-pin', async (_, pin: string) => {
-    if (typeof pin !== 'string') return false
-    return await verifyVaultSecret(pin)
-  })
-
-  ipcMain.handle('setup-vault-pass', async (_, pass: string) => {
-    if (!isValidVaultSecret(pass)) return false
-    return await saveVaultSecret(pass)
-  })
-
-  ipcMain.handle('verify-vault-pass', async (_, pass: string) => {
-    if (typeof pass !== 'string') return false
-    return await verifyVaultSecret(pass)
+    const hash = store.get('nexus_vault_hash') as string
+    if (!hash) return false
+    return await bcrypt.compare(pin, hash)
   })
 
   ipcMain.handle('setup-vault-face', (_, descriptor: number[]) => {

@@ -189,7 +189,7 @@ export function getGatewayStatus(headers = {}) {
       adminPassConfigured: Boolean(getEnvValue('NEXUS_ADMIN_PASS')),
       defaultModel: DEFAULT_MODEL,
       developer: 'NiranX',
-      company: 'Nexus tech'
+      company: 'Resolute Nexus'
     }
   }
 }

@@ -14,7 +14,6 @@ import fsSync from 'fs'
 
 import clipboardy from 'clipboardy'
 import Prism from 'prismjs'
-import { generateWithNexusGemini } from '../services/nexus-gemini-api'
 
 const loadLanguages = require('prismjs/components/')
 loadLanguages([
@@ -71,7 +70,7 @@ export default function registerScreenPeeler() {
         <body>
           <div id="hud">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/></svg>
-            Nexus SP - Select Area to Rip
+            NEXUS SP - Select Area to Rip
           </div>
           <div id="selection">
             <div class="corner tl"></div><div class="corner tr"></div>
@@ -383,38 +382,32 @@ export default function registerScreenPeeler() {
           }
         }
 
-        const contents = [
-          {
-            parts: [
-              {
-                text: "Extract text/code. Output ONLY as JSON: {'language': 'javascript/python/etc', 'code': 'extracted text'}. No markdown blocks."
-              },
-              { inline_data: { mime_type: 'image/png', data: rawBase64 } }
-            ]
-          }
-        ]
-
-        let aiResponse = ''
-        if (apiKey.trim()) {
-          const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ contents })
-            }
-          )
-
-          const data = await response.json()
-          aiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
-        } else {
-          aiResponse = await generateWithNexusGemini({
-            model: 'gemini-2.5-flash-lite',
-            contents,
-            temperature: 0.2,
-            maxOutputTokens: 4096
-          })
+        if (!apiKey || apiKey.trim() === '') {
+          throw new Error('Missing Gemini API Key. Please update it in the Command Center Vault.')
         }
+
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [
+                {
+                  parts: [
+                    {
+                      text: "Extract text/code. Output ONLY as JSON: {'language': 'javascript/python/etc', 'code': 'extracted text'}. No markdown blocks."
+                    },
+                    { inline_data: { mime_type: 'image/png', data: rawBase64 } }
+                  ]
+                }
+              ]
+            })
+          }
+        )
+
+        const data = await response.json()
+        const aiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text
 
         if (aiResponse) {
           try {

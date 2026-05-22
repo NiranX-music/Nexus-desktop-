@@ -1,4 +1,4 @@
-const DEFAULT_NEXUS_WEB_APP_URL = 'https://niranx-nexus-agent.vercel.app'
+const DEFAULT_NEXUS_WEB_APP_URL = 'https://nexus-desktop-app.vercel.app'
 
 interface GeminiClientGeneratePayload {
   prompt: string

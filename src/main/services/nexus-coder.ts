@@ -3,7 +3,6 @@ import path from 'path'
 import { IpcMain, App } from 'electron'
 import { exec } from 'child_process'
 import { GoogleGenAI } from '@google/genai'
-import { generateWithNexusGemini } from './nexus-gemini-api'
 
 export default function registerNexusCoder({ ipcMain, app }: { ipcMain: IpcMain; app: App }) {
   const PROJECTS_DIR = path.resolve(app.getPath('userData'), 'Projects')
@@ -15,23 +14,15 @@ export default function registerNexusCoder({ ipcMain, app }: { ipcMain: IpcMain;
 
       fs.writeFileSync(filePath, '// Boss, connection established. Waiting for AI stream...\n')
 
-      const promptText = `You are an elite developer. Write the code for: "${prompt}". Output ONLY the raw code for the file ${filename}. Do NOT wrap it in markdown blockquotes.`
-
       if (!geminiKey || geminiKey.trim() === '') {
-        const fullCode = await generateWithNexusGemini({
-          model: 'gemini-2.5-flash',
-          prompt: promptText,
-          maxOutputTokens: 65536
-        })
-        event.sender.send('live-code-chunk', fullCode)
-        fs.writeFileSync(filePath, fullCode)
-        return { success: true, filePath }
+        throw new Error('Missing Gemini API Key. Please configure it in the Command Center Vault.')
       }
 
       const ai = new GoogleGenAI({ apiKey: geminiKey })
+
       const response = await ai.models.generateContentStream({
         model: 'gemini-3-flash-preview',
-        contents: promptText
+        contents: `You are an elite developer. Write the code for: "${prompt}". Output ONLY the raw code for the file ${filename}. Do NOT wrap it in markdown blockquotes.`
       })
 
       let fullCode = ''

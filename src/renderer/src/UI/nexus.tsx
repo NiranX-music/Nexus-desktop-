@@ -2,7 +2,6 @@ import { useState, useEffect, Suspense, lazy } from 'react'
 import {
   RiWifiLine,
   RiShieldFlashLine,
-  RiLayoutGridLine,
   RiBrainLine,
   RiFolderOpenLine,
   RiPhoneLine,
@@ -14,35 +13,33 @@ import {
   RiImageLine,
   RiChatSmile3Line,
   RiGlobalLine,
-  RiLogoutBoxRLine,
-  RiPulseLine,
-  RiEditLine
+  RiPencilLine,
+  RiDashboardLine,
+  RiVideoLine
 } from 'react-icons/ri'
 import { getSystemStatus } from '@renderer/services/system-info'
-import type { SystemStats } from '@renderer/services/system-info'
 import { getHistory } from '@renderer/services/nexus-ai-brain'
+import { nexusService } from '@renderer/services/nexus-voice-ai'
 import ViewSkeleton from '@renderer/components/ViewSkelrton'
-import { IS_TRIAL_BUILD, TRIAL_ALLOWED_TABS, TRIAL_LIMITATION_COPY } from '@renderer/config/app-mode'
 
 import DashboardView from '../views/Dashboard'
-import type { AssistantVisualState, VisionMode } from '@renderer/IndexRoot'
-import type { RequestQueueItem, RequestRoutingMode } from '@renderer/hooks/useNexusRequestQueue'
+import PhoneView from '../views/Phone'
+import { VisionMode } from '@renderer/IndexRoot'
 
-const AppsView = !IS_TRIAL_BUILD ? lazy(() => import('../views/APP')) : null
-const WorkFlowEditorView = !IS_TRIAL_BUILD ? lazy(() => import('../views/WorkFlowEditor')) : null
-const BrowserControlView = lazy(() => import('../views/BrowserControl'))
+const AppsView = lazy(() => import('../views/APP'))
+const WorkFlowEditorView = lazy(() => import('../views/WorkFlowEditor'))
+const AiChatView = lazy(() => import('../views/AiChat'))
 const NotesView = lazy(() => import('../views/Notes'))
 const SettingsView = lazy(() => import('../views/Settings'))
-const GalleryView = !IS_TRIAL_BUILD ? lazy(() => import('../views/Gallery')) : null
-const AiChatView = lazy(() => import('../views/AiChat'))
-const PhoneView = !IS_TRIAL_BUILD ? lazy(() => import('../views/Phone')) : null
+const GalleryView = lazy(() => import('../views/Gallery'))
+const BrowserControlView = lazy(() => import('../views/BrowserControl'))
 const WhiteboardView = lazy(() => import('../views/Whiteboard'))
+const VideoStudioView = lazy(() => import('../views/VideoStudio'))
 
 interface NexusProps {
-  assistantVisualState: AssistantVisualState
   isSystemActive: boolean
   isSystemStarting: boolean
-  toggleSystem: () => void
+  toggleSystem: () => void | Promise<void>
   isMicMuted: boolean
   toggleMic: () => void
   isVideoOn: boolean
@@ -50,123 +47,35 @@ interface NexusProps {
   startVision: (mode: 'camera' | 'screen') => void
   stopVision: () => void
   activeStream: MediaStream | null
-  sendTextCommand: (command: string) => Promise<void>
-  activeRequest: RequestQueueItem | null
-  requestQueue: RequestQueueItem[]
-  requestRoutingMode: RequestRoutingMode
-  setRequestRoutingMode: (mode: RequestRoutingMode) => void
-  onLogout: () => void
-  onUpgrade: () => void
-  isTrialBuild: boolean
 }
 
-const glassPanel = 'nexus-glass-card'
+const glassPanel =
+  'rounded-xl border border-white/10 bg-zinc-950/55 shadow-[0_18px_60px_rgba(0,0,0,0.42)] backdrop-blur-2xl'
 
-const fullNavTabs = [
-  { id: 'DASHBOARD', label: 'Command', detail: 'Core overview', icon: <RiLayoutGridLine /> },
-  { id: 'AI CHAT', label: 'AI Chat', detail: 'Gemini Live', icon: <RiChatSmile3Line /> },
-  {
-    id: 'BROWSER CONTROL',
-    label: 'Browser',
-    detail: 'Voice + text',
-    icon: <RiGlobalLine />
-  },
-  { id: 'WHITEBOARD', label: 'Whiteboard', detail: 'Handwritten solutions', icon: <RiEditLine /> },
-  { id: 'Macros', label: 'Macros', detail: 'Automation flow', icon: <RiBrainLine /> },
-  { id: 'Apps', label: 'Apps', detail: 'Local tools', icon: <RiFolderOpenLine /> },
-  { id: 'NOTES', label: 'Notes', detail: 'Vault memory', icon: <RiFolderOpenLine /> },
-  { id: 'GALLERY', label: 'Gallery', detail: 'Vision archive', icon: <RiImageLine /> },
-  { id: 'PHONE', label: 'Phone', detail: 'Device uplink', icon: <RiPhoneLine /> },
-  { id: 'SETTINGS', label: 'Settings', detail: 'System config', icon: <RiSettings4Line /> }
-]
-
-const trialNavTabs = fullNavTabs
-  .filter((tab) => TRIAL_ALLOWED_TABS.includes(tab.id as (typeof TRIAL_ALLOWED_TABS)[number]))
-  .map((tab) =>
-    tab.id === 'SETTINGS' ? { ...tab, detail: 'Local device only' } : tab
-  )
-
-const formatBytesPerSecond = (bytes = 0) => {
-  if (!Number.isFinite(bytes) || bytes <= 0) return 'Idle'
-  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s']
-  let value = bytes
-  let unitIndex = 0
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024
-    unitIndex += 1
-  }
-  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`
-}
-
-const getBatteryLabel = (stats: SystemStats | null) => {
-  if (!stats?.battery?.isPresent) return 'AC Power'
-  return typeof stats.battery.percentage === 'number' ? `${stats.battery.percentage}%` : '--%'
-}
-
-const Nexus = (props: NexusProps) => {
-  const navTabs = props.isTrialBuild ? trialNavTabs : fullNavTabs
-  const [activeTab, setActiveTab] = useState(navTabs[0]?.id || 'DASHBOARD')
-  const [stats, setStats] = useState<SystemStats | null>(null)
+const NEXUS = (props: NexusProps) => {
+  const [activeTab, setActiveTab] = useState('DASHBOARD')
+  const [stats, setStats] = useState<any>(null)
   const [time, setTime] = useState<Date>(new Date())
   const [chatHistory, setChatHistory] = useState<any[]>([])
   const [showSourceModal, setShowSourceModal] = useState(false)
 
   useEffect(() => {
-    if (navTabs.some((tab) => tab.id === activeTab)) return
-    setActiveTab(navTabs[0]?.id || 'DASHBOARD')
-  }, [activeTab, navTabs])
-
-  useEffect(() => {
-    const handleNavigation = (event: Event) => {
-      const nextTab = (event as CustomEvent<{ tab?: string }>).detail?.tab
-      if (nextTab && navTabs.some((tab) => tab.id === nextTab)) setActiveTab(nextTab)
-    }
-
-    window.addEventListener('nexus:navigate-tab', handleNavigation as EventListener)
-    return () =>
-      window.removeEventListener('nexus:navigate-tab', handleNavigation as EventListener)
-  }, [navTabs])
-
-  useEffect(() => {
-    const timer = setInterval(() => setTime(new Date()), 1000)
+    const timer = setInterval(() => {
+      setTime(new Date())
+      getSystemStatus().then(setStats)
+    }, 500)
     return () => clearInterval(timer)
   }, [])
 
   useEffect(() => {
-    let cancelled = false
-
-    const refreshStats = async () => {
-      if (document.hidden) return
-      const nextStats = await getSystemStatus()
-      if (!cancelled) setStats(nextStats)
-    }
-
-    refreshStats()
-    const timer = setInterval(refreshStats, 5000)
-    return () => {
-      cancelled = true
-      clearInterval(timer)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (activeTab !== 'DASHBOARD') return
-
-    let cancelled = false
-
     const fetchHistory = async () => {
-      if (document.hidden) return
       const history = await getHistory()
-      if (!cancelled && Array.isArray(history)) setChatHistory(history.slice(-15))
+      if (Array.isArray(history)) setChatHistory(history.slice(-15))
     }
-
     fetchHistory()
-    const interval = setInterval(fetchHistory, 4000)
-    return () => {
-      cancelled = true
-      clearInterval(interval)
-    }
-  }, [activeTab])
+    const interval = setInterval(fetchHistory, 500)
+    return () => clearInterval(interval)
+  }, [])
 
   const handleVisionClick = () => {
     if (props.isVideoOn) {
@@ -176,244 +85,238 @@ const Nexus = (props: NexusProps) => {
     }
   }
 
-  const activeNav = navTabs.find((tab) => tab.id === activeTab) ?? navTabs[0]
-  const batteryLabel = getBatteryLabel(stats)
-  const batteryStatus = stats?.battery?.status ?? 'Power'
-  const batteryTone =
-    stats?.battery?.isPresent && stats.battery.isOnBattery ? 'text-cyan-200' : 'text-emerald-300'
-  const networkLabel = formatBytesPerSecond(stats?.network?.totalBytesPerSecond ?? 0)
-  const assistantStateLabel =
-    props.assistantVisualState === 'speaking'
-      ? 'Speaking'
-      : props.assistantVisualState === 'running'
-        ? 'Running'
-        : props.isSystemStarting
-          ? 'Booting'
-          : 'Standby'
-  const assistantStateTone =
-    props.assistantVisualState === 'speaking'
-      ? 'text-fuchsia-100'
-      : props.assistantVisualState === 'running'
-        ? 'text-emerald-200'
-        : props.isSystemStarting
-          ? 'text-amber-100'
-          : 'text-zinc-300'
+  const tabs = [
+    { id: 'DASHBOARD', icon: <RiDashboardLine />, label: 'Agent' },
+    { id: 'AI CHAT', icon: <RiChatSmile3Line />, label: 'AI Chat' },
+    { id: 'Macros', icon: <RiBrainLine />, label: 'Macros' },
+    { id: 'Apps', icon: <RiFolderOpenLine />, label: 'Apps' },
+    { id: 'BROWSER CONTROL', icon: <RiGlobalLine />, label: 'Browser' },
+    { id: 'WHITEBOARD', icon: <RiPencilLine />, label: 'Board' },
+    { id: 'VIDEO', icon: <RiVideoLine />, label: 'Video' },
+    { id: 'NOTES', icon: <RiFolderOpenLine />, label: 'Notes' },
+    { id: 'GALLERY', icon: <RiImageLine />, label: 'Gallery' },
+    { id: 'PHONE', icon: <RiPhoneLine />, label: 'Phone' },
+    { id: 'SETTINGS', icon: <RiSettings4Line />, label: 'Settings' }
+  ]
+
+  useEffect(() => {
+    const pageMap: Record<string, string> = {
+      agent: 'DASHBOARD',
+      dashboard: 'DASHBOARD',
+      chat: 'AI CHAT',
+      'ai chat': 'AI CHAT',
+      macros: 'Macros',
+      apps: 'Apps',
+      files: 'Apps',
+      browser: 'BROWSER CONTROL',
+      whiteboard: 'WHITEBOARD',
+      board: 'WHITEBOARD',
+      media: 'VIDEO',
+      video: 'VIDEO',
+      notes: 'NOTES',
+      gallery: 'GALLERY',
+      phone: 'PHONE',
+      settings: 'SETTINGS'
+    }
+
+    const sendTextToAgent = async (text: string) => {
+      const cleaned = text.trim()
+      if (!cleaned) return
+
+      try {
+        if (!props.isSystemActive && !props.isSystemStarting) {
+          await props.toggleSystem()
+        }
+        await nexusService.sendTextPrompt(cleaned, 'steer')
+      } catch {
+        localStorage.setItem(
+          'nexus_pending_dock_command',
+          JSON.stringify({ text: cleaned, intent: 'steer', createdAt: Date.now() })
+        )
+      }
+    }
+
+    const handleMobileCommand = async (_event: unknown, command: any) => {
+      const type = String(command?.type || '').trim()
+      const payload = String(command?.payload || '').trim()
+      if (!type) return
+
+      localStorage.setItem(
+        'nexus_last_mobile_command',
+        JSON.stringify({ ...command, receivedAt: Date.now() })
+      )
+
+      if (type === 'page') {
+        setActiveTab(pageMap[payload.toLowerCase()] || 'DASHBOARD')
+        return
+      }
+
+      if (type === 'voice') {
+        setActiveTab('DASHBOARD')
+        if (payload === 'online' && !props.isSystemActive && !props.isSystemStarting) {
+          await props.toggleSystem()
+        }
+        if ((payload === 'offline' || payload === 'off') && props.isSystemActive) {
+          await props.toggleSystem()
+          return
+        }
+        if ((payload === 'online' || payload === 'unmuted') && props.isMicMuted) {
+          props.toggleMic()
+        }
+        if (payload === 'muted' && !props.isMicMuted) {
+          props.toggleMic()
+        }
+        return
+      }
+
+      if (type.startsWith('whiteboard')) {
+        setActiveTab('WHITEBOARD')
+        window.dispatchEvent(new CustomEvent('nexus-mobile-command', { detail: command }))
+        return
+      }
+
+      if (type.startsWith('files')) {
+        setActiveTab('Apps')
+        window.dispatchEvent(new CustomEvent('nexus-mobile-command', { detail: command }))
+        return
+      }
+
+      if (['weather', 'stocks', 'maps', 'research'].includes(type)) {
+        setActiveTab('DASHBOARD')
+        await sendTextToAgent(`${type}: ${payload}`)
+        return
+      }
+
+      if (type === 'command') {
+        await sendTextToAgent(payload)
+      }
+    }
+
+    window.electron.ipcRenderer.on('mobile-command', handleMobileCommand)
+    return () => window.electron.ipcRenderer.removeAllListeners('mobile-command')
+  }, [props.isSystemActive, props.isSystemStarting, props.isMicMuted, props.toggleMic, props.toggleSystem])
 
   return (
-    <div
-      className={`nexus-app-shell nexus-agent-${props.assistantVisualState} h-full w-full overflow-hidden select-none text-zinc-100`}
-    >
-      <div className="nexus-liquid-orb nexus-liquid-orb-one" />
-      <div className="nexus-liquid-orb nexus-liquid-orb-two" />
-      <div className="nexus-runtime-aura" />
-      <div className="nexus-runtime-sweep" />
-      <div className="nexus-radar-grid absolute inset-0 opacity-45" />
-      <div className="nexus-scanline" />
+    <div className="nexus-shell-bg nexus-shell-scan h-screen w-full text-zinc-100 font-sans overflow-hidden select-none flex flex-col relative pb-5">
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_right,rgba(255,255,255,0.025)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.018)_1px,transparent_1px)] bg-[size:48px_48px] opacity-35" />
 
-      <div className="nexus-console-layout relative z-10 grid h-full min-h-0 grid-cols-[248px_minmax(0,1fr)] gap-2 p-2">
-        <aside className="nexus-left-console min-h-0">
-          <div className="nexus-left-brand">
-            <div className="nexus-brand-core nexus-brand-core-large">
-              <RiShieldFlashLine />
-            </div>
-            <div className="min-w-0">
-              <p className="text-[9px] font-black uppercase tracking-[0.28em] text-emerald-300">
-                Nexus Tech
-              </p>
-              <h1 className="mt-1 text-xl font-black uppercase tracking-[0.06em] text-white">
-                Nexus AI
-              </h1>
-              {props.isTrialBuild && (
-                <p className="mt-1 text-[9px] font-black uppercase tracking-[0.22em] text-amber-200">
-                  Trial Build
-                </p>
-              )}
-            </div>
-          </div>
-
-          <div className="nexus-current-deck">
-            <p className="text-[8px] font-black uppercase tracking-[0.24em] text-zinc-500">
-              Current Deck
-            </p>
-            <h2 className="mt-3 truncate text-base font-black text-white">{activeNav.label}</h2>
-            <p className="mt-1 truncate text-[11px] font-bold text-emerald-200/70">
-              {activeNav.detail}
-            </p>
-          </div>
-
-          <nav className="nexus-side-nav scrollbar-small" aria-label="Nexus sections">
-            {navTabs.map((tab, index) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`nexus-side-nav-tile ${activeTab === tab.id ? 'is-active' : ''}`}
-                title={`${tab.label} - ${tab.detail}`}
-              >
-                <span className="nexus-side-nav-index">{String(index + 1).padStart(2, '0')}</span>
-                <span className="nexus-side-nav-icon">{tab.icon}</span>
-                <span className="nexus-side-nav-copy">
-                  <span>{tab.label}</span>
-                  <small>{tab.detail}</small>
-                </span>
-              </button>
-            ))}
-          </nav>
-
-          <div className="nexus-left-footer">
-            <span className="nexus-left-footer-tile text-emerald-300">
-              <RiWifiLine />
-              <span>Linked</span>
+      <div className="group/sidebar fixed left-0 top-14 bottom-5 z-70 w-16 hover:w-56 transition-all duration-200 border-r border-emerald-400/20 bg-zinc-950/82 backdrop-blur-2xl overflow-hidden shadow-[18px_0_35px_rgba(0,0,0,0.55)]">
+        <div className="border-b border-white/5 p-2">
+          <div className="flex h-10 items-center gap-3 rounded-lg border border-emerald-300/15 bg-emerald-300/[0.08] px-2">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-emerald-400 text-[10px] font-black text-black shadow-[0_0_18px_rgba(52,211,153,0.4)]">
+              NX
             </span>
-            <span className={`nexus-left-footer-tile ${batteryTone}`}>
-              <RiBatteryChargeLine />
-              <span>{batteryLabel}</span>
+            <span className="opacity-0 group-hover/sidebar:opacity-100 transition-opacity text-[9px] font-black uppercase tracking-[0.22em] text-emerald-100 whitespace-nowrap">
+              Nexus 9.1
             </span>
           </div>
-        </aside>
+        </div>
 
-        <main className="flex min-w-0 min-h-0 flex-1 flex-col gap-2">
-          <header className="nexus-command-bar nexus-command-head">
-            <div className="nexus-header-title min-w-0">
-              <p className="text-[10px] font-black uppercase tracking-[0.3em] text-emerald-300">
-                Autonomous Desktop Agent
-              </p>
-              <div className="nexus-header-route mt-2 flex min-w-0 flex-wrap items-center gap-2">
-                <h2 className="truncate text-3xl font-black uppercase text-white md:text-[2rem]">
-                  {activeNav.label}
-                </h2>
-                <span className="nexus-header-route-detail">
-                  {activeNav.detail}
-                </span>
-              </div>
-            </div>
-
-            <div className="nexus-header-status">
-              <span className={`nexus-status-pill ${assistantStateTone}`} title="Assistant state">
-                <RiPulseLine /> {assistantStateLabel}
-              </span>
-              <span
-                className="nexus-status-pill text-emerald-300"
-                title="Live network throughput"
-              >
-                <RiWifiLine /> Link {networkLabel}
-              </span>
-              <span className={`nexus-status-pill ${batteryTone}`} title={batteryStatus}>
-                <RiBatteryChargeLine /> {batteryLabel}
-              </span>
-              <span className="nexus-status-pill text-orange-100">
-                {time.toLocaleTimeString([], {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  second: '2-digit'
-                })}
-              </span>
-              {props.isTrialBuild ? (
-                <button
-                  type="button"
-                  className="nexus-status-pill nexus-logout-button"
-                  onClick={props.onUpgrade}
-                  title="Unlock the full Nexus build"
-                >
-                  <RiShieldFlashLine /> <span className="hidden sm:inline">Unlock Full</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="nexus-status-pill nexus-logout-button"
-                  onClick={props.onLogout}
-                  title="Logout account"
-                >
-                  <RiLogoutBoxRLine /> <span className="hidden sm:inline">Logout</span>
-                </button>
+        <div className="flex flex-col gap-1.5 p-2">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`group/nav relative h-11 rounded-lg flex items-center gap-3 px-3 transition-all border ${
+                activeTab === tab.id
+                  ? 'bg-emerald-400/[0.14] border-emerald-300/30 text-emerald-200 shadow-[0_0_24px_rgba(16,185,129,0.09)]'
+                  : 'bg-white/[0.025] border-transparent text-zinc-500 hover:border-white/10 hover:text-zinc-200 hover:bg-white/[0.055]'
+              }`}
+              title={tab.label}
+            >
+              {activeTab === tab.id && (
+                <span className="absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-emerald-300 shadow-[0_0_10px_rgba(52,211,153,0.7)]" />
               )}
-            </div>
-          </header>
+              <span className="text-xl shrink-0">{tab.icon}</span>
+              <span className="opacity-0 group-hover/sidebar:opacity-100 transition-opacity text-[10px] font-black tracking-widest uppercase whitespace-nowrap">
+                {tab.label}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="relative z-50 h-14 w-full flex items-center justify-between pl-20 pr-6 border-b border-emerald-300/10 bg-zinc-950/75 shadow-[0_14px_32px_rgba(0,0,0,0.35)] backdrop-blur-2xl">
+        <div className="hidden lg:flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-emerald-300/20 bg-emerald-300/10 text-emerald-300 shadow-[0_0_22px_rgba(16,185,129,0.14)]">
+            <RiShieldFlashLine className="text-xl animate-pulse" />
+          </div>
+          <div className="flex flex-col leading-none">
+            <span className="font-black tracking-[0.2em] text-sm text-zinc-100">Nexus AI</span>
+            <span className="text-[11px] font-mono text-emerald-500/60 tracking-widest">
+              NEURAL INTERFACE
+            </span>
+          </div>
+        </div>
 
-          <section className="nexus-content-stage relative min-h-0 flex-1 overflow-hidden">
-            {props.isTrialBuild && (
-              <div className="mx-3 mt-3 rounded-2xl border border-amber-300/20 bg-amber-400/8 px-4 py-3 text-[11px] text-amber-50 shadow-[0_16px_40px_rgba(0,0,0,0.2)]">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <p className="font-black uppercase tracking-[0.18em] text-amber-200">
-                      Trial runtime active
-                    </p>
-                    <p className="mt-1 text-zinc-300">
-                      This lighter build skips login, keeps settings local, and focuses on the core Nexus surfaces.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={props.onUpgrade}
-                    className="rounded-xl border border-amber-300/25 bg-amber-300/14 px-4 py-2 text-[10px] font-black uppercase tracking-[0.16em] text-amber-100 transition hover:bg-amber-300/22"
-                  >
-                    Unlock Full Experience
-                  </button>
-                </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {TRIAL_LIMITATION_COPY.map((item) => (
-                    <span
-                      key={item}
-                      className="rounded-full border border-white/10 bg-black/25 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.14em] text-zinc-300"
-                    >
-                      {item}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
+        <div className="hidden md:flex gap-2 bg-black/45 p-1 rounded-lg border border-white/10 shadow-inner">
+          <span className="px-5 py-1.5 text-[10px] font-bold tracking-widest rounded-md text-emerald-200 border border-emerald-400/20 bg-emerald-400/10">
+            {tabs.find((tab) => tab.id === activeTab)?.label || activeTab}
+          </span>
+        </div>
 
-            {activeTab === 'DASHBOARD' && (
-              <div className="absolute inset-0 overflow-y-auto scrollbar-small">
-                <DashboardView
-                  props={props}
-                  stats={stats}
-                  chatHistory={chatHistory}
-                  onVisionClick={handleVisionClick}
-                  assistantVisualState={props.assistantVisualState}
-                  isActive={true}
-                />
-              </div>
-            )}
+        <div className="flex items-center gap-3 sm:gap-6 text-[11px] font-mono font-bold">
+          <div className="flex items-center gap-2 text-emerald-500">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-300 shadow-[0_0_10px_rgba(52,211,153,0.8)]" />
+            <RiWifiLine /> <span className="hidden sm:inline">LINKED</span>
+          </div>
+          <div className="hidden sm:flex items-center gap-2 text-zinc-400">
+            <RiBatteryChargeLine /> <span>100%</span>
+          </div>
+          <div className="rounded-md border border-white/10 bg-black/45 px-2 py-1 text-zinc-300">
+            {time.toLocaleTimeString()}
+          </div>
+        </div>
+      </div>
 
-            {activeTab === 'PHONE' && (
-              <Suspense fallback={<ViewSkeleton />}>
-                <div className="absolute inset-0 overflow-y-auto scrollbar-small">
-                  {PhoneView && <PhoneView glassPanel={glassPanel} />}
-                </div>
-              </Suspense>
-            )}
+      <div className="flex-1 overflow-hidden relative ml-16 bg-[radial-gradient(circle_at_center,#11182780_0%,#020202_62%,#000_100%)]">
+        <div className={`absolute inset-0 ${activeTab === 'DASHBOARD' ? 'block' : 'hidden'}`}>
+          <DashboardView
+            props={props}
+            stats={stats}
+            chatHistory={chatHistory}
+            onVisionClick={handleVisionClick}
+          />
+        </div>
 
-            <Suspense fallback={<ViewSkeleton />}>
-              {activeTab !== 'DASHBOARD' && activeTab !== 'PHONE' && (
-                <div className="absolute inset-0 overflow-y-auto scrollbar-small">
-                  {activeTab === 'Macros' && WorkFlowEditorView && <WorkFlowEditorView />}
-                  {activeTab === 'BROWSER CONTROL' && (
-                    <BrowserControlView
-                      isSystemActive={props.isSystemActive}
-                      isSystemStarting={props.isSystemStarting}
-                      isMicMuted={props.isMicMuted}
-                      toggleSystem={props.toggleSystem}
-                      toggleMic={props.toggleMic}
-                      sendTextCommand={props.sendTextCommand}
-                    />
-                  )}
-                  {activeTab === 'AI CHAT' && <AiChatView />}
-                  {activeTab === 'WHITEBOARD' && <WhiteboardView />}
-                  {activeTab === 'Apps' && AppsView && <AppsView />}
-                  {activeTab === 'NOTES' && <NotesView glassPanel={glassPanel} />}
-                  {activeTab === 'SETTINGS' && (
-                    <SettingsView isSystemActive={props.isSystemActive} />
-                  )}
-                  {activeTab === 'GALLERY' && GalleryView && <GalleryView />}
-                </div>
-              )}
-            </Suspense>
-          </section>
-        </main>
+        <div className={`absolute inset-0 ${activeTab === 'PHONE' ? 'block' : 'hidden'}`}>
+          <PhoneView glassPanel={glassPanel} />
+        </div>
+
+        <Suspense fallback={<ViewSkeleton />}>
+          {activeTab === 'AI CHAT' && (
+            <AiChatView
+              isSystemActive={props.isSystemActive}
+              isSystemStarting={props.isSystemStarting}
+              isMicMuted={props.isMicMuted}
+              toggleSystem={props.toggleSystem}
+              toggleMic={props.toggleMic}
+            />
+          )}
+          {activeTab === 'Macros' && <WorkFlowEditorView />}
+          {activeTab === 'Apps' && <AppsView />}
+          {activeTab === 'BROWSER CONTROL' && (
+            <BrowserControlView
+              isSystemActive={props.isSystemActive}
+              isSystemStarting={props.isSystemStarting}
+              isMicMuted={props.isMicMuted}
+              toggleSystem={props.toggleSystem}
+              toggleMic={props.toggleMic}
+              sendTextCommand={async (command) => {
+                if (!props.isSystemActive) await props.toggleSystem()
+                await nexusService.sendTextPrompt(command, 'steer')
+              }}
+            />
+          )}
+          {activeTab === 'WHITEBOARD' && <WhiteboardView />}
+          {activeTab === 'VIDEO' && <VideoStudioView />}
+          {activeTab === 'NOTES' && <NotesView glassPanel={glassPanel} />}
+          {activeTab === 'SETTINGS' && <SettingsView isSystemActive={props.isSystemActive} />}
+          {activeTab === 'GALLERY' && <GalleryView />}
+        </Suspense>
       </div>
 
       {showSourceModal && (
-        <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+        <div className="absolute inset-0 z-100 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
           <div className={`${glassPanel} w-96 p-1 border-emerald-500/30 flex flex-col shadow-2xl`}>
             <div className="flex items-center justify-between p-4 border-b border-white/5 bg-white/5">
               <span className="text-xs font-bold tracking-widest text-emerald-400">
@@ -471,4 +374,4 @@ const Nexus = (props: NexusProps) => {
   )
 }
 
-export default Nexus
+export default NEXUS

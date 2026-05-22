@@ -45,7 +45,9 @@ export const normalizeCloudAuthUser = (user: User): DesktopAuthUser => ({
   name: normalizeName(
     String(user.user_metadata?.full_name || user.user_metadata?.name || ''),
     user.email || ''
-  )
+  ),
+  createdAt: user.created_at,
+  lastLoginAt: user.last_sign_in_at
 })
 
 export const normalizeAppAuthUser = (user: any): DesktopAuthUser => ({

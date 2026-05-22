@@ -3,6 +3,7 @@ import { keyboard, Key, mouse, Point, Button } from '@nut-tree-fork/nut-js'
 import puppeteer from 'puppeteer-extra'
 import StealthPlugin from 'puppeteer-extra-plugin-stealth'
 import { load } from 'cheerio'
+import { existsSync } from 'fs'
 
 puppeteer.use(StealthPlugin())
 keyboard.config.autoDelayMs = 18
@@ -44,6 +45,23 @@ interface ServerlessBrowserPlan {
 let serverlessBrowser: any = null
 let serverlessPage: any = null
 let serverlessBrowserCloseTimer: NodeJS.Timeout | null = null
+
+const getInstalledChromiumPath = () => {
+  const localAppData = process.env.LOCALAPPDATA || ''
+  const programFiles = process.env.ProgramFiles || 'C:\\Program Files'
+  const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)'
+  const candidates = [
+    process.env.NEXUS_BROWSER_EXECUTABLE,
+    `${programFiles}\\Google\\Chrome\\Application\\chrome.exe`,
+    `${programFilesX86}\\Google\\Chrome\\Application\\chrome.exe`,
+    `${localAppData}\\Google\\Chrome\\Application\\chrome.exe`,
+    `${programFiles}\\Microsoft\\Edge\\Application\\msedge.exe`,
+    `${programFilesX86}\\Microsoft\\Edge\\Application\\msedge.exe`,
+    `${localAppData}\\Microsoft\\Edge\\Application\\msedge.exe`
+  ].filter(Boolean) as string[]
+
+  return candidates.find((candidate) => existsSync(candidate))
+}
 
 const SERVERLESS_BROWSER_IDLE_MS = 90_000
 const SERVERLESS_TEXT_LIMIT = 5200
@@ -604,8 +622,11 @@ const getServerlessBrowser = async () => {
     return serverlessBrowser
   }
 
+  const executablePath = getInstalledChromiumPath()
+
   serverlessBrowser = await puppeteer.launch({
     headless: true,
+    executablePath,
     args: [
       '--disable-dev-shm-usage',
       '--disable-gpu',
@@ -617,7 +638,8 @@ const getServerlessBrowser = async () => {
       '--metrics-recording-only',
       '--no-default-browser-check',
       '--no-first-run',
-      '--window-size=1366,768'
+      '--window-size=1366,768',
+      '--no-sandbox'
     ]
   })
 
@@ -1410,9 +1432,12 @@ export default function registerWebAgent(ipcMain: IpcMain) {
         return `I've opened ${smartRoute.source} for you.`
       }
 
+      const executablePath = getInstalledChromiumPath()
+
       browser = await puppeteer.launch({
         headless: true,
-        args: ['--disable-dev-shm-usage']
+        executablePath,
+        args: ['--disable-dev-shm-usage', '--no-sandbox']
       })
 
       const page = await browser.newPage()

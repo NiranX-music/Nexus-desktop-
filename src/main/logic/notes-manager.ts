@@ -9,16 +9,34 @@ export default function registerNotesHandlers(ipcMain: IpcMain) {
     fs.mkdirSync(NOTES_DIR, { recursive: true })
   }
 
+  const toSafeFileName = (title: string) => `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.md`
+
   ipcMain.handle('save-note', async (_event, { title, content }) => {
     try {
-      const safeTitle = title.replace(/[^a-z0-9]/gi, '_').toLowerCase()
-      const fileName = `${safeTitle}.md`
+      const fileName = toSafeFileName(title)
       const filePath = path.join(NOTES_DIR, fileName)
 
       const fileContent = `# ${title}\n\n${content}`
 
       fs.writeFileSync(filePath, fileContent, 'utf-8')
       return { success: true, path: filePath }
+    } catch (error: any) {
+      return { success: false, error: error.message }
+    }
+  })
+
+  ipcMain.handle('update-note', async (_event, { originalFilename, title, content }) => {
+    try {
+      const fileName = toSafeFileName(title)
+      const filePath = path.join(NOTES_DIR, fileName)
+      const originalPath = path.join(NOTES_DIR, originalFilename)
+
+      if (originalFilename && originalFilename !== fileName && fs.existsSync(originalPath)) {
+        fs.unlinkSync(originalPath)
+      }
+
+      fs.writeFileSync(filePath, `# ${title}\n\n${content}`, 'utf-8')
+      return { success: true, path: filePath, filename: fileName }
     } catch (error: any) {
       return { success: false, error: error.message }
     }

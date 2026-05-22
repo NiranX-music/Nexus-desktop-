@@ -9,8 +9,16 @@ export const openApp = async (appName: string) => {
 }
 
 export const performWebSearch = async (query: string) => {
-  await window.electron.ipcRenderer.invoke('google-search', query)
-  return `Opening Google Search for: ${query}`
+  const result = await window.electron.ipcRenderer.invoke('browser-control:serverless-run', {
+    prompt: `search ${query}`,
+    scope: 'browser'
+  })
+
+  if (result?.success) {
+    return `Serverless browser search complete: ${result.summary}`
+  }
+
+  return `Serverless browser search failed: ${result?.error || result?.summary || query}`
 }
 
 export const closeApp = async (appName: string) => {

@@ -1,21 +1,21 @@
-# Contributing to Nexus
+# Contributing to NEXUS
 
 Welcome to the Neural Forge. 👁️⚡
 
-Nexus is an ambitious, kernel-level OS agent, and building the future of human-computer interaction is a massive undertaking. Right now, this is a solo-developed project, which means your contributions are incredibly valuable—but my time to review them is limited.
+NEXUS is an ambitious, kernel-level OS agent, and building the future of human-computer interaction is a massive undertaking. Right now, this is a solo-developed project, which means your contributions are incredibly valuable—but my time to review them is limited.
 
 Please read this guide to ensure your Pull Requests (PRs) merge smoothly and keep the codebase pristine.
 
 ## 🔗 Quick Links
 
 - **GitHub:** https://github.com/NiranX-music/Nexus-desktop-
-- **Instagram:** [@nexusx.ai](https://www.instagram.com/nexusx.ai/)
+- **Website:** [nexus-desktop-app.vercel.app](https://nexus-desktop-app.vercel.app)
 
 ## 👑 Maintainers
 
-- **NiranX** - Developer & Lead Maintainer
+- **NiranX** - Developer and Lead Architect
   - GitHub: [NiranX-music](https://github.com/NiranX-music)
-  - Team: Resolute Team
+  - Company: Resolute Nexus
 
 ---
 
@@ -31,7 +31,7 @@ Please read this guide to ensure your Pull Requests (PRs) merge smoothly and kee
 - Test locally with your own API keys in the vault.
 - Ensure both the **Main Process (Node.js)** and **Renderer Process (React)** compile without errors:
   - `npm run build`
-- **Mind the Bridge:** Nexus operates on a strict split-architecture. Frontend React code cannot use Node.js modules (like `fs` or `child_process`). All system-level execution MUST be handled in the backend and triggered via the `window.electron.ipcRenderer.invoke` bridge.
+- **Mind the Bridge:** NEXUS operates on a strict split-architecture. Frontend React code cannot use Node.js modules (like `fs` or `child_process`). All system-level execution MUST be handled in the backend and triggered via the `window.electron.ipcRenderer.invoke` bridge.
 - Keep PRs focused. One feature/fix per PR. Do not mix unrelated concerns.
 - **Include screenshots/videos:** If you change the UI (Tailwind/GSAP/Framer Motion), you _must_ include a before/after screenshot or a screen recording of the animation in your PR description.
 - **Strict Commit Formatting:** Keep your commit messages clean, descriptive, and easy to understand. Clearly state what the commit accomplishes and always include the relevant Issue ID so we can track the changes.
@@ -48,7 +48,7 @@ Please read this guide to ensure your Pull Requests (PRs) merge smoothly and kee
 
 Built this with Gemini, Claude, or Cursor? **Awesome—just mark it!**
 
-Since Nexus is an AI-first operating system, AI-assisted code is treated as a first-class citizen. I just want transparency so I know how to review it.
+Since NEXUS is an AI-first operating system, AI-assisted code is treated as a first-class citizen. I just want transparency so I know how to review it.
 
 Please include in your PR description:
 
@@ -58,7 +58,6 @@ Please include in your PR description:
 - [ ] Resolve any automated review bot comments before asking for a human review.
 
 ## 🧭 Current Focus & Roadmap
-
 
 As a solo dev, I am currently prioritizing:
 
@@ -71,7 +70,7 @@ Check the GitHub Issues for labels like `good first issue` or `help wanted`.
 
 ## 🤝 Becoming a Core Contributor
 
-Nexus is growing, and I am selectively looking to expand the maintainer team. If you are an elite developer who understands Electron, React, or local LLM execution, I'd love to have you on board.
+NEXUS is growing, and I am selectively looking to expand the maintainer team. If you are an elite developer who understands Electron, React, or local LLM execution, I'd love to have you on board.
 
 Being a maintainer is about consistent involvement—triaging issues, reviewing PRs, and driving the architecture forward.
 
@@ -84,7 +83,7 @@ If you've successfully merged a few PRs and want to step up, reach out via Insta
 
 ## 🛡️ Report a Vulnerability
 
-Because Nexus handles direct OS-level execution and local vault decryption, security is the highest priority.
+Because NEXUS handles direct OS-level execution and local vault decryption, security is the highest priority.
 
 If you find a vulnerability that allows for Remote Code Execution (RCE), key leakage, or IPC bridge bypassing, **DO NOT open a public issue.** Please report it directly via email to: **[Insert Your Email Here]**
 

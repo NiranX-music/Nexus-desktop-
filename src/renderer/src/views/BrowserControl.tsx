@@ -13,6 +13,7 @@ import {
   RiSendPlane2Line,
   RiShieldFlashLine,
   RiSpeakLine,
+  RiStopCircleLine,
   RiTerminalBoxLine
 } from 'react-icons/ri'
 import {
@@ -23,6 +24,7 @@ import {
   runBrowserControlPrompt,
   runServerlessBrowserPrompt
 } from '@renderer/functions/browser-control-api'
+import { nexusService } from '@renderer/services/nexus-voice-ai'
 
 interface BrowserEvent {
   id: number
@@ -79,6 +81,13 @@ const accessScopes: Array<{
 const getSpeechRecognition = () =>
   (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
 
+const cleanVoiceText = (text: string) =>
+  text
+    .replace(/https?:\/\/\S+/g, 'link')
+    .replace(/[*_#>~`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
 const browserScopeLabels: Record<BrowserAccessScope, string> = {
   tab: 'Tab Access',
   'tab-group': 'Tab Group Access',
@@ -86,7 +95,7 @@ const browserScopeLabels: Record<BrowserAccessScope, string> = {
 }
 
 const executionModeCopy: Record<BrowserExecutionMode, string> = {
-  core: 'Core voice model routes the task through the assistant.',
+  core: 'Main Nexus voice assistant routes the task through the same live model.',
   bridge: 'Direct bridge controls the browser you already have open.',
   serverless:
     'Serverless Chromium keeps an isolated browser session for search, open, type, click, scroll, play, pause, and account pages.'
@@ -173,7 +182,13 @@ export default function BrowserControlView({
   const [isRunning, setIsRunning] = useState(false)
   const [isListening, setIsListening] = useState(false)
   const [voiceStatus, setVoiceStatus] = useState('Voice ready')
-  const [coreStatus, setCoreStatus] = useState('Core voice ready')
+  const [coreStatus, setCoreStatus] = useState('Main voice ready')
+  const [voiceReplies, setVoiceReplies] = useState(
+    localStorage.getItem('nexus_browser_main_voice_replies') !== 'false'
+  )
+  const [voiceProfile, setVoiceProfile] = useState(
+    localStorage.getItem('nexus_voice_profile') === 'FEMALE' ? 'Aoede' : 'Puck'
+  )
   const [autoRunVoice, setAutoRunVoice] = useState(true)
   const [scope, setScope] = useState<BrowserAccessScope>('tab')
   const [executionMode, setExecutionMode] = useState<BrowserExecutionMode>('core')
@@ -187,17 +202,94 @@ export default function BrowserControlView({
   useEffect(() => {
     return () => {
       recognitionRef.current?.stop?.()
-      if ('speechSynthesis' in window) window.speechSynthesis.cancel()
+      nexusService.stopAudioOutput()
     }
   }, [])
 
-  const speak = (text: string) => {
-    if (!('speechSynthesis' in window)) return
-    window.speechSynthesis.cancel()
-    const utterance = new SpeechSynthesisUtterance(text.replace(/\s+/g, ' ').trim())
-    utterance.rate = 1.02
-    utterance.pitch = 0.94
-    window.speechSynthesis.speak(utterance)
+  useEffect(() => {
+    localStorage.setItem('nexus_browser_main_voice_replies', String(voiceReplies))
+  }, [voiceReplies])
+
+  useEffect(() => {
+    const handleVoiceMessage = (event: any) => {
+      const detail = event.detail || {}
+      if (detail.role !== 'assistant' || !detail.content) return
+
+      setEvents((current) => {
+        const last = current[current.length - 1]
+        if (last?.source === 'core' && last.result.summary === detail.content) return current
+
+        return [
+          ...current.slice(-9),
+          {
+            id: detail.createdAt || Date.now(),
+            prompt: 'Main voice assistant',
+            result: createBrowserEventResult(
+              scope,
+              true,
+              detail.content,
+              'Spoken response from main voice assistant'
+            ),
+            source: 'core'
+          }
+        ]
+      })
+    }
+
+    window.addEventListener('nexus-voice-message', handleVoiceMessage)
+    return () => window.removeEventListener('nexus-voice-message', handleVoiceMessage)
+  }, [scope])
+
+  useEffect(() => {
+    const syncVoiceProfile = () => {
+      setVoiceProfile(localStorage.getItem('nexus_voice_profile') === 'FEMALE' ? 'Aoede' : 'Puck')
+    }
+
+    syncVoiceProfile()
+    const timer = window.setInterval(syncVoiceProfile, 1000)
+    window.addEventListener('storage', syncVoiceProfile)
+
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('storage', syncVoiceProfile)
+    }
+  }, [])
+
+  const ensureMainVoiceOnline = async () => {
+    if (!nexusService.isConnected) {
+      setCoreStatus(isSystemStarting ? 'Main voice starting' : 'Starting main voice')
+      if (!isSystemStarting && !isSystemActive) await toggleSystem()
+
+      const deadline = Date.now() + 12000
+      while (!nexusService.isConnected && Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, 250))
+      }
+    }
+
+    if (!nexusService.isConnected) throw new Error('Main voice assistant is not online.')
+    setCoreStatus(`Main voice online (${voiceProfile})`)
+  }
+
+  const speak = async (text: string) => {
+    if (!voiceReplies) return
+    const clean = cleanVoiceText(text)
+    if (!clean) return
+
+    try {
+      await ensureMainVoiceOnline()
+      nexusService.speakInstruction(
+        `Read this Browser Control result aloud using the current Nexus assistant voice. Keep it short and do not add new information:\n\n${clean.slice(0, 2000)}`,
+        { persistTranscript: false }
+      )
+      setCoreStatus(`Speaking with ${voiceProfile}`)
+    } catch (error: any) {
+      setCoreStatus(error?.message || 'Main voice unavailable')
+    }
+  }
+
+  const stopMainVoice = () => {
+    nexusService.stopAudioOutput()
+    setCoreStatus('Main voice stopped')
   }
 
   const runPrompt = async (nextPrompt: string, source: BrowserEvent['source'] = 'text') => {
@@ -207,7 +299,7 @@ export default function BrowserControlView({
     setIsRunning(true)
 
     if (executionMode === 'core') {
-      setCoreStatus(isSystemActive ? 'Sending to Core voice' : 'Starting Core voice')
+      setCoreStatus(isSystemActive ? 'Sending to main voice' : 'Starting main voice')
       try {
         await sendTextCommand(buildCoreBrowserCommand(command, scope))
         setEvents((current) => [
@@ -218,21 +310,21 @@ export default function BrowserControlView({
             result: createBrowserEventResult(
               scope,
               true,
-              'Sent through Core voice model. Voice response queued.',
-              `${browserScopeLabels[scope]} routed through Core`
+              'Sent through main voice assistant. Voice response queued.',
+              `${browserScopeLabels[scope]} routed through main voice`
             ),
             source: 'core'
           }
         ])
-        setCoreStatus('Core voice response queued')
+        setCoreStatus('Main voice response queued')
       } catch (error: any) {
-        const message = error?.message || 'Unable to reach Core voice model.'
+        const message = error?.message || 'Unable to reach main voice assistant.'
         setEvents((current) => [
           ...current.slice(-9),
           {
             id: Date.now(),
             prompt: command,
-            result: createBrowserEventResult(scope, false, message, 'Core voice route failed'),
+            result: createBrowserEventResult(scope, false, message, 'Main voice route failed'),
             source: 'core'
           }
         ])
@@ -257,7 +349,7 @@ export default function BrowserControlView({
           source
         }
       ])
-      speak(result.summary)
+      await speak(result.summary)
     } finally {
       setIsRunning(false)
     }
@@ -330,19 +422,22 @@ export default function BrowserControlView({
 
   const toggleCoreVoice = async () => {
     if (isSystemStarting) {
-      setCoreStatus('Core voice starting')
+      setCoreStatus('Main voice starting')
       return
     }
 
-    if (!isSystemActive) {
-      setCoreStatus('Starting Core voice')
-      await toggleSystem()
-      setCoreStatus('Core voice online')
+    if (!isSystemActive || !nexusService.isConnected) {
+      try {
+        await ensureMainVoiceOnline()
+        setCoreStatus(`Main voice online (${voiceProfile})`)
+      } catch (error: any) {
+        setCoreStatus(error?.message || 'Main voice unavailable')
+      }
       return
     }
 
     toggleMic()
-    setCoreStatus(isMicMuted ? 'Core mic live' : 'Core mic muted')
+    setCoreStatus(isMicMuted ? 'Main voice mic live' : 'Main voice mic muted')
   }
 
   const handleVoiceButton = () => {
@@ -359,46 +454,47 @@ export default function BrowserControlView({
   const latestSources = latestEvent?.result.sources || []
 
   return (
-    <div className="nexus-browser-control h-full w-full overflow-hidden p-4 text-zinc-100">
-      <div className="grid h-full min-h-0 grid-cols-12 gap-3">
+    <div className="nexus-browser-control h-full w-full overflow-y-auto overflow-x-hidden p-3 text-zinc-100 scrollbar-small">
+      <div className="grid min-h-full grid-cols-12 gap-3 pb-3">
         <section className="col-span-12 flex min-h-0 flex-col gap-3 xl:col-span-8">
-          <div className="nexus-browser-hero flex shrink-0 flex-wrap items-center justify-between gap-4 overflow-hidden border border-emerald-300/15 bg-black/35 p-4">
+          <div className="nexus-browser-hero flex shrink-0 flex-wrap items-center justify-between gap-3 overflow-hidden border border-emerald-300/15 bg-black/35 p-3">
             <div className="flex min-w-0 items-center gap-4">
-              <div className="grid h-14 w-14 shrink-0 place-items-center rounded-lg border border-emerald-300/25 bg-emerald-300/10 text-2xl text-emerald-200">
+              <div className="grid h-12 w-12 shrink-0 place-items-center rounded-lg border border-emerald-300/25 bg-emerald-300/10 text-xl text-emerald-200">
                 <RiGlobalLine />
               </div>
               <div className="min-w-0">
-                <h2 className="truncate text-xl font-black uppercase tracking-[0.14em] text-white">
+                <h2 className="truncate text-lg font-black uppercase tracking-[0.12em] text-white">
                   Browser Control
                 </h2>
-                <p className="mt-1 text-[10px] font-black uppercase tracking-[0.2em] text-emerald-300/70">
+                <p className="mt-1 text-[9px] font-black uppercase tracking-[0.18em] text-emerald-300/70">
                   Scoped browser and serverless control
                 </p>
-                <p className="mt-2 max-w-2xl text-[11px] leading-relaxed text-zinc-500">
-                  One command rail for browser voice, text, autonomous page actions, media controls, and account entry surfaces.
+                <p className="mt-1 max-w-2xl text-[10px] leading-relaxed text-zinc-500">
+                  One command rail for browser voice, text, autonomous page actions, media controls,
+                  and account entry surfaces.
                 </p>
               </div>
             </div>
 
-            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 text-[9px] font-black uppercase tracking-[0.16em]">
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 text-[8px] font-black uppercase tracking-[0.14em]">
               <button
                 type="button"
                 onClick={() => {
                   stopVoicePrompt()
                   setExecutionMode('core')
                 }}
-                className={`flex items-center gap-2 rounded-md border px-3 py-2 transition ${
+                className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 transition ${
                   executionMode === 'core'
                     ? 'border-emerald-300/30 bg-emerald-300/15 text-emerald-100'
                     : 'border-white/10 bg-white/[0.03] text-zinc-500 hover:text-zinc-200'
                 }`}
               >
-                <RiBrainLine /> Core Voice
+                <RiBrainLine /> Main Voice
               </button>
               <button
                 type="button"
                 onClick={() => setExecutionMode('bridge')}
-                className={`flex items-center gap-2 rounded-md border px-3 py-2 transition ${
+                className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 transition ${
                   executionMode === 'bridge'
                     ? 'border-cyan-300/30 bg-cyan-300/15 text-cyan-100'
                     : 'border-white/10 bg-white/[0.03] text-zinc-500 hover:text-zinc-200'
@@ -409,7 +505,7 @@ export default function BrowserControlView({
               <button
                 type="button"
                 onClick={() => setExecutionMode('serverless')}
-                className={`flex items-center gap-2 rounded-md border px-3 py-2 transition ${
+                className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 transition ${
                   executionMode === 'serverless'
                     ? 'border-lime-300/30 bg-lime-300/15 text-lime-100'
                     : 'border-white/10 bg-white/[0.03] text-zinc-500 hover:text-zinc-200'
@@ -425,14 +521,14 @@ export default function BrowserControlView({
               <button
                 key={item.id}
                 onClick={() => setScope(item.id)}
-                className={`nexus-browser-scope-card min-h-24 border p-3 text-left transition ${
+                className={`nexus-browser-scope-card min-h-20 border p-3 text-left transition ${
                   scope === item.id
                     ? 'border-emerald-300/40 bg-emerald-300/10 text-white'
                     : 'border-white/10 bg-white/[0.03] text-zinc-500 hover:border-white/20 hover:text-zinc-200'
                 }`}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-[11px] font-black uppercase tracking-[0.16em]">
+                  <span className="text-[10px] font-black uppercase tracking-[0.14em]">
                     {item.label}
                   </span>
                   <span
@@ -441,7 +537,7 @@ export default function BrowserControlView({
                     }`}
                   />
                 </div>
-                <p className="mt-2 line-clamp-2 text-[10px] font-semibold leading-relaxed text-zinc-500">
+                <p className="mt-2 line-clamp-2 text-[9px] font-semibold leading-relaxed text-zinc-500">
                   {item.detail}
                 </p>
               </button>
@@ -450,14 +546,14 @@ export default function BrowserControlView({
 
           <form
             onSubmit={submitPrompt}
-            className="flex shrink-0 flex-wrap items-center gap-2 border border-emerald-300/15 bg-black/50 p-3"
+            className="flex shrink-0 flex-wrap items-center gap-2 border border-emerald-300/15 bg-black/50 p-2"
           >
             <input
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
               placeholder={
                 executionMode === 'core'
-                  ? 'Ask Core to control the browser...'
+                  ? 'Ask the main voice assistant to control the browser...'
                   : executionMode === 'serverless'
                     ? 'Open/search/type/click/scroll/play/pause/add account in Serverless Chromium...'
                     : scope === 'tab'
@@ -466,12 +562,12 @@ export default function BrowserControlView({
                         ? 'Tab group command...'
                         : 'Entire browser command...'
               }
-              className="min-w-0 flex-1 bg-transparent px-2 py-3 text-sm font-semibold text-white outline-none placeholder:text-zinc-600"
+              className="min-w-0 flex-1 bg-transparent px-2 py-2 text-sm font-semibold text-white outline-none placeholder:text-zinc-600"
             />
             <button
               type="button"
               onClick={handleVoiceButton}
-              className={`grid h-12 w-12 shrink-0 place-items-center border text-lg transition ${
+              className={`grid h-11 w-11 shrink-0 place-items-center border text-lg transition ${
                 executionMode === 'core'
                   ? isSystemActive && !isMicMuted
                     ? 'border-emerald-300/30 bg-emerald-300/15 text-emerald-100'
@@ -480,7 +576,7 @@ export default function BrowserControlView({
                     ? 'border-red-300/30 bg-red-400/15 text-red-200'
                     : 'border-cyan-300/25 bg-cyan-300/10 text-cyan-100 hover:bg-cyan-300 hover:text-black'
               }`}
-              title={executionMode === 'core' ? 'Core voice model' : 'Voice prompt'}
+              title={executionMode === 'core' ? 'Main voice assistant' : 'Voice prompt'}
             >
               {executionMode === 'core' ? (
                 isSystemStarting ? (
@@ -499,31 +595,31 @@ export default function BrowserControlView({
             <button
               type="submit"
               disabled={!prompt.trim() || isRunning}
-              className="grid h-12 w-12 shrink-0 place-items-center border border-emerald-300/25 bg-emerald-400/15 text-lg text-emerald-100 transition hover:bg-emerald-400 hover:text-black disabled:cursor-not-allowed disabled:opacity-35"
+              className="grid h-11 w-11 shrink-0 place-items-center border border-emerald-300/25 bg-emerald-400/15 text-lg text-emerald-100 transition hover:bg-emerald-400 hover:text-black disabled:cursor-not-allowed disabled:opacity-35"
               title="Run browser command"
             >
               {isRunning ? <RiLoader4Line className="animate-spin" /> : <RiSendPlane2Line />}
             </button>
           </form>
 
-          <div className="grid shrink-0 grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
+          <div className="grid shrink-0 grid-cols-3 gap-2 md:grid-cols-5 xl:grid-cols-9">
             {quickPrompts.map((item) => (
               <button
                 key={item.label}
                 onClick={() => runPrompt(item.prompt, 'quick')}
                 disabled={isRunning}
-                className="nexus-browser-action-tile flex min-h-24 flex-col justify-between border border-white/10 bg-white/[0.035] p-3 text-left transition disabled:cursor-not-allowed disabled:opacity-45"
+                className="nexus-browser-action-tile flex min-h-16 flex-col justify-between border border-white/10 bg-white/[0.035] p-2 text-left transition disabled:cursor-not-allowed disabled:opacity-45"
               >
-                <span className="text-xl text-emerald-200">{item.icon}</span>
-                <span className="text-[10px] font-black uppercase tracking-[0.18em] text-zinc-200">
+                <span className="text-lg text-emerald-200">{item.icon}</span>
+                <span className="text-[8px] font-black uppercase tracking-[0.14em] text-zinc-200">
                   {item.label}
                 </span>
               </button>
             ))}
           </div>
 
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-2">
-            <div className="min-h-0 border border-white/10 bg-black/35 p-4">
+          <div className="grid min-h-0 grid-cols-1 gap-3 lg:grid-cols-2">
+            <div className="min-h-0 border border-white/10 bg-black/35 p-3">
               <div className="mb-3 flex items-center justify-between border-b border-white/10 pb-2">
                 <span className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400">
                   Execution
@@ -538,7 +634,7 @@ export default function BrowserControlView({
                     <ActionRow key={`${latestEvent.id}-${index}`} action={action} />
                   ))
                 ) : (
-                  <div className="grid h-52 place-items-center text-[10px] font-black uppercase tracking-[0.2em] text-zinc-700">
+                  <div className="grid h-28 place-items-center text-[10px] font-black uppercase tracking-[0.2em] text-zinc-700">
                     No active browser run
                   </div>
                 )}
@@ -557,14 +653,14 @@ export default function BrowserControlView({
               ) : null}
             </div>
 
-            <div className="min-h-0 border border-white/10 bg-black/35 p-4">
+            <div className="min-h-0 border border-white/10 bg-black/35 p-3">
               <div className="mb-3 flex items-center justify-between border-b border-white/10 pb-2">
                 <span className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400">
                   {executionMode === 'core'
-                    ? 'Core Voice Model'
+                    ? 'Main Voice Assistant'
                     : executionMode === 'serverless'
-                      ? 'Voice + Chromium'
-                      : 'Voice'}
+                      ? 'Main Voice + Chromium'
+                      : 'Main Voice + Bridge'}
                 </span>
                 {executionMode !== 'core' ? (
                   <button
@@ -590,10 +686,10 @@ export default function BrowserControlView({
                 )}
               </div>
 
-              <div className="flex h-52 flex-col items-center justify-center gap-4">
+              <div className="flex min-h-32 flex-col items-center justify-center gap-3">
                 <button
                   onClick={handleVoiceButton}
-                  className={`grid h-24 w-24 place-items-center rounded-lg border text-4xl transition ${
+                  className={`grid h-16 w-16 place-items-center rounded-lg border text-3xl transition ${
                     executionMode === 'core'
                       ? isSystemActive && !isMicMuted
                         ? 'border-emerald-300/30 bg-emerald-300/15 text-emerald-100 shadow-[0_0_30px_rgba(52,211,153,0.18)]'
@@ -620,23 +716,48 @@ export default function BrowserControlView({
                 <p className="text-[10px] font-black uppercase tracking-[0.22em] text-zinc-500">
                   {executionMode === 'core'
                     ? isSystemStarting
-                      ? 'Core starting'
+                      ? 'Main voice starting'
                       : isSystemActive
                         ? isMicMuted
-                          ? 'Core online, mic muted'
-                          : 'Core listening'
-                        : 'Core standby'
+                          ? 'Main voice online, mic muted'
+                          : 'Main voice listening'
+                        : 'Main voice standby'
                     : voiceStatus}
                 </p>
                 <p className="max-w-xs text-center text-[10px] font-semibold leading-relaxed text-zinc-600">
                   {executionMode === 'core' ? coreStatus : executionModeCopy[executionMode]}
                 </p>
+                <div className="grid w-full max-w-xs grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setVoiceReplies((value) => !value)}
+                    className={`flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-[8px] font-black uppercase tracking-[0.16em] transition ${
+                      voiceReplies
+                        ? 'border-cyan-300/25 bg-cyan-300/10 text-cyan-100'
+                        : 'border-white/10 bg-white/[0.03] text-zinc-500'
+                    }`}
+                    title="Speak browser results with the main assistant voice"
+                  >
+                    <RiSpeakLine /> {voiceReplies ? 'Replies' : 'Silent'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={stopMainVoice}
+                    className="flex items-center justify-center gap-2 rounded-md border border-red-300/20 bg-red-400/10 px-3 py-2 text-[8px] font-black uppercase tracking-[0.16em] text-red-100 transition hover:bg-red-400/20"
+                    title="Stop main voice output"
+                  >
+                    <RiStopCircleLine /> Stop
+                  </button>
+                </div>
+                <span className="rounded-full border border-cyan-300/15 bg-black/40 px-2 py-1 text-[8px] font-black uppercase tracking-[0.16em] text-cyan-100/70">
+                  Voice {voiceProfile}
+                </span>
               </div>
             </div>
           </div>
         </section>
 
-        <aside className="col-span-12 flex min-h-0 flex-col border border-white/10 bg-black/35 p-4 xl:col-span-4">
+        <aside className="col-span-12 flex min-h-[420px] flex-col border border-white/10 bg-black/35 p-3 xl:col-span-4 xl:min-h-0">
           <div className="mb-3 flex items-center justify-between border-b border-white/10 pb-2">
             <span className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400">
               Browser Log
@@ -648,7 +769,7 @@ export default function BrowserControlView({
 
           <div
             ref={logRef}
-            className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-2 scrollbar-small"
+            className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-2 scrollbar-small xl:max-h-[calc(100vh-190px)]"
           >
             {events.length === 0 ? (
               <div className="grid h-full place-items-center text-[10px] font-black uppercase tracking-[0.2em] text-zinc-700">
@@ -684,7 +805,7 @@ export default function BrowserControlView({
             <div className="flex items-center gap-2 text-[9px] font-black uppercase tracking-[0.18em] text-emerald-300/70">
               {executionMode === 'core' ? <RiShieldFlashLine /> : <RiPlayFill />}
               {executionMode === 'core'
-                ? 'Core browser voice armed'
+                ? 'Main browser voice armed'
                 : executionMode === 'serverless'
                   ? 'Serverless Chromium armed'
                   : 'Browser bridge armed'}

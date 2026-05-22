@@ -1,8 +1,8 @@
 <div align="center">
 
-![Nexus AI neural desktop banner](./assets/nexus-banner.svg)
+![NEXUS Neural OS Documentation Banner](./assets/banner.jpeg)
 
-## Nexus AI: Autonomous Desktop Agent
+## The Autonomous Neural OS Agent
 
 <div style="display: flex; justify-center; gap: 10px; margin-bottom: 20px;">
   <a href="https://github.com/NiranX-music/Nexus-desktop-/stargazers">
@@ -11,12 +11,15 @@
   <a href="https://github.com/NiranX-music/Nexus-desktop-/network/members">
     <img src="https://img.shields.io/github/forks/NiranX-music/Nexus-desktop-?style=for-the-badge&color=10b981&logo=git&logoColor=white" alt="GitHub forks">
   </a>
+  <a href="https://github.com/NiranX-music/Nexus-desktop-/graphs/contributors">
+    <img src="https://img.shields.io/github/contributors/NiranX-music/Nexus-desktop-?style=for-the-badge&color=10b981&logo=users&logoColor=white" alt="Contributors">
+  </a>
   <a href="https://github.com/NiranX-music/Nexus-desktop-/releases">
     <img src="https://img.shields.io/github/downloads/NiranX-music/Nexus-desktop-/total?style=for-the-badge&color=10b981&logo=download&logoColor=white" alt="Downloads">
   </a>
 </div>
 
-**A local-first autonomous desktop layer that turns intent into real OS actions, voice workflows, and Nexus Server AI.**
+**A local-first neural execution system that turns intent into real OS actions.**
 
 ---
 
@@ -29,43 +32,25 @@
 - [🏗️ Architecture](#️-architecture)
 - [💻 Tech Stack](#-tech-stack)
 - [🔐 Security](#-security)
-- [⬇️ Downloads & Releases](#️-downloads--releases)
 - [🚀 Installation & Setup](#-installation--setup)
 - [📁 Project Structure](#-project-structure)
 - [🧠 Development Philosophy](#-development-philosophy)
 - [🤝 Contributing](#-contributing)
-- [🧩 Extending Nexus](#-extending-nexus)
+- [🧩 Extending NEXUS](#-extending-nexus)
 - [🧠 Roadmap](#-roadmap)
 - [⚠️ Disclaimer](#️-disclaimer)
-- [🏢 About Nexus Tech](#-about-nexus-tech)
-- [👨‍💻 Developer](#developer)
+- [👨‍💻 Architect](#-architect)
 - [📜 License](#-license)
 
 ---
 
 # ⚡ Overview
 
-Nexus is not just a chatbot.
+NEXUS is not a chatbot.
 
-It is a **local-first AI operating layer** for Windows desktop automation. Nexus combines voice control, command execution, file operations, memory, device uplinks, and NVIDIA-powered AI chat in a single operator interface.
+It is a **local-first AI Operating System layer** that executes real-world actions across your system, applications, and devices.
 
-> Speak or type your command. Nexus plans, routes, and executes it.
-
-## Nexus 2.0 Cloud Login
-
-Desktop login now starts from the installed app and authorizes through the hosted Vercel website.
-Set these values in `.env` for local development:
-
-```env
-NEXUS_WEB_APP_URL=https://niranx-nexus-agent.vercel.app
-VITE_NEXUS_WEB_APP_URL=https://niranx-nexus-agent.vercel.app
-VITE_SUPABASE_URL=https://your-project-ref.supabase.co
-VITE_SUPABASE_ANON_KEY=your-supabase-publishable-or-anon-key
-```
-
-The website returns the verified Supabase session through `nexus://auth-callback` with a
-desktop-generated state code. User profiles, devices, settings, chat history, notes, and core
-memories sync into the Supabase `nexus_*` tables defined by the web app migration.
+> Speak your command. NEXUS executes it.
 
 ---
 
@@ -191,7 +176,7 @@ window.electron.ipcRenderer.invoke('tool-name', payload)
 
 # 💻 Tech Stack
 
-Nexus is forged using a high-performance stack combining web technologies with deep native OS access and state-of-the-art AI models.
+NEXUS is forged using a high-performance stack combining web technologies with deep native OS access and state-of-the-art AI models.
 
 ### 🖥️ Core Desktop & UI Framework
 
@@ -244,29 +229,26 @@ Nexus is forged using a high-performance stack combining web technologies with d
 
 ---
 
-# ⬇️ Downloads & Releases
-
-Nexus desktop releases are published from the official GitHub Releases page.
-
-- **Latest installer:** [Download Nexus AI for Windows](https://github.com/NiranX-music/Nexus-desktop-/releases/latest)
-- **Current build:** `nexus-ai-1.2.4-setup.exe`
-- **Release channel:** Stable Windows installer with GitHub updater metadata.
-- **Website:** [nexus-desktop-app.vercel.app](https://nexus-desktop-app.vercel.app)
-
-Each release should include the Windows setup executable, update metadata, and release notes that explain what changed for users.
-
----
-
 # 🚀 Installation & Setup
 
 ### 1. Clone Repo
 
 ```bash
 git clone https://github.com/NiranX-music/Nexus-desktop-.git
-cd Nexus-desktop-
+cd NEXUS-AI
 ```
 
-### 2. Install Dependencies
+### 2. Environment Setup
+
+```bash
+cp .env.example .env
+```
+
+Add your API keys.
+
+---
+
+### 3. Install Dependencies
 
 ```bash
 npm install
@@ -274,7 +256,7 @@ npm install
 
 ---
 
-### 3. Run Dev Server
+### 4. Run Dev Server
 
 ```bash
 npm run dev
@@ -292,32 +274,19 @@ npm run dev
 
 ## 🔑 System Keys & Configuration
 
-Nexus operates locally by default, but can bridge into cloud models and search engines when you enable provider integrations. **User-owned keys are encrypted and stored locally on your machine. Nexus Server Mode uses the private gateway mirrors instead, so end users can chat without entering their own NVIDIA key.**
+NEXUS operates locally, but requires specific API keys to bridge the gap to large language models and search engines. **Your keys are encrypted and stored locally on your machine. They are never sent to our servers.**
 
 ### How to Configure
 
-- **Desktop App Users:** Open Nexus, navigate to the **Settings Tab (Command Center) > API Keys**, and paste your keys directly into the vault.
+- **Desktop App Users:** Open NEXUS, navigate to the **Settings Tab (Command Center) > API Keys**, and paste your keys directly into the vault.
 - **Developers (Running from source):** Rename `.env.example` to `.env` in the root directory and place your keys there for local testing.
-- **Nexus Server Mode:** Users can select **Run models on Nexus Servers** in Settings. This routes AI chat through six private gateway mirrors: three Vercel and three Netlify sites.
-- **Gateway Admin:** Open `/api-edit.html` on any gateway mirror and unlock with the admin pass to inspect setup status and environment instructions.
-
-### Nexus AI Gateway Mirrors
-
-- `https://nexus-ai-gateway.vercel.app`
-- `https://nexus-ai-gateway-2.vercel.app`
-- `https://nexus-ai-gateway-3.vercel.app`
-- `https://nexus-ai-gateway.netlify.app`
-- `https://nexus-ai-gateway-2.netlify.app`
-- `https://nexus-ai-gateway-3.netlify.app`
-
-Set `NEXUS_AI_UPSTREAM_API_KEY` as a secret environment variable in every gateway hosting provider before enabling Nexus Server AI for production users. `NVIDIA_API_KEY` is still accepted as a legacy fallback for existing NVIDIA Build deployments.
 
 ### 🔴 Required Keys
 
 The Neural OS requires these core engines to process logic and execute actions.
 
 - **[Google Gemini API](https://aistudio.google.com/app/apikey)** (`GEMINI_API_KEY`)
-  - **Role:** The primary reasoning and generative engine for Nexus.
+  - **Role:** The primary reasoning and generative engine for NEXUS.
   - **Setup:** Sign in to Google AI Studio > Click 'Get API Key' > Create a key.
 
 - **[Groq API](https://console.groq.com/keys)** (`GROQ_API_KEY`)
@@ -370,7 +339,7 @@ nexus/
 
 ## 🤝 Contributing
 
-Nexus is built for the community. If you want to expand the neural forge, submit a PR.
+NEXUS is built for the community. If you want to expand the neural forge, submit a PR.
 
 ### Quick Start
 
@@ -395,7 +364,7 @@ Keep your commit messages clean, descriptive, and easy to understand. Clearly st
 
 ---
 
-# 🧩 Extending Nexus
+# 🧩 Extending NEXUS
 
 You can:
 
@@ -418,30 +387,17 @@ You can:
 
 # ⚠️ Disclaimer
 
-Nexus has deep system-level execution capabilities.  
+NEXUS has deep system-level execution capabilities.  
 Use responsibly. The maintainers are not liable for misuse.
 
 ---
 
-# 🏢 About Nexus Tech
-
-Nexus AI is maintained by **Nexus tech** as a local-first autonomous desktop agent for builders, creators, and power users who want voice, AI, automation, and desktop control in one command layer.
-
-- **Company:** Nexus tech
-- **Developer:** NiranX
-- **Team:** Resolute Team
-- **Homepage:** [nexus-desktop-app.vercel.app](https://nexus-desktop-app.vercel.app)
-- **Repository:** [NiranX-music/Nexus-desktop-](https://github.com/NiranX-music/Nexus-desktop-)
-
----
-
-
-# Developer
+# 👨‍💻 Architect
 
 **NiranX**  
-Lead Developer / AI Systems
+AI Systems Engineer
 
-Team: Resolute Team  
+Company: Resolute Nexus
 GitHub: [@NiranX-music](https://github.com/NiranX-music)
 
 ---
@@ -455,8 +411,8 @@ MIT License — see LICENSE file.
 
 # 🟥 Final Note
 
-**Nexus is not a chatbot.** It is a **neural extension of your operating system**.
+**NEXUS is not a chatbot.** It is a **neural extension of your operating system**.
 
 > _System Online._
 
-# Made with love from NiranX, Resolute Team
+# Developed by NiranX for Resolute Nexus

@@ -1,6 +1,6 @@
-appId: com.nexustech.nexus
+appId: com.resolutenexus.nexusai
 productName: Nexus AI
-copyright: Copyright © 2026 Nexus tech
+copyright: Copyright © 2026 Resolute Nexus
 directories:
   buildResources: build
 files:
@@ -10,10 +10,10 @@ files:
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json,credentials.json}'
-  - '!{dist,dist-fresh,node_modules/.cache}/**'
-  - '!{.git,.github,.vercel,.netlify}/**'
-  - '!nexus-ai-gateway/**'
-  - '!README.txt'
+  - '!dist/**'
+  - '!Nexus AI EXE/**'
+  - '!Desktop app EXE files/**'
+  - '!External models/**'
 asarUnpack:
   - resources/**
   - node_modules/**/*.node
@@ -21,34 +21,24 @@ asarUnpack:
 win:
   executableName: nexus-ai
   icon: build/icon.ico
-  requestedExecutionLevel: asInvoker
   signAndEditExecutable: true
-  verifyUpdateCodeSignature: true
-  signtoolOptions:
-    signingHashAlgorithms:
-      - sha256
-    rfc3161TimeStampServer: http://timestamp.digicert.com
   target:
     - target: nsis
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
-  license: build/installer-license.txt
+  differentialPackage: false
 
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
   installerHeaderIcon: build/icon.ico
-  installerHeader: build/installer-header.bmp
-  installerSidebar: build/installer-sidebar.bmp
-  uninstallerSidebar: build/installer-sidebar.bmp
 
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: always
   createStartMenuShortcut: true
   runAfterFinish: true
-
 
 mac:
   entitlementsInherit: build/entitlements.mac.plist
@@ -66,7 +56,7 @@ linux:
     - AppImage
     - snap
     - deb
-  maintainer: Nexus tech
+  maintainer: Resolute Nexus
   category: Utility
 appImage:
   artifactName: ${name}-${version}.${ext}
@@ -74,4 +64,5 @@ appImage:
 npmRebuild: false
 publish:
   provider: generic
-  url: https://niranx-nexus-agent.vercel.app/updates/win
+  url: https://nexus-desktop-app.vercel.app/updates/win
+

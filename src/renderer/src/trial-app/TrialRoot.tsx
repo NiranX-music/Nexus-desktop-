@@ -451,7 +451,7 @@ export default function TrialRoot() {
 
   const openFullExperience = () => {
     window.open(
-      `${import.meta.env.VITE_NEXUS_WEB_APP_URL || 'https://niranx-nexus-agent.vercel.app'}/installer`,
+      `${import.meta.env.VITE_NEXUS_WEB_APP_URL || 'https://nexus-desktop-app.vercel.app'}/installer`,
       '_blank'
     )
   }

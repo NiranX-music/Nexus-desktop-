@@ -31,7 +31,15 @@ export default function LiveCodingWidget() {
 
       const geminiKey = localStorage.getItem('nexus_custom_api_key') || ''
 
-      setCode('// Initializing Nexus Neural Forge...\n')
+      if (!geminiKey.trim()) {
+        setCode(
+          '// ❌ SYSTEM ERROR: Missing Gemini API Key.\n// Please configure it in the Command Center Vault (Settings Tab).'
+        )
+        setIsGenerating(false)
+        return
+      }
+
+      setCode('// Initializing NEXUS Neural Forge...\n')
 
       const result = await window.electron.ipcRenderer.invoke('start-live-coding', {
         prompt,
