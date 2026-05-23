@@ -1,7 +1,7 @@
 import { IpcMain } from 'electron'
 
 const DEFAULT_MODEL = 'deepseek-ai/deepseek-v4-pro'
-const DEFAULT_NEXUS_API_BASE_URL = 'https://nexus-desktop-app.vercel.app'
+const DEFAULT_NEXUS_API_BASE_URL = 'https://nexusaix.vercel.app'
 
 type ChatRole = 'system' | 'user' | 'assistant'
 

@@ -50,25 +50,29 @@ const TrialMandatoryUpdateGate = ({ children }: { children: React.ReactNode }) =
   useEffect(() => {
     void refreshStatus()
 
-    const unsubscribe = window.electron.ipcRenderer.on('updater-event', (_event: any, event: any) => {
-      if (!event) return
-      if (event.status === 'checking') setUpdatePhase('Checking for update')
-      if (event.status === 'available') setUpdatePhase(`Update ${event.data?.version || ''} available`)
-      if (event.status === 'downloading') {
-        setUpdatePhase('Downloading required update')
-        setProgress(Math.round(Number(event.data?.percent || 0)))
+    const unsubscribe = window.electron.ipcRenderer.on(
+      'updater-event',
+      (_event: any, event: any) => {
+        if (!event) return
+        if (event.status === 'checking') setUpdatePhase('Checking for update')
+        if (event.status === 'available')
+          setUpdatePhase(`Update ${event.data?.version || ''} available`)
+        if (event.status === 'downloading') {
+          setUpdatePhase('Downloading required update')
+          setProgress(Math.round(Number(event.data?.percent || 0)))
+        }
+        if (event.status === 'downloaded') {
+          setUpdatePhase('Update ready to install')
+          setProgress(100)
+          setIsDownloaded(true)
+          setIsBusy(false)
+        }
+        if (event.status === 'error') {
+          setUpdatePhase(event.error || 'Update failed')
+          setIsBusy(false)
+        }
       }
-      if (event.status === 'downloaded') {
-        setUpdatePhase('Update ready to install')
-        setProgress(100)
-        setIsDownloaded(true)
-        setIsBusy(false)
-      }
-      if (event.status === 'error') {
-        setUpdatePhase(event.error || 'Update failed')
-        setIsBusy(false)
-      }
-    })
+    )
 
     return () => {
       if (typeof unsubscribe === 'function') unsubscribe()
@@ -133,11 +137,15 @@ const TrialMandatoryUpdateGate = ({ children }: { children: React.ReactNode }) =
 
         <div className="grid grid-cols-2 gap-3">
           <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-            <p className="text-[9px] font-black uppercase tracking-[0.18em] text-zinc-500">Installed</p>
+            <p className="text-[9px] font-black uppercase tracking-[0.18em] text-zinc-500">
+              Installed
+            </p>
             <p className="mt-2 text-lg font-black text-zinc-100">{status.currentVersion}</p>
           </div>
           <div className="rounded-2xl border border-emerald-300/20 bg-emerald-300/10 p-3">
-            <p className="text-[9px] font-black uppercase tracking-[0.18em] text-emerald-300/70">Required</p>
+            <p className="text-[9px] font-black uppercase tracking-[0.18em] text-emerald-300/70">
+              Required
+            </p>
             <p className="mt-2 text-lg font-black text-emerald-100">{status.latestVersion}</p>
           </div>
         </div>
@@ -279,7 +287,9 @@ export default function TrialRoot() {
         await startSystem()
       } catch (error: any) {
         if (error?.message === 'NO_API_KEY') {
-          alert('Hosted Gemini text commands are ready. Add a local Gemini Live key only for the live voice core.')
+          alert(
+            'Hosted Gemini text commands are ready. Add a local Gemini Live key only for the live voice core.'
+          )
         } else {
           alert(`Connection failed: ${error?.message || 'Unknown error'}`)
         }
@@ -333,7 +343,9 @@ export default function TrialRoot() {
     } catch (error: any) {
       const fallbackAllowed =
         error?.message === 'NO_API_KEY' ||
-        String(error?.message || '').toLowerCase().includes('gemini api key')
+        String(error?.message || '')
+          .toLowerCase()
+          .includes('gemini api key')
 
       if (!fallbackAllowed) throw error
 
@@ -451,7 +463,7 @@ export default function TrialRoot() {
 
   const openFullExperience = () => {
     window.open(
-      `${import.meta.env.VITE_NEXUS_WEB_APP_URL || 'https://nexus-desktop-app.vercel.app'}/installer`,
+      `${import.meta.env.VITE_NEXUS_WEB_APP_URL || 'https://nexusaix.vercel.app'}/installer`,
       '_blank'
     )
   }

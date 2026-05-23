@@ -305,8 +305,7 @@ These keys unlock advanced, autonomous subsystems.
   - **Role:** Required only if you are downloading and running local open-source inference models.
   - **Setup:** Create a Hugging Face account > Settings > Access Tokens > Create token with 'Read' permissions.
 
-> 💡 **Having trouble finding your keys?** Visit our official [Key Forging Guide](https://nexusaiw.vercel.app/guide) for step-by-step instructions.
-
+> 💡 **Having trouble finding your keys?** Visit our official [Key Forging Guide](https://nexusaix.vercel.app/guide) for step-by-step instructions.
 
 # 📁 Project Structure
 

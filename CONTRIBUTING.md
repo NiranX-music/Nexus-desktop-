@@ -9,7 +9,7 @@ Please read this guide to ensure your Pull Requests (PRs) merge smoothly and kee
 ## 🔗 Quick Links
 
 - **GitHub:** https://github.com/NiranX-music/Nexus-desktop-
-- **Website:** [nexus-desktop-app.vercel.app](https://nexus-desktop-app.vercel.app)
+- **Website:** [nexusaix.vercel.app](https://nexusaix.vercel.app)
 
 ## 👑 Maintainers
 
@@ -42,7 +42,6 @@ Please read this guide to ensure your Pull Requests (PRs) merge smoothly and kee
 ❌ `git commit -m "resolved IPC memory leak in Oracle module"`
 
 ---
-
 
 ## 🤖 AI/Vibe-Coded PRs Welcome!
 

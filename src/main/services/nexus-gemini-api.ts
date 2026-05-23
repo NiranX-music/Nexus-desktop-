@@ -1,4 +1,4 @@
-const DEFAULT_NEXUS_API_BASE_URL = 'https://nexus-desktop-app.vercel.app'
+const DEFAULT_NEXUS_API_BASE_URL = 'https://nexusaix.vercel.app'
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash'
 
 interface GeminiGeneratePayload {

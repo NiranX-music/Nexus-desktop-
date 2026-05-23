@@ -350,7 +350,7 @@ export class GeminiLiveService {
     const activePersonality =
       storedPersonality && storedPersonality.trim() !== ''
         ? storedPersonality
-        : `- **Developer:** NiranX.\n- **Company:** Resolute Nexus.\n- **Tone:** Witty, Hinglish-friendly.\n- **Rule:** Never sound like a support bot. You are the Ghost in the machine.\n- **Official Website:** https://nexus-desktop-app.vercel.app.`
+        : `- **Developer:** NiranX.\n- **Company:** Resolute Nexus.\n- **Tone:** Witty, Hinglish-friendly.\n- **Rule:** Never sound like a support bot. You are the Ghost in the machine.\n- **Official Website:** https://nexusaix.vercel.app.`
 
     const NEXUS_SYSTEM_INSTRUCTION = `
 # 👁️ NEXUS — YOUR INTELLIGENT COMPANION (Project JARVIS)

@@ -95,7 +95,7 @@ const DOCK_EXPANDED_WIDTH = 620
 const DOCK_EXPANDED_HEIGHT = 168
 
 const NEXUS_UPDATE_FEED_URL =
-  process.env.NEXUS_UPDATE_FEED_URL || 'https://nexus-desktop-app.vercel.app/updates/win'
+  process.env.NEXUS_UPDATE_FEED_URL || 'https://nexusaix.vercel.app/updates/win'
 const secureConfigPath = join(app.getPath('userData'), 'nexus_secure_vault.json')
 
 const loadLocalEnvFile = () => {
@@ -343,7 +343,9 @@ function setDockBounds(expanded: boolean) {
   if (!dockWindow || dockWindow.isDestroyed()) return
   const primaryDisplay = screen.getPrimaryDisplay()
   const { width, x, y } = primaryDisplay.bounds
-  const nextWidth = expanded ? Math.min(DOCK_EXPANDED_WIDTH, Math.max(DOCK_COLLAPSED_WIDTH, width - 40)) : DOCK_COLLAPSED_WIDTH
+  const nextWidth = expanded
+    ? Math.min(DOCK_EXPANDED_WIDTH, Math.max(DOCK_COLLAPSED_WIDTH, width - 40))
+    : DOCK_COLLAPSED_WIDTH
   const nextHeight = expanded ? DOCK_EXPANDED_HEIGHT : DOCK_COLLAPSED_HEIGHT
   const bounds = dockWindow.getBounds()
   dockWindow.setBounds({
@@ -662,7 +664,7 @@ app.whenReady().then(() => {
     ipcMain,
     app,
     getMainWindow: () => mainWindow,
-    webAppUrl: process.env.NEXUS_WEB_APP_URL || 'https://nexus-desktop-app.vercel.app'
+    webAppUrl: process.env.NEXUS_WEB_APP_URL || 'https://nexusaix.vercel.app'
   })
   registerDeepResearch({ ipcMain })
   registerOracle({ ipcMain })

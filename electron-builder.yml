@@ -67,5 +67,4 @@ appImage:
 npmRebuild: false
 publish:
   provider: generic
-  url: https://nexus-desktop-app.vercel.app/updates/win
-
+  url: https://nexusaix.vercel.app/updates/win
