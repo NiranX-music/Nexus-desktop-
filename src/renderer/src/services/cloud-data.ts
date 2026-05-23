@@ -1,5 +1,7 @@
 import { nexusSupabase } from '@renderer/lib/supabase'
 
+import { getNexusRoleForEmail } from './profile-roles'
+
 export type NexusCloudValue = Record<string, unknown> | string | number | boolean | null
 
 export type NexusCloudDataRow<T = NexusCloudValue> = {
@@ -68,13 +70,14 @@ export const bootstrapCloudAccount = async () => {
     user.email?.split('@')[0] ||
     'Nexus Operator'
 
-  const profile = {
+  const profile: Record<string, unknown> = {
     id: user.id,
     email: user.email,
     display_name: displayName,
     avatar_url: user.user_metadata?.avatar_url || null,
     updated_at: new Date().toISOString()
   }
+  if (getNexusRoleForEmail(user.email) === 'admin') profile.role = 'admin'
 
   await nexusSupabase.from('nexus_profiles').upsert(profile, { onConflict: 'id' })
 

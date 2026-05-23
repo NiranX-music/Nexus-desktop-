@@ -67,6 +67,8 @@ import { createWhiteboardPayload, publishWhiteboardWrite } from '@renderer/servi
 export type NexusVoiceStatus = {
   isConnected: boolean
   isSpeaking: boolean
+  isRecovering: boolean
+  wantsLiveSession: boolean
 }
 
 export class GeminiLiveService {
@@ -80,6 +82,11 @@ export class GeminiLiveService {
   private isMicMuted: boolean = false
   private isDisconnecting: boolean = false
   private forceClosedByUser: boolean = false
+  private keepAliveRequested: boolean = false
+  private reconnectTimer: number | null = null
+  private reconnectAttempt: number = 0
+  private reconnecting: boolean = false
+  private readonly maxReconnectDelayMs = 30000
 
   private nextStartTime: number = 0
   public model: string = normalizeGeminiLiveModel(localStorage.getItem('nexus_default_ai_model'))
@@ -100,6 +107,14 @@ export class GeminiLiveService {
   constructor() {
     this.apiKey = ''
     localStorage.setItem('nexus_default_ai_model', this.model)
+  }
+
+  get wantsLiveSession(): boolean {
+    return this.keepAliveRequested
+  }
+
+  get isRecovering(): boolean {
+    return this.reconnecting || this.reconnectTimer !== null
   }
 
   setMute(muted: boolean) {
@@ -172,6 +187,66 @@ export class GeminiLiveService {
     }
   }
 
+  private clearReconnectTimer() {
+    if (!this.reconnectTimer) return
+    window.clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = null
+  }
+
+  private shouldRetryLiveError(message: string) {
+    const lower = message.toLowerCase()
+    return ![
+      'no_api_key',
+      'api key not valid',
+      'invalid api key',
+      'unauthorized',
+      'permission denied',
+      'forbidden',
+      'microphone access denied',
+      '401',
+      '403'
+    ].some((fatal) => lower.includes(fatal))
+  }
+
+  private scheduleReconnect(reason: string) {
+    if (this.forceClosedByUser || !this.keepAliveRequested) return
+
+    if (!this.shouldRetryLiveError(reason)) {
+      this.keepAliveRequested = false
+      this.setLastSessionError(reason)
+      return
+    }
+
+    this.clearReconnectTimer()
+    const delay = Math.min(
+      1000 * Math.pow(2, Math.min(this.reconnectAttempt, 5)),
+      this.maxReconnectDelayMs
+    )
+    this.reconnectAttempt += 1
+
+    window.dispatchEvent(
+      new CustomEvent('nexus-session-reconnecting', {
+        detail: { reason, attempt: this.reconnectAttempt, delay }
+      })
+    )
+
+    this.reconnectTimer = window.setTimeout(async () => {
+      this.reconnectTimer = null
+      if (this.forceClosedByUser || !this.keepAliveRequested) return
+
+      this.reconnecting = true
+      try {
+        await this.connect()
+      } catch (error: any) {
+        const message = error?.message || 'Gemini Live reconnect failed.'
+        localStorage.setItem('nexus_last_session_error', message)
+        this.scheduleReconnect(message)
+      } finally {
+        this.reconnecting = false
+      }
+    }, delay)
+  }
+
   private normalizeLiveApiError(message: string) {
     const lower = message.toLowerCase()
     const looksLikeUnsupportedModel =
@@ -186,7 +261,7 @@ export class GeminiLiveService {
     this.model = normalizeGeminiLiveModel(null)
     localStorage.setItem('nexus_default_ai_model', this.model)
 
-    return `Selected Gemini Live voice model is not enabled for this API key. Nexus switched the default voice model to Gemini 2.5 Flash Native Audio Latest. Start the agent again.`
+    return `Selected Gemini Live voice model is not enabled for this API key. Nexus switched the default voice model to Gemini 2.5 Flash Native Audio Latest and will reopen the voice session automatically.`
   }
 
   private removeForceSpeakListener() {
@@ -237,10 +312,16 @@ export class GeminiLiveService {
   }
 
   async connect(): Promise<void> {
+    const reconnectAttempt = this.reconnectAttempt
+    const wasReconnecting = this.reconnecting
+    this.clearReconnectTimer()
+
     if (this.socket || this.audioContext || this.mediaStream) {
       this.disconnect()
+      if (wasReconnecting) this.reconnectAttempt = reconnectAttempt
       await new Promise((resolve) => setTimeout(resolve, 250))
     }
+    this.keepAliveRequested = true
     this.forceClosedByUser = false
     this.isDisconnecting = false
 
@@ -256,6 +337,7 @@ export class GeminiLiveService {
     localStorage.setItem('nexus_default_ai_model', this.model)
 
     if (!this.apiKey || this.apiKey === '') {
+      this.keepAliveRequested = false
       throw new Error('NO_API_KEY')
     }
 
@@ -367,9 +449,14 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
         window.clearTimeout(startupTimeout)
         localStorage.setItem('nexus_last_session_error', message)
         try {
-          this.socket?.close()
+          if (this.socket) {
+            this.socket.onclose = null
+            this.socket.onerror = null
+            this.socket.close()
+          }
         } catch {}
         this.cleanupAfterRemoteClose()
+        this.scheduleReconnect(message)
         reject(new Error(message))
         return true
       }
@@ -1474,15 +1561,24 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
           )
           localStorage.setItem('nexus_last_session_error', message)
           if (rejectStartup?.(message)) return
-          window.dispatchEvent(new CustomEvent('nexus-session-error', { detail: message }))
           this.cleanupAfterRemoteClose()
+          if (this.keepAliveRequested && this.shouldRetryLiveError(message)) {
+            this.scheduleReconnect(message)
+          } else {
+            this.keepAliveRequested = false
+            window.dispatchEvent(new CustomEvent('nexus-session-error', { detail: message }))
+          }
           return
         }
 
         if (data.setupComplete) {
           this.isConnected = true
+          this.reconnectAttempt = 0
+          this.reconnecting = false
           this.startAppWatcher()
           this.sendDeferredSessionContext()
+          localStorage.removeItem('nexus_last_session_error')
+          window.dispatchEvent(new CustomEvent('nexus-session-reconnected'))
           resolveStartup?.()
           return
         }
@@ -1837,7 +1933,13 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
           `Gemini Live closed (${event.code || 'unknown'}).`
         localStorage.setItem('nexus_last_session_error', message)
         if (rejectStartup?.(message)) return
+        this.cleanupAfterRemoteClose()
+        if (this.keepAliveRequested && this.shouldRetryLiveError(message)) {
+          this.scheduleReconnect(message)
+          return
+        }
         window.dispatchEvent(new CustomEvent('nexus-session-error', { detail: message }))
+        return
       }
       this.cleanupAfterRemoteClose()
     }
@@ -1961,7 +2063,7 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
       source.connect(this.workletNode)
       this.workletNode.connect(this.audioContext.destination)
     } catch (err) {
-      alert('Microphone access denied or failed to initialize.')
+      throw new Error('Microphone access denied or failed to initialize.')
     }
   }
 
@@ -2003,7 +2105,9 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
     const emit = () =>
       listener({
         isConnected: this.isConnected,
-        isSpeaking: this.activeAudioNodes.length > 0
+        isSpeaking: this.activeAudioNodes.length > 0,
+        isRecovering: this.isRecovering,
+        wantsLiveSession: this.keepAliveRequested
       })
 
     emit()
@@ -2040,6 +2144,10 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
   }
 
   disconnect(): void {
+    this.keepAliveRequested = false
+    this.clearReconnectTimer()
+    this.reconnectAttempt = 0
+    this.reconnecting = false
     this.forceClosedByUser = true
     this.isDisconnecting = true
     this.removeForceSpeakListener()

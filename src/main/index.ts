@@ -83,6 +83,7 @@ let mainWindow: BrowserWindow | null = null
 let dockWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isOverlayMode = false
+let isQuitting = false
 let dockCollapseTimer: NodeJS.Timeout | null = null
 let updateDownloadPromise: Promise<Array<string>> | null = null
 let downloadedUpdateInfo: { version: string; releaseNotes: string } | null = null
@@ -242,8 +243,14 @@ function createWindow(): void {
     if (mainWindow) mainWindow.show()
   })
 
+  mainWindow.on('close', (event) => {
+    if (isQuitting) return
+    event.preventDefault()
+    hideDesktopApp()
+  })
+
   ipcMain.on('window-min', () => mainWindow?.minimize())
-  ipcMain.on('window-close', () => mainWindow?.close())
+  ipcMain.on('window-close', () => hideDesktopApp())
   ipcMain.on('window-max', () => {
     if (mainWindow?.isMaximized()) mainWindow.unmaximize()
     else mainWindow?.maximize()
@@ -358,6 +365,16 @@ function showDesktopApp() {
   mainWindow.focus()
 }
 
+function hideDesktopApp() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  mainWindow.hide()
+}
+
+function requestAppQuit() {
+  isQuitting = true
+  app.quit()
+}
+
 function createTray() {
   if (tray) return
   const image = nativeImage.createFromPath(icon).resize({ width: 16, height: 16 })
@@ -371,7 +388,7 @@ function createTray() {
       { type: 'separator' },
       { label: 'Open Desktop App', click: () => showDesktopApp() },
       { type: 'separator' },
-      { label: 'Quit App', click: () => app.quit() }
+      { label: 'Quit App', click: () => requestAppQuit() }
     ])
   )
   tray.on('click', () => createDockWindow())
@@ -741,6 +758,7 @@ app.whenReady().then(() => {
       }
 
       setImmediate(() => {
+        isQuitting = true
         app.removeAllListeners('window-all-closed')
         autoUpdater.quitAndInstall(false, true)
       })
@@ -788,7 +806,7 @@ app.whenReady().then(() => {
     if (command === 'open-dock') createDockWindow()
     else if (command === 'close-dock') dockWindow?.hide()
     else if (command === 'open-desktop') showDesktopApp()
-    else if (command === 'quit-app') app.quit()
+    else if (command === 'quit-app') requestAppQuit()
     else sendDockCommand(command, payload)
   })
 
@@ -798,11 +816,12 @@ app.whenReady().then(() => {
 })
 
 app.on('will-quit', () => {
+  isQuitting = true
   globalShortcut.unregisterAll()
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
+  if (isQuitting && process.platform !== 'darwin') {
     app.quit()
   }
 })

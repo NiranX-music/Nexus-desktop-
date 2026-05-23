@@ -10,6 +10,7 @@ import { useAuthStore } from './store/auth-store'
 import AuthInitializer from './auth/AuthToken'
 import IndexRoot from './IndexRoot'
 import NexusDock from './components/NexusDock'
+import AnalyticsTracker from './components/AnalyticsTracker'
 
 class SystemErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -115,7 +116,6 @@ const AppRouter = () => {
         }
       />
 
-
       <Route
         path="/lock"
         element={
@@ -149,6 +149,7 @@ createRoot(document.getElementById('root')!).render(
     <SystemErrorBoundary>
       <HashRouter>
         <AuthInitializer />
+        <AnalyticsTracker />
         <AppRouter />
       </HashRouter>
     </SystemErrorBoundary>

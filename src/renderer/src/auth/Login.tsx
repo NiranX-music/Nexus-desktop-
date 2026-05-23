@@ -18,7 +18,11 @@ import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../store/auth-store'
 import { configureCloudSupabase } from '../lib/supabase'
 import { normalizeCloudAuthUser, persistPreferredDesktopAuthMode } from '../services/auth-session'
-import { bootstrapCloudAccount, saveCloudData, syncLocalSettingsToCloud } from '../services/cloud-data'
+import {
+  bootstrapCloudAccount,
+  saveCloudData,
+  syncLocalSettingsToCloud
+} from '../services/cloud-data'
 
 type Mode = 'signin' | 'create'
 
@@ -73,7 +77,9 @@ export default function LoginPage() {
     try {
       const supabase = configureCloudSupabase()
       if (!supabase) {
-        throw new Error('Supabase is not configured for this build. Add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.')
+        throw new Error(
+          'Supabase is not configured for this build. Add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.'
+        )
       }
 
       const normalizedEmail = email.trim().toLowerCase()
@@ -269,8 +275,8 @@ export default function LoginPage() {
             <div className="mb-4 p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/20 flex items-start gap-3">
               <ShieldCheck className="w-6 h-6 text-emerald-400 shrink-0 mt-0.5" />
               <p className="text-xs text-zinc-300 font-mono leading-relaxed">
-                Supabase Auth protects sign-in while Nexus stores profile, settings, and memory
-                rows under your account.
+                Supabase Auth protects sign-in while Nexus stores profile, settings, and memory rows
+                under your account.
               </p>
             </div>
 
@@ -332,7 +338,7 @@ export default function LoginPage() {
                   onChange={(event) => setPassword(event.target.value)}
                   autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
                   className="w-full h-11 bg-black/70 border border-white/15 rounded-xl px-4 text-sm text-white outline-none focus:border-emerald-400/70 focus:bg-emerald-950/10"
-                  placeholder="Minimum 6 characters"
+                  placeholder="Minimum 8 characters"
                 />
               </label>
 

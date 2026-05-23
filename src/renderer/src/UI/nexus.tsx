@@ -15,11 +15,13 @@ import {
   RiGlobalLine,
   RiPencilLine,
   RiDashboardLine,
-  RiVideoLine
+  RiVideoLine,
+  RiUserLine
 } from 'react-icons/ri'
 import { getSystemStatus } from '@renderer/services/system-info'
 import { getHistory } from '@renderer/services/nexus-ai-brain'
 import { nexusService } from '@renderer/services/nexus-voice-ai'
+import { trackSiteVisit } from '@renderer/services/analytics'
 import ViewSkeleton from '@renderer/components/ViewSkelrton'
 
 import DashboardView from '../views/Dashboard'
@@ -31,6 +33,7 @@ const WorkFlowEditorView = lazy(() => import('../views/WorkFlowEditor'))
 const AiChatView = lazy(() => import('../views/AiChat'))
 const NotesView = lazy(() => import('../views/Notes'))
 const SettingsView = lazy(() => import('../views/Settings'))
+const ProfileView = lazy(() => import('../views/Profile'))
 const GalleryView = lazy(() => import('../views/Gallery'))
 const BrowserControlView = lazy(() => import('../views/BrowserControl'))
 const WhiteboardView = lazy(() => import('../views/Whiteboard'))
@@ -87,6 +90,7 @@ const NEXUS = (props: NexusProps) => {
 
   const tabs = [
     { id: 'DASHBOARD', icon: <RiDashboardLine />, label: 'Agent' },
+    { id: 'PROFILE', icon: <RiUserLine />, label: 'Profile' },
     { id: 'AI CHAT', icon: <RiChatSmile3Line />, label: 'AI Chat' },
     { id: 'Macros', icon: <RiBrainLine />, label: 'Macros' },
     { id: 'Apps', icon: <RiFolderOpenLine />, label: 'Apps' },
@@ -103,6 +107,8 @@ const NEXUS = (props: NexusProps) => {
     const pageMap: Record<string, string> = {
       agent: 'DASHBOARD',
       dashboard: 'DASHBOARD',
+      profile: 'PROFILE',
+      account: 'PROFILE',
       chat: 'AI CHAT',
       'ai chat': 'AI CHAT',
       macros: 'Macros',
@@ -194,7 +200,20 @@ const NEXUS = (props: NexusProps) => {
 
     window.electron.ipcRenderer.on('mobile-command', handleMobileCommand)
     return () => window.electron.ipcRenderer.removeAllListeners('mobile-command')
-  }, [props.isSystemActive, props.isSystemStarting, props.isMicMuted, props.toggleMic, props.toggleSystem])
+  }, [
+    props.isSystemActive,
+    props.isSystemStarting,
+    props.isMicMuted,
+    props.toggleMic,
+    props.toggleSystem
+  ])
+
+  useEffect(() => {
+    void trackSiteVisit(`nexus-tab:${activeTab}`, {
+      surface: 'nexus-tab',
+      tab: activeTab
+    }).catch(() => {})
+  }, [activeTab])
 
   return (
     <div className="nexus-shell-bg nexus-shell-scan h-screen w-full text-zinc-100 font-sans overflow-hidden select-none flex flex-col relative pb-5">
@@ -292,6 +311,7 @@ const NEXUS = (props: NexusProps) => {
               toggleMic={props.toggleMic}
             />
           )}
+          {activeTab === 'PROFILE' && <ProfileView />}
           {activeTab === 'Macros' && <WorkFlowEditorView />}
           {activeTab === 'Apps' && <AppsView />}
           {activeTab === 'BROWSER CONTROL' && (

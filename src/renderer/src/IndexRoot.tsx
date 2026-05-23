@@ -61,6 +61,13 @@ const IndexRoot = () => {
       }
     })
     const handleSessionError = (event: any) => {
+      if (nexusService.wantsLiveSession) {
+        setIsSystemActive(true)
+        setIsSystemStarting(nexusService.isRecovering)
+        setIsMicMuted(false)
+        nexusService.setMute(false)
+        return
+      }
       setIsSystemStarting(false)
       setIsSystemActive(false)
       setIsMicMuted(true)
@@ -69,11 +76,27 @@ const IndexRoot = () => {
       const message = event.detail || 'Gemini Live session closed.'
       alert(`AI session stopped: ${message}`)
     }
+    const handleSessionReconnecting = () => {
+      setIsSystemActive(true)
+      setIsSystemStarting(true)
+      setIsMicMuted(false)
+      nexusService.setMute(false)
+    }
+    const handleSessionReconnected = () => {
+      setIsSystemActive(true)
+      setIsSystemStarting(false)
+      setIsMicMuted(false)
+      nexusService.setMute(false)
+    }
     window.addEventListener('nexus-session-error', handleSessionError)
+    window.addEventListener('nexus-session-reconnecting', handleSessionReconnecting)
+    window.addEventListener('nexus-session-reconnected', handleSessionReconnected)
     return () => {
       window.electron.ipcRenderer.removeAllListeners('overlay-mode')
       window.electron.ipcRenderer.removeAllListeners('dock-command')
       window.removeEventListener('nexus-session-error', handleSessionError)
+      window.removeEventListener('nexus-session-reconnecting', handleSessionReconnecting)
+      window.removeEventListener('nexus-session-reconnected', handleSessionReconnected)
     }
   }, [isSystemActive, isSystemStarting, isMicMuted])
 
@@ -102,8 +125,16 @@ const IndexRoot = () => {
 
   useEffect(() => {
     const watchdog = setInterval(() => {
+      if (nexusService.isConnected && isSystemStarting) {
+        setIsSystemStarting(false)
+        return
+      }
       if (isSystemStarting) return
       if (isSystemActive && !nexusService.isConnected) {
+        if (nexusService.wantsLiveSession) {
+          setIsSystemStarting(nexusService.isRecovering)
+          return
+        }
         setIsSystemActive(false)
         setIsMicMuted(true)
         stopVision()
@@ -130,14 +161,26 @@ const IndexRoot = () => {
           alert(
             '⚠️ CRITICAL ERROR: Gemini API Key is missing. Please enter it in the Command Center Vault (Settings Tab).'
           )
-        } else {
+          nexusService.disconnect()
+        } else if (/microphone access denied/i.test(err.message || '')) {
           alert(`Connection failed: ${err.message}`)
+          nexusService.disconnect()
+        } else {
+          if (nexusService.wantsLiveSession && nexusService.isRecovering) {
+            setIsSystemActive(true)
+            setIsMicMuted(false)
+            nexusService.setMute(false)
+          } else {
+            alert(`Connection failed: ${err.message}`)
+          }
         }
-        setIsSystemActive(false)
-        setIsMicMuted(true)
-        nexusService.setMute(true)
+        if (!nexusService.wantsLiveSession) {
+          setIsSystemActive(false)
+          setIsMicMuted(true)
+          nexusService.setMute(true)
+        }
       } finally {
-        setIsSystemStarting(false)
+        setIsSystemStarting(nexusService.isRecovering)
       }
     } else {
       setIsSystemStarting(false)

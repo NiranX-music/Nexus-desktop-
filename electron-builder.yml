@@ -11,8 +11,11 @@ files:
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json,credentials.json}'
   - '!dist/**'
+  - '!dist-fresh/**'
+  - '!dist-trial/**'
   - '!Nexus AI EXE/**'
   - '!Desktop app EXE files/**'
+  - '!Setup files/**'
   - '!External models/**'
 asarUnpack:
   - resources/**
