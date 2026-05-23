@@ -260,7 +260,7 @@ export class GeminiLiveService {
     }
 
     let cloudUser = {
-      name: localStorage.getItem('nexus_user_name') || 'Harsh',
+      name: localStorage.getItem('nexus_user_name') || 'Operator',
       email: 'Not linked'
     }
 
@@ -284,7 +284,7 @@ ${activePersonality}
 
 ## ⛓️ MULTI-TASKING & TOOL CHAINING (CRITICAL)
 You are capable of complex, multi-step workflows. If the user gives a complex command, call the tools in sequence.
-- **Example:** "Nexus, find my code and send it to Harsh on WhatsApp."
+- **Example:** "Nexus, find my code and send it on WhatsApp."
   1. Call 'read_directory' or 'search_files'.
   2. Once you have the info, call 'send_whatsapp' with the content.
 
@@ -1063,7 +1063,7 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
                         source_path: {
                           type: 'STRING',
                           description:
-                            'The absolute file path on the PC (e.g., "C:/Users/Harsh/Desktop/document.pdf").'
+                            'The absolute file path on the PC (e.g., "C:/Users/Operator/Desktop/document.pdf").'
                         },
                         dest_path: {
                           type: 'STRING',
@@ -1418,7 +1418,7 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
                         base_directory: {
                           type: 'STRING',
                           description:
-                            'The absolute path of the root folder being sorted (e.g., "C:\\Users\\Harsh\\Downloads").'
+                            'The absolute path of the root folder being sorted (e.g., "C:\\Users\\Operator\\Downloads").'
                         },
                         files_to_sort: {
                           type: 'ARRAY',
