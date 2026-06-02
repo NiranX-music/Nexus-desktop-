@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useRef, useState } from 'react'
+import { ChangeEvent, FormEvent, useEffect, useRef, useState } from 'react'
 import {
   RiRobot2Line,
   RiSendPlane2Line,
@@ -6,7 +6,10 @@ import {
   RiVolumeUpLine,
   RiStopCircleLine,
   RiMicLine,
-  RiMicOffLine
+  RiMicOffLine,
+  RiAttachment2,
+  RiFileTextLine,
+  RiCloseLine
 } from 'react-icons/ri'
 import MarkdownMath from '@renderer/components/MarkdownMath'
 import {
@@ -26,6 +29,13 @@ import {
 import { nexusService } from '@renderer/services/nexus-voice-ai'
 
 type ChatMessage = { role: 'user' | 'assistant'; content: string }
+
+type ChatAttachment = {
+  name: string
+  mimeType: string
+  size: number
+  data: string
+}
 
 interface AiChatViewProps {
   isSystemActive: boolean
@@ -47,6 +57,65 @@ const cleanSpeechText = (text: string) =>
     .replace(/[*_#>~]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
+
+const ATTACHMENT_MIME_BY_EXTENSION: Record<string, string> = {
+  pdf: 'application/pdf',
+  txt: 'text/plain',
+  md: 'text/markdown',
+  csv: 'text/csv',
+  json: 'application/json',
+  js: 'text/javascript',
+  jsx: 'text/javascript',
+  ts: 'text/typescript',
+  tsx: 'text/typescript',
+  html: 'text/html',
+  css: 'text/css',
+  xml: 'application/xml',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  bmp: 'image/bmp',
+  svg: 'image/svg+xml',
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  m4a: 'audio/mp4',
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  mov: 'video/quicktime',
+  zip: 'application/zip'
+}
+
+const guessAttachmentMimeType = (file: File) => {
+  if (file.type) return file.type
+  const extension = file.name.split('.').pop()?.toLowerCase()
+  return (extension && ATTACHMENT_MIME_BY_EXTENSION[extension]) || 'application/octet-stream'
+}
+
+const formatAttachmentSize = (bytes: number) => {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+const readFileAsBase64 = async (file: File) => {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize))
+  }
+  return window.btoa(binary)
+}
+
+const fileToGeminiAttachment = async (file: File): Promise<ChatAttachment> => ({
+  name: file.name,
+  mimeType: guessAttachmentMimeType(file),
+  size: file.size,
+  data: await readFileAsBase64(file)
+})
 
 export default function AiChatView({
   isSystemActive,
@@ -70,6 +139,7 @@ export default function AiChatView({
     }
   ])
   const [input, setInput] = useState('')
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([])
   const [isSending, setIsSending] = useState(false)
   const [error, setError] = useState('')
   const [voiceReplies, setVoiceReplies] = useState(
@@ -80,6 +150,7 @@ export default function AiChatView({
     localStorage.getItem('nexus_voice_profile') === 'FEMALE' ? 'Aoede' : 'Puck'
   )
   const scrollRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -196,22 +267,52 @@ export default function AiChatView({
     }
   }
 
+  const handleAttachFiles = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || [])
+    if (!files.length) return
+
+    setError('')
+    try {
+      const encoded = await Promise.all(files.map(fileToGeminiAttachment))
+      setAttachments((current) => [...current, ...encoded])
+    } catch (err: any) {
+      setError(err?.message || 'Unable to attach selected files.')
+    } finally {
+      event.target.value = ''
+    }
+  }
+
+  const removeAttachment = (index: number) => {
+    setAttachments((current) => current.filter((_, attachmentIndex) => attachmentIndex !== index))
+  }
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const prompt = input.trim()
-    if (!prompt || isSending) return
+    const selectedAttachments = attachments
+    if ((!prompt && selectedAttachments.length === 0) || isSending) return
 
     setError('')
     setInput('')
-    const nextMessages = [...messages, { role: 'user' as const, content: prompt }]
+    setAttachments([])
+    const attachmentSummary = selectedAttachments.length
+      ? `\n\nAttached files:\n${selectedAttachments
+          .map((attachment) => `- ${attachment.name} (${formatAttachmentSize(attachment.size)})`)
+          .join('\n')}`
+      : ''
+    const userContent = `${prompt || 'Please review the attached file(s).'}${attachmentSummary}`
+    const nextMessages = [...messages, { role: 'user' as const, content: userContent }]
     setMessages(nextMessages)
     setIsSending(true)
-    await saveMessage('user', prompt)
+    await saveMessage('user', userContent)
 
     try {
+      const requestProvider = selectedAttachments.length ? 'gemini' : provider
+      const requestModel =
+        selectedAttachments.length && provider !== 'gemini' ? DEFAULT_AI_GATEWAY_MODEL.gemini : model
       const result = await window.electron.ipcRenderer.invoke('ai-gateway:chat', {
-        provider,
-        model,
+        provider: requestProvider,
+        model: requestModel,
         modelsByProvider: {
           gemini: DEFAULT_AI_GATEWAY_MODEL.gemini,
           groq: localStorage.getItem('nexus_default_groq_model') || DEFAULT_AI_GATEWAY_MODEL.groq,
@@ -220,6 +321,8 @@ export default function AiChatView({
             DEFAULT_AI_GATEWAY_MODEL.fireworks
         },
         system: systemPrompt,
+        fallbackOrder: selectedAttachments.length ? ['gemini'] : undefined,
+        attachments: selectedAttachments,
         messages: nextMessages
           .filter((message) => !message.content.includes('Nexus AI Chat is online'))
           .slice(-12)
@@ -228,15 +331,17 @@ export default function AiChatView({
       if (!result?.success) throw new Error(result?.error || 'AI gateway request failed.')
 
       const response =
-        result.provider && result.provider !== provider
+        selectedAttachments.length && provider !== 'gemini'
+          ? `[Files sent with Gemini]\n\n${result.content || 'No response returned.'}`
+          : result.provider && result.provider !== provider
           ? `[Fallback: ${result.provider}]\n\n${result.content || 'No response returned.'}`
           : result.content || 'No response returned.'
       setMessages((current) => [...current, { role: 'assistant', content: response }])
       await saveMessage('nexus', response)
 
-      if (isWhiteboardCommand(prompt)) {
+      if (isWhiteboardCommand(userContent)) {
         publishWhiteboardWrite(
-          createWhiteboardPayload(extractWhiteboardQuestion(prompt), response, 'chat')
+          createWhiteboardPayload(extractWhiteboardQuestion(userContent), response, 'chat')
         )
       }
 
@@ -395,11 +500,52 @@ export default function AiChatView({
             </div>
           ) : null}
 
+          {attachments.length > 0 ? (
+            <div className="flex flex-wrap gap-2 border-t border-white/10 bg-white/[0.03] px-3 py-2">
+              {attachments.map((attachment, index) => (
+                <div
+                  key={`${attachment.name}-${attachment.size}-${index}`}
+                  className="flex max-w-full items-center gap-2 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-[11px] text-emerald-100"
+                >
+                  <RiFileTextLine className="shrink-0" />
+                  <span className="max-w-[220px] truncate">{attachment.name}</span>
+                  <span className="shrink-0 text-emerald-100/60">
+                    {formatAttachmentSize(attachment.size)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removeAttachment(index)}
+                    className="rounded border border-white/10 p-1 text-emerald-100/70 transition hover:bg-white/10 hover:text-white"
+                    title="Remove attachment"
+                  >
+                    <RiCloseLine />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
           <form onSubmit={handleSubmit} className="flex gap-2 border-t border-white/10 p-3">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={handleAttachFiles}
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isSending}
+              className="rounded-lg border border-emerald-400/25 bg-emerald-400/10 px-4 py-3 text-emerald-200 transition hover:bg-emerald-300 hover:text-black disabled:opacity-40"
+              title="Attach files for Gemini"
+            >
+              <RiAttachment2 />
+            </button>
             <input
               value={input}
               onChange={(event) => setInput(event.target.value)}
-              placeholder="Ask Nexus AI..."
+              placeholder={attachments.length ? 'Ask about the attached files...' : 'Ask Nexus AI...'}
               className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/70 px-4 py-3 text-sm text-zinc-100 outline-none focus:border-emerald-400/50"
             />
             <button
@@ -412,7 +558,7 @@ export default function AiChatView({
               <RiVolumeUpLine />
             </button>
             <button
-              disabled={isSending || !input.trim()}
+              disabled={isSending || (!input.trim() && attachments.length === 0)}
               className="rounded-lg bg-emerald-500 px-5 py-3 text-black disabled:opacity-40"
               title="Send to AI chat gateway"
             >
