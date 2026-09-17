@@ -70,6 +70,9 @@ import registerLockSystem from './security/lock-system'
 import { autoUpdater } from 'electron-updater'
 
 app.commandLine.appendSwitch('use-fake-ui-for-media-stream')
+app.commandLine.appendSwitch('enable-gpu-rasterization')
+app.commandLine.appendSwitch('enable-zero-copy')
+app.commandLine.appendSwitch('enable-features', 'CanvasOopRasterization')
 app.setName('Nexus AI 9.1')
 app.setPath('userData', join(app.getPath('appData'), 'Nexus AI 9.1'))
 
