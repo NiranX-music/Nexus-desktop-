@@ -476,6 +476,19 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
     }
     window.addEventListener('ai-force-speak', this.forceSpeakHandler)
 
+    if (window.electron?.ipcRenderer) {
+      window.electron.ipcRenderer.removeAllListeners('visual-sentry-triggered')
+      window.electron.ipcRenderer.on('visual-sentry-triggered', (_event: any, data: any) => {
+        if (data?.message) {
+          window.dispatchEvent(
+            new CustomEvent('ai-force-speak', {
+              detail: `[VISUAL SENTRY ALERT]: ${data.message} Please update the user on what happened.`
+            })
+          )
+        }
+      })
+    }
+
     this.socket.onerror = () => {
       const message = 'Gemini Live socket error. Check the API key, Live model, and network.'
       localStorage.setItem('nexus_last_session_error', message)
@@ -1627,6 +1640,67 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
                       properties: {}
                     }
                   },
+                  {
+                    name: 'grounded_screen_click',
+                    description:
+                      'Execute a precision mouse click on the desktop screen using normalized coordinates (0-1000 scale where 0,0 is top-left and 1000,1000 is bottom-right). Use to click buttons, icons, or UI elements.',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {
+                        x: {
+                          type: 'NUMBER',
+                          description: 'Normalized X coordinate from 0 to 1000.'
+                        },
+                        y: {
+                          type: 'NUMBER',
+                          description: 'Normalized Y coordinate from 0 to 1000.'
+                        },
+                        button: {
+                          type: 'STRING',
+                          enum: ['left', 'right'],
+                          description: 'Mouse button to click. Default is "left".'
+                        },
+                        double_click: {
+                          type: 'BOOLEAN',
+                          description: 'Whether to perform a double-click.'
+                        }
+                      },
+                      required: ['x', 'y']
+                    }
+                  },
+                  {
+                    name: 'watch_screen_region',
+                    description:
+                      'Deploy the Visual Sentry to monitor the desktop screen for changes or until an active process/build stabilizes. Notifies the user autonomously when complete.',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {
+                        label: {
+                          type: 'STRING',
+                          description:
+                            'Description of the target process or screen region being watched (e.g. "Build compilation", "Download progress").'
+                        },
+                        trigger_on_stabilize: {
+                          type: 'BOOLEAN',
+                          description:
+                            'Set true to alert when screen stops changing (e.g. build finished). Set false to alert on any change.'
+                        },
+                        max_wait_seconds: {
+                          type: 'NUMBER',
+                          description: 'Maximum seconds to monitor before timing out (default 120).'
+                        }
+                      },
+                      required: ['label']
+                    }
+                  },
+                  {
+                    name: 'stop_screen_watch',
+                    description: 'Stop any active Visual Sentry background screen monitoring.',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {}
+                    }
+                  },
                   ...mcpDeclarations
                 ]
               }
@@ -1723,6 +1797,25 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
               } else if (call.name === 'check_fleet_status') {
                 const status = await getFleetStatus()
                 result = JSON.stringify(status)
+              } else if (call.name === 'grounded_screen_click') {
+                const clickRes = await window.electron?.ipcRenderer?.invoke('visual:ground-and-click', {
+                  x: call.args.x,
+                  y: call.args.y,
+                  isNormalized: true,
+                  button: call.args.button || 'left',
+                  doubleClick: !!call.args.double_click
+                })
+                result = clickRes?.success ? clickRes.message : `Click failed: ${clickRes?.error}`
+              } else if (call.name === 'watch_screen_region') {
+                const watchRes = await window.electron?.ipcRenderer?.invoke('sentry:start-watch', {
+                  label: call.args.label,
+                  triggerOnStabilize: call.args.trigger_on_stabilize ?? false,
+                  maxWaitSec: call.args.max_wait_seconds || 120
+                })
+                result = watchRes?.success ? watchRes.message : `Sentry error: ${watchRes?.message}`
+              } else if (call.name === 'stop_screen_watch') {
+                const stopRes = await window.electron?.ipcRenderer?.invoke('sentry:stop-watch')
+                result = stopRes?.stopped ? 'Visual sentry stopped.' : 'No active visual sentry was running.'
               } else if (call.name === 'open_app') {
                 result = await openApp(call.args.app_name)
               } else if (call.name === 'close_app') {
