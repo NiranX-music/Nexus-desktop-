@@ -408,6 +408,8 @@ export default function registerPerformanceGovernor({
   let settings = loadSettings(app)
   let history: OptimizerSample[] = []
   let monitorTimer: ReturnType<typeof setInterval> | null = null
+  let sustainedPressureCount = 0
+  let lastProactiveAlertAt = 0
 
   const broadcastPolicy = () => {
     getMainWindow()?.webContents.send('optimizer-policy-updated', {
@@ -427,6 +429,32 @@ export default function registerPerformanceGovernor({
       settings = { ...settings, mode: 'balanced', reduceAnimations: true }
       saveSettings(app, settings)
       broadcastPolicy()
+    }
+
+    // Proactive sustained pressure detection
+    const isCritical = current.pressure === 'hot' || current.cpuUsage >= 90 || current.memoryUsage >= 92
+    if (isCritical) {
+      sustainedPressureCount += 1
+      const now = Date.now()
+      if (sustainedPressureCount >= 2 && now - lastProactiveAlertAt > 180_000) {
+        lastProactiveAlertAt = now
+        const issue =
+          current.cpuUsage >= 90
+            ? `CPU load is critical at ${current.cpuUsage}%`
+            : current.memoryUsage >= 92
+            ? `System memory is tight at ${current.memoryUsage}%`
+            : 'System thermal and compute pressure is elevated'
+        getMainWindow()?.webContents.send('system-proactive-alert', {
+          type: 'performance_pressure',
+          level: 'warning',
+          message: `${issue}. Nexus has optimized background animations and governor budgets.`,
+          cpu: current.cpuUsage,
+          memory: current.memoryUsage,
+          timestamp: now
+        })
+      }
+    } else {
+      sustainedPressureCount = Math.max(0, sustainedPressureCount - 1)
     }
 
     return {
