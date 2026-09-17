@@ -487,6 +487,17 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
           )
         }
       })
+
+      window.electron.ipcRenderer.removeAllListeners('system-proactive-alert')
+      window.electron.ipcRenderer.on('system-proactive-alert', (_event: any, data: any) => {
+        if (data?.message) {
+          window.dispatchEvent(
+            new CustomEvent('ai-force-speak', {
+              detail: `[SYSTEM GOVERNOR ALERT]: ${data.message} Advise the operator briefly.`
+            })
+          )
+        }
+      })
     }
 
     this.socket.onerror = () => {
@@ -1701,6 +1712,70 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
                       properties: {}
                     }
                   },
+                  {
+                    name: 'store_knowledge_fact',
+                    description:
+                      'Store a permanent episodic fact or relational knowledge into the Nexus Cognitive Knowledge Graph. Format facts as Subject-Predicate-Object triples (e.g. subject="User", predicate="prefers_editor", object="VS Code").',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {
+                        subject: {
+                          type: 'STRING',
+                          description: 'The entity or concept (e.g. "User", "Project Alpha", "Nexus OS").'
+                        },
+                        predicate: {
+                          type: 'STRING',
+                          description: 'The relationship or attribute (e.g. "prefers_theme", "tech_stack", "deadline").'
+                        },
+                        object: {
+                          type: 'STRING',
+                          description: 'The target entity, property, or value.'
+                        },
+                        context: {
+                          type: 'STRING',
+                          description: 'Optional additional context or source note.'
+                        }
+                      },
+                      required: ['subject', 'predicate', 'object']
+                    }
+                  },
+                  {
+                    name: 'query_knowledge_graph',
+                    description:
+                      'Query the Nexus Cognitive Knowledge Graph for remembered facts, user preferences, system configurations, and entity relationships.',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {
+                        query: {
+                          type: 'STRING',
+                          description: 'Optional freeform search query across entities, attributes, and context.'
+                        },
+                        subject: {
+                          type: 'STRING',
+                          description: 'Optional specific subject to filter by.'
+                        },
+                        predicate: {
+                          type: 'STRING',
+                          description: 'Optional specific predicate to filter by.'
+                        }
+                      }
+                    }
+                  },
+                  {
+                    name: 'explore_entity_connections',
+                    description:
+                      'Traverse the Cognitive Knowledge Graph to find all connected incoming and outgoing relationships for an entity or concept.',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {
+                        entity: {
+                          type: 'STRING',
+                          description: 'The entity or concept name to explore (e.g. "User", "Nexus OS").'
+                        }
+                      },
+                      required: ['entity']
+                    }
+                  },
                   ...mcpDeclarations
                 ]
               }
@@ -1816,6 +1891,45 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
               } else if (call.name === 'stop_screen_watch') {
                 const stopRes = await window.electron?.ipcRenderer?.invoke('sentry:stop-watch')
                 result = stopRes?.stopped ? 'Visual sentry stopped.' : 'No active visual sentry was running.'
+              } else if (call.name === 'store_knowledge_fact') {
+                const kgRes = await window.electron?.ipcRenderer?.invoke('kg:upsert-fact', {
+                  subject: call.args.subject,
+                  predicate: call.args.predicate,
+                  object: call.args.object,
+                  context: call.args.context
+                })
+                result = kgRes?.success
+                  ? `Stored knowledge triple: (${kgRes.fact.subject}) -[${kgRes.fact.predicate}]-> (${kgRes.fact.object})`
+                  : `Failed to store fact: ${kgRes?.error}`
+              } else if (call.name === 'query_knowledge_graph') {
+                const kgRes = await window.electron?.ipcRenderer?.invoke('kg:query', {
+                  query: call.args.query,
+                  subject: call.args.subject,
+                  predicate: call.args.predicate
+                })
+                if (!kgRes?.success || !kgRes.facts || kgRes.facts.length === 0) {
+                  result = 'No matching facts found in Cognitive Knowledge Graph.'
+                } else {
+                  result = kgRes.facts
+                    .map(
+                      (f: any) =>
+                        `• (${f.subject}) -[${f.predicate}]-> (${f.object})${f.context ? ` [Context: ${f.context}]` : ''}`
+                    )
+                    .join('\n')
+                }
+              } else if (call.name === 'explore_entity_connections') {
+                const kgRes = await window.electron?.ipcRenderer?.invoke('kg:get-related', call.args.entity)
+                if (!kgRes?.success) {
+                  result = `Error exploring entity: ${kgRes?.error}`
+                } else {
+                  const outbound = (kgRes.outbound || []).map((t: any) => `-> [${t.predicate}] -> ${t.object}`)
+                  const inbound = (kgRes.inbound || []).map((t: any) => `<- [${t.predicate}] <- ${t.subject}`)
+                  result =
+                    `Connected knowledge for "${call.args.entity}":\n` +
+                    `Connected Entities: ${(kgRes.connectedEntities || []).join(', ') || 'None'}\n` +
+                    `Outbound relationships:\n${outbound.join('\n') || 'None'}\n` +
+                    `Inbound relationships:\n${inbound.join('\n') || 'None'}`
+                }
               } else if (call.name === 'open_app') {
                 result = await openApp(call.args.app_name)
               } else if (call.name === 'close_app') {
@@ -1871,15 +1985,21 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
               } else if (call.name === 'take_screenshot') {
                 result = await takeScreenshot()
               } else if (call.name === 'click_on_screen') {
-                const { width, height } = await getScreenSize()
-
-                const normX = call.args.x
-                const normY = call.args.y
-
-                const realX = Math.round((normX / 1000) * width)
-                const realY = Math.round((normY / 1000) * height)
-
-                result = await clickOnCoordinate(realX, realY)
+                const clickRes = await window.electron?.ipcRenderer?.invoke('visual:ground-and-click', {
+                  x: call.args.x,
+                  y: call.args.y,
+                  isNormalized: true
+                })
+                if (clickRes?.success) {
+                  result = clickRes.message
+                } else {
+                  const { width, height } = await getScreenSize()
+                  const normX = call.args.x
+                  const normY = call.args.y
+                  const realX = Math.round((normX / 1000) * width)
+                  const realY = Math.round((normY / 1000) * height)
+                  result = await clickOnCoordinate(realX, realY)
+                }
               } else if (call.name === 'scroll_screen')
                 result = await scrollScreen(call.args.direction, call.args.amount)
               else if (call.name === 'press_shortcut')
