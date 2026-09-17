@@ -100,21 +100,27 @@ const ParticleShell = ({
     material.size = THREE.MathUtils.lerp(material.size, size * (1 + volume * 2.2), 0.12)
     material.opacity = THREE.MathUtils.lerp(material.opacity, opacity + volume * 0.08, 0.08)
 
-    const positionAttr = points.geometry.getAttribute('position') as THREE.BufferAttribute
-    const current = positionAttr.array as Float32Array
+    // Adaptive Zero-CPU Idle: when quiet, skip heavy per-vertex math and use smooth transform breathing
+    if (volume > 0.015) {
+      const positionAttr = points.geometry.getAttribute('position') as THREE.BufferAttribute
+      const current = positionAttr.array as Float32Array
 
-    for (let i = 0; i < count; i++) {
-      const index = i * 3
-      const pulse = Math.sin(time * 1.45 + phases[i]) * turbulence
-      const ripple = Math.sin(time * 2.35 + originals[index + 1] * 3.1 + phases[i]) * 0.018
-      const expansion = 1 + pulse + ripple + volume * audioScale * weights[i]
+      for (let i = 0; i < count; i++) {
+        const index = i * 3
+        const pulse = Math.sin(time * 1.45 + phases[i]) * turbulence
+        const ripple = Math.sin(time * 2.35 + originals[index + 1] * 3.1 + phases[i]) * 0.018
+        const expansion = 1 + pulse + ripple + volume * audioScale * weights[i]
 
-      current[index] = originals[index] * expansion
-      current[index + 1] = originals[index + 1] * expansion
-      current[index + 2] = originals[index + 2] * expansion
+        current[index] = originals[index] * expansion
+        current[index + 1] = originals[index + 1] * expansion
+        current[index + 2] = originals[index + 2] * expansion
+      }
+
+      positionAttr.needsUpdate = true
+    } else {
+      const idleBreathing = 1 + Math.sin(time * 1.2) * 0.012
+      points.scale.setScalar(idleBreathing)
     }
-
-    positionAttr.needsUpdate = true
   })
 
   return (
@@ -349,8 +355,8 @@ const Sphere = () => {
   return (
     <Canvas
       camera={{ position: [0, 0, 5.2], fov: 45 }}
-      dpr={[1, 1.8]}
-      performance={{ min: 0.55 }}
+      dpr={[1, 1.5]}
+      performance={{ min: 0.5 }}
       gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
     >
       <color attach="background" args={['#020807']} />
