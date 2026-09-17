@@ -15,6 +15,7 @@ import OracleWidget from './Widgets/RagOrcaleWidget'
 import ResearchWidget from './Widgets/DeepResearch'
 import SemanticWidget from './Widgets/SematicSearch'
 import SmartDropZonesWidget from './Widgets/SmartZoneWidget'
+import AgentFleetWidget from './Widgets/AgentFleetWidget'
 import TitleBar from './components/Titlebar'
 
 export type VisionMode = 'camera' | 'screen' | 'none'
@@ -330,6 +331,7 @@ const IndexRoot = () => {
       <TerminalOverlay />
       <LiveCodingWidget />
       <ResearchWidget />
+      <AgentFleetWidget />
     </div>
   )
 }
