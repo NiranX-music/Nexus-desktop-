@@ -66,6 +66,7 @@ import { executeLockSystem } from '@renderer/handlers/LockSystem-handler'
 import { normalizeGeminiLiveModel } from '@renderer/config/gemini-models'
 import { createWhiteboardPayload, publishWhiteboardWrite } from '@renderer/services/whiteboard'
 import { getAllMcpTools, callMcpTool, listMcpServers } from './mcp-api'
+import { dispatchFleetTask, getFleetStatus, onFleetTaskComplete } from './agent-fleet-api'
 
 export type NexusVoiceStatus = {
   isConnected: boolean
@@ -1597,6 +1598,35 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
                       properties: {}
                     }
                   },
+                  {
+                    name: 'spawn_subagent',
+                    description:
+                      'Dispatch an autonomous background subagent from the Nexus Fleet to execute a long-running mission in parallel without blocking the voice session. Roles: "recon_scout" (research & intel), "code_architect" (code synthesis), "system_janitor" (workspace & cache cleanup), "sentry_watcher" (hardware & process monitoring).',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {
+                        role: {
+                          type: 'STRING',
+                          enum: ['recon_scout', 'code_architect', 'system_janitor', 'sentry_watcher'],
+                          description: 'The specialized subagent role to dispatch.'
+                        },
+                        directive: {
+                          type: 'STRING',
+                          description: 'The specific task directive or prompt for the subagent.'
+                        }
+                      },
+                      required: ['role', 'directive']
+                    }
+                  },
+                  {
+                    name: 'check_fleet_status',
+                    description:
+                      'Check the live status, active tasks, progress, and logs of all 4 autonomous subagents in the Nexus Fleet.',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {}
+                    }
+                  },
                   ...mcpDeclarations
                 ]
               }
@@ -1684,6 +1714,15 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
                 const toolName = call.name.replace(/^mcp_/, '')
                 const mcpRes = await callMcpTool(toolName, call.args)
                 result = mcpRes.success ? JSON.stringify(mcpRes.result) : `MCP Error: ${mcpRes.error}`
+              } else if (call.name === 'spawn_subagent') {
+                const secureKeys = await window.electron?.ipcRenderer?.invoke('secure-get-keys')
+                const geminiK = secureKeys?.geminiKey || this.apiKey
+                const groqK = secureKeys?.groqKey
+                void dispatchFleetTask(call.args.role, call.args.directive, geminiK, groqK)
+                result = `Autonomous subagent [${call.args.role}] dispatched in background with directive: "${call.args.directive}". Proceeding with live conversation while unit works.`
+              } else if (call.name === 'check_fleet_status') {
+                const status = await getFleetStatus()
+                result = JSON.stringify(status)
               } else if (call.name === 'open_app') {
                 result = await openApp(call.args.app_name)
               } else if (call.name === 'close_app') {
