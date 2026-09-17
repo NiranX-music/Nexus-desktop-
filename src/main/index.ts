@@ -52,6 +52,7 @@ import registerDeepResearch from './services/deep-research'
 import registerIssueReporter from './services/issue-reporter'
 import registerAiGateway from './services/ai-gateway'
 import registerMcpHandlers from './services/mcp-manager'
+import registerAgentFleet from './services/agent-fleet'
 import registerLanceVideo from './services/lance-video'
 import registerMobileCommandBridge from './services/mobile-command-bridge'
 import registerWidgetMaker from './auto/widget-manager'
@@ -662,6 +663,7 @@ app.whenReady().then(() => {
   registerWidgetMaker()
   registerAiGateway(ipcMain)
   registerMcpHandlers(ipcMain)
+  registerAgentFleet(ipcMain)
   registerLanceVideo(ipcMain)
   registerMobileCommandBridge({ app, getMainWindow: () => mainWindow })
   registerIssueReporter({
