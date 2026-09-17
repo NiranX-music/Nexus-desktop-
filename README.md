@@ -1,6 +1,6 @@
 <div align="center">
 
-![NEXUS Neural OS Documentation Banner](./assets/banner.jpeg)
+
 
 ## The Autonomous Neural OS Agent
 
