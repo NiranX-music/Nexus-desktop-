@@ -54,3 +54,48 @@ export const createFolder = async (path: string) => {
     return 'Error'
   }
 }
+
+export const patchFile = async (
+  filePath: string,
+  targetContent: string,
+  replacementContent: string,
+  allowMultiple = false,
+  createIfMissing = false
+) => {
+  try {
+    const res = await window.electron.ipcRenderer.invoke('patch-file', {
+      filePath,
+      targetContent,
+      replacementContent,
+      allowMultiple,
+      createIfMissing
+    })
+    if (res.success) {
+      return res.message || `✅ Successfully patched ${filePath}`
+    }
+    return `❌ Patch error: ${res.error}`
+  } catch (err) {
+    return `System Error: ${err}`
+  }
+}
+
+export const revertFileSnapshot = async (targetPath?: string) => {
+  try {
+    const res = await window.electron.ipcRenderer.invoke('time-machine-revert', targetPath)
+    if (res.success) {
+      return `⏪ Time Machine: ${res.message}`
+    }
+    return `❌ Revert failed: ${res.message}`
+  } catch (err) {
+    return `System Error: ${err}`
+  }
+}
+
+export const listFileSnapshots = async (limit = 20) => {
+  try {
+    return await window.electron.ipcRenderer.invoke('list-recent-snapshots', limit)
+  } catch (err) {
+    return []
+  }
+}
+

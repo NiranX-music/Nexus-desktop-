@@ -24,6 +24,8 @@ import registerSystemHandlers from './logic/get-system-info'
 import registerFileSearch from './logic/file-search'
 import registerFileOps from './logic/file-ops'
 import registerFileWrite from './logic/file-write'
+import registerFilePatcher from './logic/file-patch'
+import registerSnapshotHandlers from './logic/snapshot-manager'
 import registerFileRead from './logic/file-read'
 import registerFileOpen from './logic/file-open'
 import registerDirLoader from './logic/dir-load'
@@ -49,6 +51,7 @@ import registerOracle from './services/RAG-oracle'
 import registerDeepResearch from './services/deep-research'
 import registerIssueReporter from './services/issue-reporter'
 import registerAiGateway from './services/ai-gateway'
+import registerMcpHandlers from './services/mcp-manager'
 import registerLanceVideo from './services/lance-video'
 import registerMobileCommandBridge from './services/mobile-command-bridge'
 import registerWidgetMaker from './auto/widget-manager'
@@ -658,6 +661,7 @@ app.whenReady().then(() => {
   registerWebsiteBuilder()
   registerWidgetMaker()
   registerAiGateway(ipcMain)
+  registerMcpHandlers(ipcMain)
   registerLanceVideo(ipcMain)
   registerMobileCommandBridge({ app, getMainWindow: () => mainWindow })
   registerIssueReporter({
@@ -689,6 +693,8 @@ app.whenReady().then(() => {
   registerFileSearch(ipcMain)
   registerFileRead(ipcMain)
   registerFileWrite(ipcMain)
+  registerFilePatcher(ipcMain)
+  registerSnapshotHandlers(ipcMain)
   registerFileOps(ipcMain)
   registerFileScanner(ipcMain)
   registerSystemHandlers(ipcMain)

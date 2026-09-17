@@ -31,8 +31,10 @@ import {
   createFolder,
   manageFile,
   openFile,
+  patchFile,
   readDirectory,
   readFile,
+  revertFileSnapshot,
   writeFile
 } from '@renderer/functions/file-manager-api'
 import { closeApp, openApp, performWebSearch } from '@renderer/functions/apps-manager-api'
@@ -63,6 +65,7 @@ import { executeSmartDropZones } from '@renderer/functions/DropZone-handler-api'
 import { executeLockSystem } from '@renderer/handlers/LockSystem-handler'
 import { normalizeGeminiLiveModel } from '@renderer/config/gemini-models'
 import { createWhiteboardPayload, publishWhiteboardWrite } from '@renderer/services/whiteboard'
+import { getAllMcpTools, callMcpTool, listMcpServers } from './mcp-api'
 
 export type NexusVoiceStatus = {
   isConnected: boolean
@@ -491,6 +494,17 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
         this.userInputBuffer = ''
         this.rawAudioBuffer = []
         this.rawAudioBufferLength = 0
+
+        let mcpDeclarations: any[] = []
+        try {
+          const mcpTools = await getAllMcpTools()
+          mcpDeclarations = mcpTools.map((t) => ({
+            name: `mcp_${t.name.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
+            description: `[MCP: ${t.serverName}] ${t.description || t.name}`,
+            parameters: t.inputSchema?.type === 'OBJECT' ? t.inputSchema : { type: 'OBJECT', properties: {} }
+          }))
+        } catch {}
+
         const setupMsg = {
           setup: {
             model: this.model,
@@ -566,6 +580,44 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
                         content: { type: 'STRING', description: 'The text content to write.' }
                       },
                       required: ['file_name', 'content']
+                    }
+                  },
+                  {
+                    name: 'patch_file',
+                    description:
+                      'Safely edit an existing file by replacing a specific target chunk of code/text with new replacement text, preserving the rest of the file intact. Automatically creates a Time Machine snapshot.',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {
+                        file_path: {
+                          type: 'STRING',
+                          description: 'The absolute or relative path to the file.'
+                        },
+                        target_content: {
+                          type: 'STRING',
+                          description: 'The exact lines or block of text to replace.'
+                        },
+                        replacement_content: {
+                          type: 'STRING',
+                          description: 'The new replacement code or text.'
+                        }
+                      },
+                      required: ['file_path', 'target_content', 'replacement_content']
+                    }
+                  },
+                  {
+                    name: 'time_machine_revert',
+                    description:
+                      'Rollback a file or undo the last system modification using Nexus Time Machine snapshots. Use this when the user says "Undo that", "Revert the file", or "Restore my file".',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {
+                        file_path: {
+                          type: 'STRING',
+                          description:
+                            'Optional: Specific file to restore. If omitted, restores the most recent snapshot overall.'
+                        }
+                      }
                     }
                   },
                   {
@@ -1535,7 +1587,17 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
                       type: 'OBJECT',
                       properties: {}
                     }
-                  }
+                  },
+                  {
+                    name: 'list_mcp_servers',
+                    description:
+                      'List all configured Model Context Protocol (MCP) servers, their connection statuses, and available external tools.',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {}
+                    }
+                  },
+                  ...mcpDeclarations
                 ]
               }
             ],
@@ -1607,6 +1669,21 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
                 result = await readFile(call.args.file_path)
               } else if (call.name === 'write_file') {
                 result = await writeFile(call.args.file_name, call.args.content)
+              } else if (call.name === 'patch_file') {
+                result = await patchFile(
+                  call.args.file_path,
+                  call.args.target_content,
+                  call.args.replacement_content
+                )
+              } else if (call.name === 'time_machine_revert') {
+                result = await revertFileSnapshot(call.args.file_path)
+              } else if (call.name === 'list_mcp_servers') {
+                const servers = await listMcpServers()
+                result = JSON.stringify(servers)
+              } else if (call.name.startsWith('mcp_')) {
+                const toolName = call.name.replace(/^mcp_/, '')
+                const mcpRes = await callMcpTool(toolName, call.args)
+                result = mcpRes.success ? JSON.stringify(mcpRes.result) : `MCP Error: ${mcpRes.error}`
               } else if (call.name === 'open_app') {
                 result = await openApp(call.args.app_name)
               } else if (call.name === 'close_app') {

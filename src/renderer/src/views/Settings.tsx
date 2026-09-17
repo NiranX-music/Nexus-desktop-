@@ -23,8 +23,10 @@ import {
   RiDownloadCloud2Line,
   RiRocketLine,
   RiRobot2Line,
-  RiVideoLine
+  RiVideoLine,
+  RiToolsLine
 } from 'react-icons/ri'
+import McpSettingsTab from '@renderer/components/McpSettingsTab'
 import {
   DEFAULT_LIVE_GEMINI_MODEL,
   GEMINI_MODEL_OPTIONS,
@@ -46,7 +48,7 @@ interface SettingsProps {
   isSystemActive: boolean
 }
 
-type TabType = 'updates' | 'general' | 'keys' | 'security'
+type TabType = 'updates' | 'general' | 'keys' | 'mcp' | 'security'
 
 const liveGeminiModelOptions = GEMINI_MODEL_OPTIONS.filter((model) => model.live)
 
@@ -322,6 +324,12 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
               className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-3 text-xs font-bold tracking-widest rounded-lg transition-all duration-300 ${activeTab === 'keys' ? 'bg-white text-black shadow-md' : 'text-zinc-500 hover:text-white hover:bg-white/5'}`}
             >
               <RiPlugLine size={16} /> API KEYS
+            </button>
+            <button
+              onClick={() => setActiveTab('mcp')}
+              className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-3 text-xs font-bold tracking-widest rounded-lg transition-all duration-300 ${activeTab === 'mcp' ? 'bg-white text-black shadow-md' : 'text-zinc-500 hover:text-white hover:bg-white/5'}`}
+            >
+              <RiToolsLine size={16} /> MCP TOOLS
             </button>
             <button
               onClick={() => setActiveTab('security')}
@@ -862,6 +870,19 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                     )}
                   </div>
                 </div>
+              </motion.div>
+            )}
+
+            {activeTab === 'mcp' && (
+              <motion.div
+                key="mcp"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.2 }}
+                className="w-full"
+              >
+                <McpSettingsTab />
               </motion.div>
             )}
           </AnimatePresence>
