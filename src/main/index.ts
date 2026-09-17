@@ -28,6 +28,7 @@ import registerFilePatcher from './logic/file-patch'
 import registerSnapshotHandlers from './logic/snapshot-manager'
 import registerVisualGrounding from './logic/visual-grounding'
 import registerVisualSentry from './logic/visual-sentry'
+import registerKnowledgeGraph from './services/knowledge-graph'
 import registerFileRead from './logic/file-read'
 import registerFileOpen from './logic/file-open'
 import registerDirLoader from './logic/dir-load'
@@ -701,6 +702,7 @@ app.whenReady().then(() => {
   registerSnapshotHandlers(ipcMain)
   registerVisualGrounding(ipcMain)
   registerVisualSentry(ipcMain)
+  registerKnowledgeGraph({ ipcMain, app })
   registerFileOps(ipcMain)
   registerFileScanner(ipcMain)
   registerSystemHandlers(ipcMain)
