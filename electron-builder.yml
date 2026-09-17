@@ -17,6 +17,7 @@ files:
   - '!Desktop app EXE files/**'
   - '!Setup files/**'
   - '!External models/**'
+  - '!Offline PC files of Nexus/**'
 asarUnpack:
   - resources/**
   - node_modules/**/*.node
@@ -27,6 +28,7 @@ win:
   signAndEditExecutable: true
   target:
     - target: nsis
+    - target: portable
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
