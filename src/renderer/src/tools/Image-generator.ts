@@ -17,7 +17,7 @@ export const handleImageGeneration = async (prompt: string) => {
 
     const client = new InferenceClient(HF_API_KEY)
 
-    const imageBlob: any = await client.textToImage({
+    const imageBlob: any = await (client as any).textToImage({
       model: 'black-forest-labs/FLUX.1-schnell',
       inputs: prompt
     })
