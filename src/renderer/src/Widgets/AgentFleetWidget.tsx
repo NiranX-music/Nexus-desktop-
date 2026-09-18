@@ -8,7 +8,8 @@ import {
   RiCloseLine,
   RiTerminalBoxLine,
   RiArrowDownSLine,
-  RiArrowRightSLine
+  RiArrowRightSLine,
+  RiDeleteBinLine
 } from 'react-icons/ri'
 import {
   FleetAgentState,
@@ -22,7 +23,7 @@ import {
 const AGENT_ICONS: Record<AgentRole, any> = {
   recon_scout: RiRadarLine,
   code_architect: RiCodeSSlashLine,
-  system_janitor: RiBroomLine,
+  system_janitor: RiDeleteBinLine,
   sentry_watcher: RiShieldCheckLine
 }
 
