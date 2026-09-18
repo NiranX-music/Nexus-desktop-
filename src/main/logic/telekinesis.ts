@@ -1,15 +1,29 @@
 import { IpcMain, screen } from 'electron'
-import { windowManager } from 'node-window-manager'
+
+function getWindowManager() {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { windowManager } = require('node-window-manager')
+    return windowManager
+  } catch (e) {
+    console.warn('[Telekinesis] WindowManager native addon unavailable:', e)
+    return null
+  }
+}
 
 export default function registerTelekinesis({ ipcMain }: { ipcMain: IpcMain }) {
   ipcMain.handle('teleport-windows', async (_event, commands) => {
     try {
-      windowManager.requestAccessibility()
+      const wm = getWindowManager()
+      if (!wm) {
+        return { success: false, error: 'Window manager addon is not available.' }
+      }
+      wm.requestAccessibility()
 
       const primaryDisplay = screen.getPrimaryDisplay()
       const { width, height, x: screenX, y: screenY } = primaryDisplay.workArea
 
-      const openWindows = windowManager.getWindows()
+      const openWindows = wm.getWindows()
 
       for (const cmd of commands) {
         const validWindows = openWindows.filter(
