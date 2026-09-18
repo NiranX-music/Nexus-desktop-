@@ -250,8 +250,28 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => {
-    if (mainWindow) mainWindow.show()
+    if (mainWindow) {
+      mainWindow.show()
+      mainWindow.focus()
+    }
   })
+
+  mainWindow.webContents.on('did-fail-load', (_e, errorCode, errorDescription) => {
+    console.error('MainWindow failed to load:', errorCode, errorDescription)
+  })
+  mainWindow.webContents.on('console-message', (_e, _level, message) => {
+    console.log('[Renderer]', message)
+  })
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    console.error('Renderer process gone:', details)
+  })
+
+  setTimeout(() => {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+      mainWindow.show()
+      mainWindow.focus()
+    }
+  }, 1500)
 
   mainWindow.on('close', (event) => {
     if (isQuitting) return
@@ -326,6 +346,12 @@ function createDockWindow(): void {
   })
 
   loadRendererRoute(dockWindow, '/dock')
+
+  setTimeout(() => {
+    if (dockWindow && !dockWindow.isDestroyed() && !dockWindow.isVisible()) {
+      dockWindow.showInactive()
+    }
+  }, 1500)
 }
 
 function sendDockCommand(command: string, payload?: any) {
