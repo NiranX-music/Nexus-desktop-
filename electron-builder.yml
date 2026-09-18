@@ -3,6 +3,7 @@ productName: Nexus AI
 copyright: Copyright © 2026 Resolute Nexus
 directories:
   buildResources: build
+  output: Offline PC files of Nexus
 files:
   - '!**/.vscode/*'
   - '!src/*'
