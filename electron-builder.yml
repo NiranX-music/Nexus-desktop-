@@ -26,7 +26,7 @@ asarUnpack:
 win:
   executableName: nexus-ai
   icon: build/icon.ico
-  signAndEditExecutable: true
+  signAndEditExecutable: false
   target:
     - target: nsis
     - target: portable
