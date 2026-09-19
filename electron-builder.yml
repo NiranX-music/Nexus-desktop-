@@ -5,20 +5,11 @@ directories:
   buildResources: build
   output: dist
 files:
-  - '!**/.vscode/*'
-  - '!src/*'
-  - '!electron.vite.config.{js,ts,mjs,cjs}'
-  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
-  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
-  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json,credentials.json}'
-  - '!dist/**'
-  - '!dist-fresh/**'
-  - '!dist-trial/**'
-  - '!Nexus AI EXE/**'
-  - '!Desktop app EXE files/**'
-  - '!Setup files/**'
-  - '!External models/**'
-  - '!Offline PC files of Nexus/**'
+  - out/**/*
+  - build/icon.ico
+  - package.json
+  - '!**/node_modules/{monaco-editor,@xenova,three,@react-three,tldraw,@tldraw,katex,lucide-react,react-icons,recharts,reactflow,face-api.js,pdf-parse,mammoth,roughjs,xterm,xterm-addon-fit,tesseract.js}/**'
+  - '!**/*.{map,ts,tsx}'
 asarUnpack:
   - resources/**
   - node_modules/**/*.node
