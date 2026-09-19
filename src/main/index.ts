@@ -48,6 +48,10 @@ import registerPerformanceGovernor from './logic/performance-governor'
 import registerRealityHacker from './logic/reality-hacker'
 import registerNexusCoder from './services/nexus-coder'
 import registerTelekinesis from './logic/telekinesis'
+import registerWallpaperEngine from './logic/wallpaper-engine'
+import registerWhatsAppManager from './logic/whatsapp-manager'
+import registerDocForge from './logic/doc-forge'
+import registerFocusProtocol from './logic/focus-protocol'
 import registerPermanentMemory from './logic/permanent-memory'
 import registerWormhole from './services/wormhole'
 import registerOracle from './services/RAG-oracle'
@@ -736,6 +740,10 @@ app.whenReady().then(() => {
   registerFileScanner(ipcMain)
   registerSystemHandlers(ipcMain)
   registerIpcHandlers({ ipcMain, app })
+  registerWallpaperEngine(ipcMain)
+  registerWhatsAppManager(ipcMain)
+  registerDocForge(ipcMain)
+  registerFocusProtocol(ipcMain)
 
   ipcMain.handle('get-screen-source', async () => {
     const sources = await desktopCapturer.getSources({ types: ['screen'] })
