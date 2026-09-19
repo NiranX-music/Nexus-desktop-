@@ -91,6 +91,7 @@ if (process.defaultApp) {
 const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {
   app.quit()
+  process.exit(0)
 }
 
 let mainWindow: BrowserWindow | null = null
@@ -235,15 +236,22 @@ const downloadCheckedUpdate = async () => {
 }
 
 function createWindow(): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    showDesktopApp()
+    return
+  }
+
   mainWindow = new BrowserWindow({
     title: 'Nexus AI 9.1',
-    width: 1280,
-    height: 720,
+    width: 1440,
+    height: 900,
+    minWidth: 960,
+    minHeight: 600,
     show: false,
-    fullscreen: true,
     autoHideMenuBar: true,
     frame: false,
-    transparent: true,
+    backgroundColor: '#050505',
+    center: true,
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -254,7 +262,7 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => {
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.show()
       mainWindow.focus()
     }
@@ -275,19 +283,12 @@ function createWindow(): void {
       mainWindow.show()
       mainWindow.focus()
     }
-  }, 1500)
+  }, 1200)
 
   mainWindow.on('close', (event) => {
     if (isQuitting) return
     event.preventDefault()
     hideDesktopApp()
-  })
-
-  ipcMain.on('window-min', () => mainWindow?.minimize())
-  ipcMain.on('window-close', () => hideDesktopApp())
-  ipcMain.on('window-max', () => {
-    if (mainWindow?.isMaximized()) mainWindow.unmaximize()
-    else mainWindow?.maximize()
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -402,7 +403,9 @@ function showDesktopApp() {
     createWindow()
     return
   }
-  if (mainWindow.isMinimized()) mainWindow.restore()
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore()
+  }
   mainWindow.show()
   mainWindow.focus()
 }
@@ -436,12 +439,9 @@ function createTray() {
   tray.on('click', () => createDockWindow())
 }
 
-app.on('second-instance', (event, commandLine) => {
-  if (!event) {
-  }
-  if (mainWindow) {
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.focus()
+app.on('second-instance', (_event, commandLine) => {
+  showDesktopApp()
+  if (mainWindow && !mainWindow.isDestroyed()) {
     const url = commandLine.find((arg) => arg.startsWith('nexus://'))
     if (url) {
       mainWindow.webContents.send('oauth-callback', url)
@@ -850,6 +850,13 @@ app.whenReady().then(() => {
       }
     })()
   }, 1800)
+
+  ipcMain.on('window-min', () => mainWindow?.minimize())
+  ipcMain.on('window-close', () => hideDesktopApp())
+  ipcMain.on('window-max', () => {
+    if (mainWindow?.isMaximized()) mainWindow.unmaximize()
+    else mainWindow?.maximize()
+  })
 
   globalShortcut.register('CommandOrControl+Shift+I', () => toggleOverlayMode())
   ipcMain.on('toggle-overlay', () => toggleOverlayMode())
