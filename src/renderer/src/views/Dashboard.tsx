@@ -22,7 +22,11 @@ import {
   RiPauseCircleLine,
   RiPlayCircleLine,
   RiSkipBackLine,
-  RiSkipForwardLine
+  RiSkipForwardLine,
+  RiPaintBrushLine,
+  RiWhatsappLine,
+  RiFilePpt2Line,
+  RiShieldCheckLine
 } from 'react-icons/ri'
 import { FaMemory } from 'react-icons/fa6'
 import { GiTinker } from 'react-icons/gi'
@@ -852,6 +856,42 @@ export default function DashboardView({
               >
                 {isMicMuted ? <RiMicOffLine size={20} /> : <RiMicLine size={20} />}
                 <span className="hidden sm:inline">{isMicMuted ? 'Muted' : 'Voice'}</span>
+              </button>
+            </div>
+
+            {/* Neural Systems Quick-Launch HUD Bar */}
+            <div className="flex items-center justify-between gap-2 px-1">
+              <button
+                onClick={() => window.dispatchEvent(new CustomEvent('show-wallpaper-forge'))}
+                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-white/5 bg-white/[0.02] hover:border-emerald-500/40 hover:bg-emerald-500/10 text-[9px] font-mono text-zinc-400 hover:text-emerald-300 transition uppercase tracking-wider"
+                title="AI Wallpaper Engine"
+              >
+                <RiPaintBrushLine size={13} className="text-emerald-400" />
+                <span>Wallpaper</span>
+              </button>
+              <button
+                onClick={() => window.dispatchEvent(new CustomEvent('show-whatsapp'))}
+                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-white/5 bg-white/[0.02] hover:border-cyan-500/40 hover:bg-cyan-500/10 text-[9px] font-mono text-zinc-400 hover:text-cyan-300 transition uppercase tracking-wider"
+                title="WhatsApp Automation"
+              >
+                <RiWhatsappLine size={13} className="text-cyan-400" />
+                <span>WhatsApp</span>
+              </button>
+              <button
+                onClick={() => window.dispatchEvent(new CustomEvent('show-doc-forge'))}
+                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-white/5 bg-white/[0.02] hover:border-purple-500/40 hover:bg-purple-500/10 text-[9px] font-mono text-zinc-400 hover:text-purple-300 transition uppercase tracking-wider"
+                title="Document & Slide Forge"
+              >
+                <RiFilePpt2Line size={13} className="text-purple-400" />
+                <span>Doc Forge</span>
+              </button>
+              <button
+                onClick={() => window.dispatchEvent(new CustomEvent('show-focus'))}
+                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-white/5 bg-white/[0.02] hover:border-amber-500/40 hover:bg-amber-500/10 text-[9px] font-mono text-zinc-400 hover:text-amber-300 transition uppercase tracking-wider"
+                title="Deep Work Focus Protocol"
+              >
+                <RiShieldCheckLine size={13} className="text-amber-400" />
+                <span>Focus</span>
               </button>
             </div>
 
