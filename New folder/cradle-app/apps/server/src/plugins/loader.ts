@@ -1,0 +1,922 @@
+import { existsSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
+import { basename, delimiter, dirname, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+
+import type { Disposable, PluginDescriptor, PluginLayer, PluginManifest, PluginSourceDescriptor, PluginSourceKind } from '@cradle/plugin-sdk'
+import { evaluatePluginPermissionPolicy } from '@cradle/plugin-sdk/permissions'
+import type { ServerPluginRouteContext } from '@cradle/plugin-sdk/server'
+import { Elysia } from 'elysia'
+
+import { AppError } from '../errors/app-error'
+import { createChildLogger } from '../logging/logger'
+import {
+  stopAllConversationBridgeConnections,
+  stopConversationBridgeConnectionsForOwner,
+} from '../modules/conversation-bridge/runtime-supervisor'
+import type { ManagedResourceDescriptor } from '../modules/managed-resources/service'
+import { readPluginActivationPolicy, setPluginActivationPolicy } from './activation-policy'
+import type { PluginHostServices } from './context'
+import { createServerPluginContext } from './context'
+import { resetConversationBridgeAdapterRegistry } from './conversation-adapter-registry'
+import type { DiscoveredPluginPackage } from './discovery'
+import { discoverPluginPackages } from './discovery'
+import { resetExternalIssueSourceRegistry } from './external-issue-source-registry'
+import { resetExternalProviderSourceRegistry } from './external-provider-source-registry'
+import { calculatePluginPackageChecksum } from './package-checksum'
+import { listPluginProcesses, stopAllPluginProcesses, stopPluginProcesses } from './process-registry'
+import { resetProviderExtensionRegistry } from './provider-extension-registry'
+import { clearPluginRoutes, dispatchPluginRoute, resetPluginRouteRegistry } from './route-registry'
+import {
+  classifyPluginSource,
+  createInvalidPluginDescriptor,
+  createPluginDescriptor,
+  getPluginDescriptor,
+  listPluginDescriptors,
+  registerPluginDescriptor,
+  resetPluginRuntimeRegistry,
+  setPluginActivationState,
+  setPluginLayerState,
+  setPluginSourceDescriptor,
+  unregisterPluginDescriptor,
+} from './runtime-registry'
+import { resetPluginSkillRegistry } from './skill-registry'
+import type { PluginSourceInstallerOptions } from './source-installer'
+import {
+  deletePluginSourceCache,
+  inspectPluginSourceDirectory,
+  resolvePluginSourceDirectory,
+} from './source-installer'
+import { listPluginSources, readPluginSource } from './source-registry'
+import { createPluginStaticServer, rewritePluginWebBundleImports } from './static-server'
+import { grantPluginPermissions, grantPluginTrust } from './trust-grants'
+import { evaluatePluginSourceTrust, isExternalLocalCodeSource, readFabricNodeExposure } from './trust-policy'
+import {
+  executePluginUninstall,
+  hasPluginUninstallHandler,
+  inspectPluginUninstall,
+  resetPluginUninstallRegistry,
+} from './uninstall-registry'
+import { validatePluginModule } from './validation'
+
+interface ActivePlugin {
+  deactivate?: () => void | Promise<void>
+  subscriptions: Disposable[]
+}
+
+const layerNames: PluginLayer[] = ['server', 'web', 'desktop']
+const activePlugins = new Map<string, ActivePlugin>()
+const discoveredPluginManifests = new Map<string, PluginManifest>()
+const shadowedDevelopmentPlugins = new Map<string, {
+  manifest: PluginManifest
+  source: PluginSourceDescriptor
+}>()
+const logger = createChildLogger({ module: 'plugins' })
+let pluginHostServices: PluginHostServices | undefined
+
+interface PluginRouteDispatcherContext {
+  params: {
+    'routeSegment': string
+    '*'?: string
+  }
+  request: Request
+  body: unknown
+  query: Record<string, unknown>
+  headers: Record<string, string | undefined>
+  set: {
+    status?: number | string
+    headers: Record<string, string | number>
+  }
+}
+
+interface PluginDiscoverySource {
+  pluginsDir: string
+  kind?: PluginSourceKind
+  trustMarketplaceGrants?: boolean
+  persistedSourceId?: string
+}
+
+interface PackageWithSource {
+  pkg: DiscoveredPluginPackage
+  source: PluginSourceDescriptor
+  persistedSourceId?: string
+}
+
+function readPrimaryPluginSourceKind(): PluginSourceKind | undefined {
+  const value = process.env.CRADLE_PLUGINS_SOURCE_KIND
+  if (value === 'workspaceDev' || value === 'bundledResource' || value === 'externalLocal') {
+    return value
+  }
+  return process.env.CRADLE_PLUGINS_DIR ? 'externalLocal' : undefined
+}
+
+function readMarketplacePluginsDir(): string | undefined {
+  const value = process.env.CRADLE_MARKETPLACE_PLUGINS_DIR?.trim()
+  return value ? resolve(value) : undefined
+}
+
+async function getPluginDiscoverySources(defaultPluginsDir: string): Promise<PluginDiscoverySource[]> {
+  const marketplacePluginsDir = readMarketplacePluginsDir()
+  const externalDirs = (process.env.CRADLE_EXTERNAL_PLUGINS_DIRS ?? '')
+    .split(delimiter)
+    .map(dir => dir.trim())
+    .filter(Boolean)
+
+  const sources: PluginDiscoverySource[] = []
+  const addSource = (pluginsDir: string, kind?: PluginSourceKind): void => {
+    const normalizedDir = resolve(pluginsDir)
+    if (sources.some(source => resolve(source.pluginsDir) === normalizedDir)) { return }
+    sources.push({
+      pluginsDir,
+      kind,
+      trustMarketplaceGrants: marketplacePluginsDir === normalizedDir,
+    })
+  }
+
+  addSource(defaultPluginsDir, readPrimaryPluginSourceKind())
+  for (const pluginsDir of externalDirs) {
+    addSource(pluginsDir, 'externalLocal')
+  }
+  for (const source of listPluginSources()) {
+    try {
+      const pluginsDir = await inspectPluginSourceDirectory(source)
+      if (!pluginsDir) {
+        logger.warn('plugin source cache is unresolved', {
+          sourceId: source.id,
+          kind: source.kind,
+          location: source.location,
+        })
+        continue
+      }
+      const normalizedDir = resolve(pluginsDir)
+      if (sources.some(existing => resolve(existing.pluginsDir) === normalizedDir)) { continue }
+      sources.push({
+        pluginsDir,
+        kind: 'externalLocal',
+        persistedSourceId: source.id,
+      })
+    }
+    catch (error) {
+      logger.error('plugin source resolution failed', {
+        sourceId: source.id,
+        kind: source.kind,
+        location: source.location,
+        error,
+      })
+    }
+  }
+  return sources
+}
+
+async function discoverPackagesFromSources(
+  sources: PluginDiscoverySource[],
+  options: { fabricNodeExposed: boolean },
+): Promise<PackageWithSource[]> {
+  const packages: PackageWithSource[] = []
+  for (const source of sources) {
+    const discovered = await discoverPluginPackages(source.pluginsDir)
+    for (const pkg of discovered) {
+      const baseSource: PluginSourceDescriptor = {
+        ...classifyPluginSource(pkg.packageDir, source.pluginsDir, source.kind),
+        provenance: pkg.provenance,
+        grantedPermissions: source.trustMarketplaceGrants ? pkg.provenance?.grantedPermissions : undefined,
+      }
+      const pluginName = pkg.manifest?.name ?? `invalid:${basename(pkg.packageDir)}`
+      let trustedSource: PluginSourceDescriptor
+      let trustedPackage = pkg
+      try {
+        trustedSource = await evaluatePluginSourceTrust({
+          pluginName,
+          source: baseSource,
+          manifest: pkg.manifest,
+          fabricNodeExposed: options.fabricNodeExposed,
+        })
+      }
+      catch (error) {
+        trustedSource = {
+          ...baseSource,
+          checksum: await calculatePluginPackageChecksum(pkg.packageDir).catch(() => undefined),
+          trusted: false,
+          reason: error instanceof Error ? error.message : String(error),
+        }
+        trustedPackage = {
+          ...pkg,
+          manifest: undefined,
+          error: trustedSource.reason,
+        }
+      }
+      packages.push({
+        pkg: trustedPackage,
+        source: trustedSource,
+        persistedSourceId: source.persistedSourceId,
+      })
+    }
+  }
+  return packages
+}
+
+function isPathWithin(path: string, parent: string): boolean {
+  const normalizedPath = resolve(path)
+  const normalizedParent = resolve(parent)
+  return normalizedPath === normalizedParent || normalizedPath.startsWith(`${normalizedParent}/`)
+}
+
+function disposeSubscriptions(name: string, subscriptions: Disposable[]): void {
+  for (const subscription of [...subscriptions].reverse()) {
+    try {
+      subscription.dispose()
+    }
+ catch (err) {
+      logger.error('plugin subscription disposal failed', { plugin: name, err })
+    }
+  }
+  subscriptions.length = 0
+}
+
+function toDisabledReason(reason: string | null | undefined): string {
+  return reason?.trim() || 'Disabled by user.'
+}
+
+function refreshPluginActivationState(pluginName: string): boolean {
+  const policy = readPluginActivationPolicy(pluginName)
+  setPluginActivationState(pluginName, policy
+    ? {
+        enabled: policy.enabled,
+        source: 'user',
+        reason: policy.reason ?? undefined,
+        updatedAt: policy.updatedAt,
+      }
+    : { enabled: true, source: 'default' })
+  return policy?.enabled ?? true
+}
+
+function initializePersistedSourceActivationPolicy(
+  manifest: PluginManifest,
+  persistedSourceId: string | undefined,
+): void {
+  if (!persistedSourceId || readPluginActivationPolicy(manifest.name)) {
+    return
+  }
+  setPluginActivationPolicy(manifest.name, {
+    enabled: false,
+    reason: 'External plugin source was added. Enable the plugin to trust and activate it.',
+  })
+}
+
+function markPluginLayersDisabled(manifest: PluginManifest, reason: string): void {
+  for (const layer of layerNames) {
+    if (manifest.cradle[layer] && getPluginDescriptor(manifest.name)?.layers[layer].status !== 'invalid') {
+      setPluginLayerState(manifest.name, layer, 'disabled', reason)
+    }
+  }
+}
+
+function resetDiscoveredPluginLayers(manifest: PluginManifest): void {
+  for (const layer of layerNames) {
+    if (manifest.cradle[layer] && getPluginDescriptor(manifest.name)?.layers[layer].status !== 'invalid') {
+      setPluginLayerState(manifest.name, layer, 'discovered')
+    }
+  }
+}
+
+async function refreshPluginSourceTrust(manifest: PluginManifest): Promise<PluginSourceDescriptor | null> {
+  const descriptor = getPluginDescriptor(manifest.name)
+  if (!descriptor) { return null }
+  try {
+    const source = await evaluatePluginSourceTrust({
+      pluginName: descriptor.identity,
+      source: descriptor.source,
+      manifest,
+    })
+    setPluginSourceDescriptor(descriptor.identity, source)
+    return source
+  }
+  catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    const source = {
+      ...descriptor.source,
+      trusted: false,
+      reason: message,
+    }
+    setPluginSourceDescriptor(descriptor.identity, source)
+    markPluginLayersDisabled(manifest, message)
+    return source
+  }
+}
+
+async function preparePluginWebLayer(manifest: PluginManifest): Promise<void> {
+  if (!manifest.cradle.web) { return }
+  const descriptor = getPluginDescriptor(manifest.name)
+  if (!descriptor || descriptor.layers.web.status === 'invalid') { return }
+  setPluginLayerState(manifest.name, 'web', 'discovered')
+  const source = await refreshPluginSourceTrust(manifest)
+  if (source && !source.trusted) {
+    setPluginLayerState(manifest.name, 'web', 'disabled', source.reason ?? 'Plugin source is not trusted.')
+    return
+  }
+  const entryPath = resolve(manifest.packageDir, manifest.cradle.web)
+  if (!existsSync(entryPath)) {
+    setPluginLayerState(manifest.name, 'web', 'failed', `Web entry is missing: ${manifest.cradle.web}`)
+    logger.error('plugin web entry missing', { plugin: manifest.name, entryPath })
+    return
+  }
+  const permissionDecision = evaluatePluginPermissionPolicy(descriptor, 'web', process.env)
+  if (!permissionDecision.allowed) {
+    setPluginLayerState(manifest.name, 'web', 'disabled', permissionDecision.reason)
+    logger.warn('plugin web layer disabled by permission policy', {
+      plugin: manifest.name,
+      missingRequiredPermissions: permissionDecision.missingRequiredPermissions,
+    })
+  }
+}
+
+async function deactivatePluginServerLayer(pluginName: string): Promise<void> {
+  const plugin = activePlugins.get(pluginName)
+  activePlugins.delete(pluginName)
+  if (plugin) {
+    disposeSubscriptions(pluginName, plugin.subscriptions)
+  }
+  if (plugin) {
+    const { suspendProviderExtensionsForOwner } = await import('../modules/provider-extensions/service')
+    await suspendProviderExtensionsForOwner(pluginName)
+  }
+  try {
+    await stopConversationBridgeConnectionsForOwner(pluginName)
+  }
+  catch (err) {
+    logger.error('conversation bridge plugin runtime stop failed', { plugin: pluginName, err })
+  }
+  if (plugin) {
+    try {
+      await plugin.deactivate?.()
+    }
+ catch (err) {
+      logger.error('plugin deactivation failed', { plugin: pluginName, err })
+    }
+ finally {
+      try {
+        await stopPluginProcesses(pluginName)
+      }
+      catch (err) {
+        logger.error('plugin managed process stop failed', { plugin: pluginName, err })
+      }
+    }
+  }
+  clearPluginRoutes(pluginName)
+}
+
+async function activatePluginServerLayer(manifest: PluginManifest, moduleRevision?: number): Promise<void> {
+  if (!manifest.cradle.server) { return }
+  const descriptor = getPluginDescriptor(manifest.name)
+  if (!descriptor || descriptor.layers.server.status === 'invalid') { return }
+  if (activePlugins.has(manifest.name)) { return }
+  const source = await refreshPluginSourceTrust(manifest)
+  if (source && !source.trusted) {
+    setPluginLayerState(manifest.name, 'server', 'disabled', source.reason ?? 'Plugin source is not trusted.')
+    logger.warn('plugin server layer disabled by source trust policy', {
+      plugin: manifest.name,
+      reason: source.reason,
+    })
+    return
+  }
+
+  const permissionDecision = evaluatePluginPermissionPolicy(descriptor, 'server', process.env)
+  if (!permissionDecision.allowed) {
+    setPluginLayerState(manifest.name, 'server', 'disabled', permissionDecision.reason)
+    logger.warn('plugin server layer disabled by permission policy', {
+      plugin: manifest.name,
+      missingRequiredPermissions: permissionDecision.missingRequiredPermissions,
+    })
+    return
+  }
+
+  const entryPath = resolve(manifest.packageDir, manifest.cradle.server)
+  let subscriptions: Disposable[] = []
+  let deactivate: (() => void | Promise<void>) | undefined
+  try {
+    setPluginLayerState(manifest.name, 'server', 'activating')
+    const moduleUrl = new URL(pathToFileURL(entryPath).href)
+    if (moduleRevision !== undefined) {
+      moduleUrl.searchParams.set('cradleDevRevision', String(moduleRevision))
+    }
+    const mod = await import(moduleUrl.href)
+    validatePluginModule(mod, manifest.name, 'server')
+    deactivate = mod.deactivate as (() => void | Promise<void>) | undefined
+
+    const ctx = createServerPluginContext(manifest, {
+      routeSegment: descriptor.routeSegment,
+      hostServices: pluginHostServices,
+    })
+    subscriptions = ctx.subscriptions
+    await mod.activate(ctx)
+
+    const { refreshExternalProviderSourcesForOwner } = await import('../modules/external-provider-sources/service')
+    void refreshExternalProviderSourcesForOwner(manifest.name)
+      .then((results) => {
+        for (const result of results) {
+          if (result.status === 'error') {
+            logger.warn('plugin external provider source refresh failed', {
+              plugin: manifest.name,
+              sourceKey: result.sourceKey,
+              message: result.message ?? 'Unknown sync error',
+            })
+          }
+        }
+      })
+      .catch((err) => {
+        logger.warn('plugin external provider source refresh failed', {
+          plugin: manifest.name,
+          err,
+        })
+      })
+
+    const { reconcileProviderExtensionsForOwner } = await import('../modules/provider-extensions/service')
+    await reconcileProviderExtensionsForOwner(manifest.name)
+
+    activePlugins.set(manifest.name, {
+      deactivate,
+      subscriptions: ctx.subscriptions,
+    })
+    setPluginLayerState(manifest.name, 'server', 'active')
+    logger.info('plugin activated', { plugin: manifest.name })
+  }
+ catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    setPluginLayerState(manifest.name, 'server', 'failed', message)
+    try {
+      await deactivate?.()
+    }
+    catch (cleanupError) {
+      logger.error('plugin activation rollback failed', { plugin: manifest.name, err: cleanupError })
+    }
+    try {
+      await stopPluginProcesses(manifest.name)
+    }
+    catch (cleanupError) {
+      logger.error('plugin activation process rollback failed', { plugin: manifest.name, err: cleanupError })
+    }
+    disposeSubscriptions(manifest.name, subscriptions)
+    clearPluginRoutes(manifest.name)
+    logger.error('plugin activation failed', { plugin: manifest.name, err })
+  }
+}
+
+export async function activateDevelopmentPlugin(
+  manifest: PluginManifest,
+  moduleRevision: number,
+): Promise<PluginDescriptor> {
+  const currentDescriptor = getPluginDescriptor(manifest.name)
+  const currentManifest = discoveredPluginManifests.get(manifest.name)
+  if (currentDescriptor && currentManifest && !shadowedDevelopmentPlugins.has(manifest.name)) {
+    shadowedDevelopmentPlugins.set(manifest.name, {
+      manifest: currentManifest,
+      source: currentDescriptor.source,
+    })
+  }
+
+  await deactivatePluginServerLayer(manifest.name)
+  unregisterPluginDescriptor(manifest.name)
+
+  const source: PluginSourceDescriptor = {
+    kind: 'workspaceDev',
+    packageDir: manifest.packageDir,
+    trusted: true,
+    reason: 'Temporary plugin development session.',
+  }
+  registerPluginDescriptor(createPluginDescriptor(manifest, source))
+  discoveredPluginManifests.set(manifest.name, manifest)
+  await preparePluginWebLayer(manifest)
+  await activatePluginServerLayer(manifest, moduleRevision)
+  return requirePluginDescriptor(manifest.name)
+}
+
+export async function reloadDevelopmentPluginServerLayer(
+  pluginName: string,
+  moduleRevision: number,
+): Promise<PluginDescriptor> {
+  const manifest = requirePluginManifest(pluginName)
+  await deactivatePluginServerLayer(pluginName)
+  await activatePluginServerLayer(manifest, moduleRevision)
+  return requirePluginDescriptor(pluginName)
+}
+
+export async function deactivateDevelopmentPlugin(pluginName: string): Promise<void> {
+  await deactivatePluginServerLayer(pluginName)
+  discoveredPluginManifests.delete(pluginName)
+  unregisterPluginDescriptor(pluginName)
+
+  const shadowed = shadowedDevelopmentPlugins.get(pluginName)
+  shadowedDevelopmentPlugins.delete(pluginName)
+  if (!shadowed) { return }
+
+  registerPluginDescriptor(createPluginDescriptor(shadowed.manifest, shadowed.source))
+  discoveredPluginManifests.set(pluginName, shadowed.manifest)
+  await prepareAndActivateManifests([shadowed.manifest])
+}
+
+export async function activateServerPlugins(
+  app: Elysia,
+  options: { hostServices?: PluginHostServices } = {},
+): Promise<void> {
+  pluginHostServices = options.hostServices
+  for (const pluginName of [...activePlugins.keys()]) {
+    await deactivatePluginServerLayer(pluginName)
+  }
+  resetPluginSkillRegistry()
+  discoveredPluginManifests.clear()
+
+  // Discover from plugins/ relative to workspace root
+  // In dev: CRADLE_PLUGINS_DIR env or traverse up from this file. In prod: process.resourcesPath or cwd
+  const thisDir = dirname(fileURLToPath(import.meta.url))
+  const pluginsDir = process.env.CRADLE_PLUGINS_DIR
+    ?? resolve(thisDir, '../../../../plugins')
+  const packages = await discoverPackagesFromSources(await getPluginDiscoverySources(pluginsDir), {
+    fabricNodeExposed: readFabricNodeExposure(),
+  })
+  resetPluginRuntimeRegistry()
+  resetPluginRouteRegistry()
+  resetExternalProviderSourceRegistry()
+  resetProviderExtensionRegistry()
+  resetExternalIssueSourceRegistry()
+  resetConversationBridgeAdapterRegistry()
+
+  for (const { pkg, source, persistedSourceId } of packages) {
+    if (!pkg.manifest) {
+      const identity = `invalid:${basename(pkg.packageDir)}`
+      registerPluginDescriptor(createInvalidPluginDescriptor(identity, '0.0.0', source, pkg.error ?? 'Invalid plugin package.'))
+      continue
+    }
+    registerPluginDescriptor(createPluginDescriptor(pkg.manifest, source))
+    discoveredPluginManifests.set(pkg.manifest.name, pkg.manifest)
+    initializePersistedSourceActivationPolicy(pkg.manifest, persistedSourceId)
+  }
+
+  const descriptors = listPluginDescriptors()
+  const manifests: PluginManifest[] = packages.flatMap(({ pkg }) => pkg.manifest ? [pkg.manifest] : [])
+
+  if (descriptors.length === 0) { return }
+
+  for (const manifest of manifests) {
+    const descriptor = getPluginDescriptor(manifest.name)
+    if (!descriptor) { continue }
+    const enabled = refreshPluginActivationState(manifest.name)
+    if (!enabled) {
+      markPluginLayersDisabled(manifest, toDisabledReason(descriptor.activation.reason))
+      continue
+    }
+    await preparePluginWebLayer(manifest)
+  }
+
+  for (const manifest of manifests) {
+    if (!getPluginDescriptor(manifest.name)?.activation.enabled) { continue }
+    await activatePluginServerLayer(manifest)
+  }
+
+  // Plugin static server — serves web entries + plugin list API
+  const staticServer = createPluginStaticServer(() => [...discoveredPluginManifests.values()])
+
+  const pluginRoutes = new Elysia({ prefix: '/api/plugins' })
+    .get('/', () => staticServer.getPluginList())
+    .get('/-/deps/:fileName', ({ params, set }) => {
+      const content = staticServer.getSharedDependency(params.fileName)
+      if (!content) {
+        set.status = 404
+        return 'Not found'
+      }
+      return new Response(content, {
+        headers: {
+          'access-control-allow-origin': '*',
+          'cache-control': 'no-cache',
+          'content-type': 'application/javascript; charset=utf-8',
+        },
+      })
+    })
+    .get('/:name/web.mjs', async ({ params, request, set }) => {
+      const entryPath = await staticServer.getWebEntry(params.name)
+      if (!entryPath) {
+        set.status = 404
+        return 'Not found'
+      }
+      const content = await rewritePluginWebBundleImports(
+        await readFile(entryPath, 'utf-8'),
+        request.url,
+      )
+      return new Response(content, {
+        headers: {
+          'access-control-allow-origin': '*',
+          'cache-control': 'no-cache',
+          'content-type': 'application/javascript; charset=utf-8',
+        },
+      })
+    })
+    .all('/:routeSegment', context => dispatchPluginRouteFromElysia(context, '/'))
+    .all('/:routeSegment/*', context => dispatchPluginRouteFromElysia(
+      context,
+      `/${context.params['*'] ?? ''}`,
+    ))
+
+  app.use(pluginRoutes)
+}
+
+async function registerDiscoveredPackages(packages: PackageWithSource[]): Promise<PluginManifest[]> {
+  const manifests: PluginManifest[] = []
+  for (const { pkg, source, persistedSourceId } of packages) {
+    if (!pkg.manifest) {
+      const identity = `invalid:${basename(pkg.packageDir)}`
+      registerPluginDescriptor(createInvalidPluginDescriptor(identity, '0.0.0', source, pkg.error ?? 'Invalid plugin package.'))
+      continue
+    }
+    registerPluginDescriptor(createPluginDescriptor(pkg.manifest, source))
+    discoveredPluginManifests.set(pkg.manifest.name, pkg.manifest)
+    initializePersistedSourceActivationPolicy(pkg.manifest, persistedSourceId)
+    manifests.push(pkg.manifest)
+  }
+  return manifests
+}
+
+async function prepareAndActivateManifests(manifests: PluginManifest[]): Promise<void> {
+  for (const manifest of manifests) {
+    const descriptor = getPluginDescriptor(manifest.name)
+    if (!descriptor) { continue }
+    const enabled = refreshPluginActivationState(manifest.name)
+    if (!enabled) {
+      markPluginLayersDisabled(manifest, toDisabledReason(descriptor.activation.reason))
+      continue
+    }
+    await preparePluginWebLayer(manifest)
+  }
+
+  for (const manifest of manifests) {
+    if (!getPluginDescriptor(manifest.name)?.activation.enabled) { continue }
+    await activatePluginServerLayer(manifest)
+  }
+}
+
+export async function discoverAndActivateSource(
+  sourceId: string,
+  options: PluginSourceInstallerOptions = {},
+): Promise<PluginDescriptor[]> {
+  const source = readPluginSource(sourceId)
+  if (!source) {
+    throw new Error(`Plugin source not found: ${sourceId}`)
+  }
+  // Use `resolvePluginSourceDirectory` (cache-aware) instead of `refreshPluginSourceDirectory`
+  // so a preview->install flow reuses the preview's cached download instead of rm+re-fetching.
+  // Operators who need a forced refresh use the per-source Refresh action or the CLI.
+  const pluginsDir = await resolvePluginSourceDirectory(source, options)
+  const packages = await discoverPackagesFromSources([{
+    pluginsDir,
+    kind: 'externalLocal',
+    persistedSourceId: source.id,
+  }], {
+    fabricNodeExposed: readFabricNodeExposure(),
+  })
+  const manifests = await registerDiscoveredPackages(packages)
+  await prepareAndActivateManifests(manifests)
+  return manifests
+    .map(manifest => getPluginDescriptor(manifest.name))
+    .filter((descriptor): descriptor is PluginDescriptor => !!descriptor)
+}
+
+export async function rediscoverAndActivateSource(
+  sourceId: string,
+  options: PluginSourceInstallerOptions = {},
+): Promise<PluginDescriptor[]> {
+  const descriptors = await sourceDescriptors(sourceId)
+  for (const descriptor of descriptors) {
+    await deactivatePluginServerLayer(descriptor.identity)
+    discoveredPluginManifests.delete(descriptor.identity)
+    unregisterPluginDescriptor(descriptor.identity)
+  }
+  return discoverAndActivateSource(sourceId, options)
+}
+
+export interface PluginSourceRemovalPluginPlan {
+  identity: string
+  displayName: string
+  processes: ReturnType<typeof listPluginProcesses>
+  resources: ManagedResourceDescriptor[]
+  lifecycle: Awaited<ReturnType<typeof inspectPluginUninstall>>
+  blockedReasons: string[]
+}
+
+export interface PluginSourceRemovalPlan {
+  sourceId: string
+  plugins: PluginSourceRemovalPluginPlan[]
+  blocked: boolean
+}
+
+async function sourceDescriptors(sourceId: string): Promise<PluginDescriptor[]> {
+  const source = readPluginSource(sourceId)
+  if (!source) {
+    throw new AppError({ code: 'plugin_source_not_found', status: 404, message: `Plugin source not found: ${sourceId}` })
+  }
+  const pluginsDir = await inspectPluginSourceDirectory(source)
+  return pluginsDir
+    ? listPluginDescriptors().filter(descriptor => isPathWithin(descriptor.source.packageDir, pluginsDir))
+    : []
+}
+
+function retainedManagedResources(resources: ManagedResourceDescriptor[]): ManagedResourceDescriptor[] {
+  return resources.filter(resource => resource.installationSource === 'managed' && resource.state !== 'not-installed')
+}
+
+export async function inspectDiscoveredSourceRemoval(sourceId: string): Promise<PluginSourceRemovalPlan> {
+  const descriptors = await sourceDescriptors(sourceId)
+  const plugins = await Promise.all(descriptors.map(async (descriptor): Promise<PluginSourceRemovalPluginPlan> => {
+    const processes = listPluginProcesses(descriptor.identity)
+    const namespace = pluginResourceNamespaceForDescriptor(descriptor)
+    const resources = pluginHostServices
+      ? retainedManagedResources(await pluginHostServices.managedResources.listNamespace(namespace))
+      : []
+    const hasLifecycle = hasPluginUninstallHandler(descriptor.identity)
+    const declaresManagedLifecycle = descriptor.declaredCapabilities.some(capability =>
+      capability.type === 'managed-resource'
+      || capability.type === 'managed-process'
+      || capability.type === 'lifecycle-uninstall')
+    const hasPluginData = pluginHostServices
+      ? existsSync(resolve(pluginHostServices.dataDir, 'plugins', descriptor.routeSegment))
+      : false
+    const hasRetainedState = processes.length > 0
+      || resources.length > 0
+      || (declaresManagedLifecycle && hasPluginData)
+    const blockedReasons: string[] = []
+    if (hasRetainedState && !hasLifecycle) {
+      blockedReasons.push('The plugin declares a managed lifecycle but its uninstall handler is not active. Enable the plugin before removing it.')
+    }
+    for (const resource of resources) {
+      if (!resource.actions.uninstall.available) {
+        blockedReasons.push(`Managed resource ${resource.displayName} cannot be uninstalled: ${resource.actions.uninstall.reasonCode ?? 'unavailable'}.`)
+      }
+    }
+    return {
+      identity: descriptor.identity,
+      displayName: descriptor.displayName,
+      processes,
+      resources,
+      lifecycle: hasLifecycle ? await inspectPluginUninstall(descriptor.identity) : null,
+      blockedReasons,
+    }
+  }))
+  return {
+    sourceId,
+    plugins,
+    blocked: plugins.some(plugin => plugin.blockedReasons.length > 0),
+  }
+}
+
+function pluginResourceNamespaceForDescriptor(descriptor: PluginDescriptor): string {
+  return `plugin.${descriptor.routeSegment}`
+}
+
+async function executeDiscoveredSourceCleanup(plan: PluginSourceRemovalPlan): Promise<void> {
+  if (plan.blocked) {
+    throw new AppError({
+      code: 'plugin_uninstall_blocked',
+      status: 409,
+      message: 'The plugin source cannot be removed until its uninstall blockers are resolved.',
+      details: { plan },
+    })
+  }
+  for (const plugin of plan.plugins) {
+    const { removeProviderExtensionsForOwner } = await import('../modules/provider-extensions/service')
+    await removeProviderExtensionsForOwner(plugin.identity)
+    await stopPluginProcesses(plugin.identity)
+    if (!pluginHostServices && plugin.resources.length > 0) {
+      throw new Error('Plugin managed resources are unavailable in this host.')
+    }
+    for (const resource of plugin.resources) {
+      await pluginHostServices!.managedResources.execute(resource.key, 'uninstall')
+    }
+    if (plugin.lifecycle) {
+      await executePluginUninstall(plugin.identity)
+    }
+  }
+}
+
+export async function removeDiscoveredSource(sourceId: string): Promise<void> {
+  const source = readPluginSource(sourceId)
+  if (!source) {
+    throw new Error(`Plugin source not found: ${sourceId}`)
+  }
+  const descriptors = await sourceDescriptors(sourceId)
+  await executeDiscoveredSourceCleanup(await inspectDiscoveredSourceRemoval(sourceId))
+
+  for (const descriptor of descriptors) {
+    await deactivatePluginServerLayer(descriptor.identity)
+    discoveredPluginManifests.delete(descriptor.identity)
+    unregisterPluginDescriptor(descriptor.identity)
+  }
+  await deletePluginSourceCache(source)
+}
+
+async function dispatchPluginRouteFromElysia(
+  context: PluginRouteDispatcherContext,
+  path: string,
+): Promise<unknown> {
+  const pluginSet: ServerPluginRouteContext['set'] = {}
+  const result = await dispatchPluginRoute({
+    routeSegment: context.params.routeSegment,
+    method: context.request.method,
+    path,
+    body: context.body,
+    query: context.query,
+    headers: context.headers,
+    set: pluginSet,
+  })
+  if (pluginSet.status !== undefined) {
+    context.set.status = pluginSet.status
+  }
+  if (pluginSet.headers) {
+    Object.assign(context.set.headers, pluginSet.headers)
+  }
+  if (!result.found) {
+    context.set.status = 404
+    return { error: 'Plugin route not found.' }
+  }
+  return result.body
+}
+
+function requirePluginDescriptor(pluginName: string): PluginDescriptor {
+  const descriptor = getPluginDescriptor(pluginName)
+  if (!descriptor) {
+    throw new Error(`Plugin not found: ${pluginName}`)
+  }
+  return descriptor
+}
+
+function requirePluginManifest(pluginName: string): PluginManifest {
+  const manifest = discoveredPluginManifests.get(pluginName)
+  if (!manifest) {
+    throw new Error(`Plugin manifest not found: ${pluginName}`)
+  }
+  return manifest
+}
+
+export async function disablePlugin(pluginName: string, reason?: string): Promise<PluginDescriptor> {
+  const descriptor = requirePluginDescriptor(pluginName)
+  const manifest = requirePluginManifest(descriptor.identity)
+  await deactivatePluginServerLayer(descriptor.identity)
+  const policy = setPluginActivationPolicy(descriptor.identity, {
+    enabled: false,
+    reason: toDisabledReason(reason),
+  })
+  setPluginActivationState(descriptor.identity, {
+    enabled: false,
+    source: 'user',
+    reason: policy.reason ?? undefined,
+    updatedAt: policy.updatedAt,
+  })
+  markPluginLayersDisabled(manifest, toDisabledReason(policy.reason))
+  return requirePluginDescriptor(descriptor.identity)
+}
+
+export async function enablePlugin(pluginName: string, grantedPermissions?: string[]): Promise<PluginDescriptor> {
+  const descriptor = requirePluginDescriptor(pluginName)
+  const manifest = requirePluginManifest(descriptor.identity)
+  if (isExternalLocalCodeSource(descriptor.source)) {
+    const checksum = await calculatePluginPackageChecksum(manifest.packageDir)
+    const effectivePermissions = grantedPermissions ?? descriptor.source.grantedPermissions ?? []
+    grantPluginTrust(descriptor.identity, checksum, 'Enabled by operator.')
+    grantPluginPermissions(descriptor.identity, checksum, effectivePermissions, 'Enabled by operator.')
+    setPluginSourceDescriptor(descriptor.identity, {
+      ...descriptor.source,
+      checksum,
+      trusted: true,
+      grantedPermissions: effectivePermissions,
+    })
+  }
+  const policy = setPluginActivationPolicy(descriptor.identity, {
+    enabled: true,
+    reason: null,
+  })
+  setPluginActivationState(descriptor.identity, {
+    enabled: true,
+    source: 'user',
+    updatedAt: policy.updatedAt,
+  })
+
+  await deactivatePluginServerLayer(descriptor.identity)
+  resetDiscoveredPluginLayers(manifest)
+  await preparePluginWebLayer(manifest)
+  await activatePluginServerLayer(manifest)
+  return requirePluginDescriptor(descriptor.identity)
+}
+
+export async function deactivateAllPlugins(): Promise<void> {
+  await stopAllConversationBridgeConnections()
+  for (const name of [...activePlugins.keys()]) {
+    await deactivatePluginServerLayer(name)
+  }
+  await stopAllPluginProcesses()
+  activePlugins.clear()
+  shadowedDevelopmentPlugins.clear()
+  resetPluginSkillRegistry()
+  resetPluginRouteRegistry()
+  resetExternalProviderSourceRegistry()
+  resetProviderExtensionRegistry()
+  resetExternalIssueSourceRegistry()
+  resetConversationBridgeAdapterRegistry()
+  resetPluginUninstallRegistry()
+  pluginHostServices = undefined
+}
