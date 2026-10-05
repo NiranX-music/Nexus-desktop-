@@ -332,7 +332,7 @@ export default function WhiteboardView() {
 
   return (
     <div className="h-full w-full overflow-hidden p-4 grid grid-cols-12 gap-4 bg-white/2 animate-in fade-in duration-300">
-      <div className="col-span-12 lg:col-span-3 flex flex-col gap-4 min-h-0">
+      <div className="col-span-12 lg:col-span-3 flex flex-col gap-4 min-h-0 overflow-y-auto pr-1 scrollbar-small">
         <div className={`${glassPanel} p-4 border-emerald-500/10`}>
           <div className="flex items-center gap-3 mb-4">
             <div className="h-11 w-11 rounded-xl border border-emerald-500/30 bg-emerald-500/10 flex items-center justify-center text-emerald-300">
@@ -352,7 +352,7 @@ export default function WhiteboardView() {
             <textarea
               value={question}
               onChange={(event) => setQuestion(event.target.value)}
-              className="h-32 w-full resize-none rounded-xl border border-white/10 bg-black/60 p-3 text-xs leading-relaxed text-zinc-200 outline-none focus:border-emerald-400/50"
+              className="h-32 w-full resize-none rounded-xl border border-white/10 bg-black/60 p-3 text-xs leading-relaxed text-zinc-200 outline-none focus:border-emerald-400/50 scrollbar-small"
               placeholder="Ask Nexus to write, solve, or draw on the board..."
             />
             <button
