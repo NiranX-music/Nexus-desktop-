@@ -154,12 +154,12 @@ export default function ResearchWidget() {
           {summary && (
             <div
               ref={summaryRef}
-              className="mt-4 p-4 bg-emerald-950/20 border border-emerald-500/20 rounded-lg relative z-10 max-h-37.5 overflow-hidden"
+              className="mt-4 p-4 bg-emerald-950/20 border border-emerald-500/20 rounded-lg relative z-10 max-h-40 overflow-y-auto pr-1.5 scrollbar-small"
             >
               <p className="text-[10px] text-emerald-400/80 uppercase tracking-widest mb-2 font-bold">
                 Data Extracted
               </p>
-              <p className="text-xs text-gray-300 font-mono leading-relaxed line-clamp-4">
+              <p className="text-xs text-gray-300 font-mono leading-relaxed">
                 {summary}
               </p>
             </div>
