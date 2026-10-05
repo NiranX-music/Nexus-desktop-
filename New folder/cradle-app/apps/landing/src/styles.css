@@ -1,0 +1,311 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: "Geist Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("@fontsource-variable/geist/files/geist-latin-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+
+/* ─── Dark-only palette (the shader is fixed-dark; the site commits to dark) ─── */
+:root {
+  color-scheme: dark;
+
+  --bg: #1a1a1c;
+  --bg-subtle: #0d0d10;
+  --bg-muted: #141418;
+  --text: #f4f4f5;
+  --text-secondary: #a1a1aa;
+  --text-muted: #6b6b73;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-subtle: rgba(255, 255, 255, 0.04);
+  --border-strong: rgba(255, 255, 255, 0.15);
+  --fill: rgba(255, 255, 255, 0.03);
+  --fill-hover: rgba(255, 255, 255, 0.06);
+  --pattern-fg: rgba(255, 255, 255, 0.04);
+  --hero-gradient-1: rgba(255, 233, 194, 0.06);
+  --hero-gradient-2: rgba(138, 143, 156, 0.05);
+  --nav-bg: rgba(8, 8, 10, 0.72);
+  --selection: rgba(255, 233, 194, 0.18);
+  --font-sans: "Geist Variable", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono: "Geist Variable", ui-monospace, "SF Mono", Consolas, monospace;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--text);
+  overflow-x: hidden;
+  font-feature-settings: 'cv01', 'cv02', 'cv03', 'cv04', 'calt';
+}
+
+/* Page shell always fills the viewport — footer sits at the bottom
+   even on short pages (blog index, empty states). */
+#root {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+#root > div {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+#root main {
+  flex: 1;
+}
+
+/* Selection */
+::selection {
+  background: var(--selection);
+  color: var(--text);
+}
+
+/* Scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
+
+/* Visually hidden but available to assistive tech (download CTA labels). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ─── Markdown prose (changelog releases + blog articles) ─────── */
+/* Scoped to `.prose` so the rest of the landing stays untouched.
+   Content is curated by us, rendered from marked — no user input. */
+
+.prose {
+  font-size: 15px;
+  line-height: 1.75;
+  color: color-mix(in srgb, var(--text-secondary), var(--text) 18%);
+}
+
+.prose > *:first-child { margin-top: 0; }
+.prose > *:last-child { margin-bottom: 0; }
+
+/* Tagline: the leading blockquote. Rendered as a large muted line,
+   not a quoted block — it reads as the piece's one-liner. */
+.prose > blockquote:first-child {
+  margin: 0 0 24px;
+  padding: 0;
+  border: none;
+  font-size: 1.15rem;
+  font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: -0.015em;
+  color: var(--text);
+}
+.prose > blockquote:first-child p { margin: 0; }
+
+.prose blockquote {
+  margin: 16px 0;
+  padding: 2px 0 2px 14px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-muted);
+}
+.prose blockquote p { margin: 4px 0; }
+
+/* Section labels (## Features, ## Bug Fixes …) */
+.prose h2 {
+  margin: 32px 0 10px;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--text);
+}
+.prose h2:first-of-type { margin-top: 8px; }
+.prose h3 {
+  margin: 22px 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+/* Paragraphs */
+.prose p { margin: 10px 0; }
+
+/* Bullet list — short tick mark */
+.prose ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.prose ul > li {
+  position: relative;
+  padding: 3px 0 3px 18px;
+}
+.prose ul > li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: calc(3px + 0.62em);
+  width: 6px;
+  height: 1px;
+  background: var(--border-strong);
+}
+
+/* Ordered list — mono counter, muted, reads like a numbered log */
+.prose ol {
+  list-style: none;
+  margin: 5px 0;
+  padding: 0;
+  counter-reset: cl;
+}
+.prose ol > li {
+  position: relative;
+  padding: 3px 0 3px 28px;
+  counter-increment: cl;
+}
+.prose ol > li::before {
+  content: counter(cl, decimal-leading-zero);
+  position: absolute;
+  left: 0;
+  top: calc(4px + 0.1em);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  letter-spacing: -0.02em;
+}
+
+/* Inline code */
+.prose code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  color: var(--text);
+  background: var(--fill-hover);
+  border: 1px solid var(--border-subtle);
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: -0.01em;
+}
+
+/* Code blocks */
+.prose pre {
+  margin: 12px 0;
+  padding: 14px 16px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow-x: auto;
+}
+.prose pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* Media */
+.prose img {
+  display: block;
+  max-width: 100%;
+  margin: 32px 0;
+  border-radius: 12px;
+  border: 1px solid var(--border-subtle);
+}
+
+/* Strong / em */
+.prose strong { color: var(--text); font-weight: 600; }
+.prose em { font-style: italic; }
+
+/* Links */
+.prose a {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: var(--border-strong);
+  text-decoration-thickness: 1px;
+  transition: text-decoration-color 0.15s;
+}
+.prose a:hover { text-decoration-color: var(--text); }
+
+/* Horizontal rule */
+.prose hr {
+  border: none;
+  border-top: 1px dashed var(--border-subtle);
+  margin: 20px 0;
+}
+
+/* ─── Changelog / blog layouts — stack on narrow screens ── */
+@media (max-width: 720px) {
+  .release-row {
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+  }
+  .release-row > div:first-child {
+    flex-direction: row !important;
+    align-items: baseline;
+    gap: 12px !important;
+  }
+}
+
+@media (max-width: 960px) {
+  .blog-featured {
+    grid-template-columns: 1fr !important;
+    gap: 24px !important;
+    margin-bottom: 64px !important;
+  }
+  .blog-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .blog-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .blog-pager {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (max-width: 1000px) {
+  .blog-post-layout {
+    grid-template-columns: minmax(0, 680px) !important;
+    gap: 32px !important;
+  }
+  .blog-post-rail {
+    position: static !important;
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+  }
+  .blog-post-rail > a {
+    margin-bottom: 0 !important;
+  }
+  .blog-toc {
+    display: none;
+  }
+}
+
+/* ─── FAQ accordion ────────────────────────────────────────────── */
+/* Native <details>, with the disclosure triangle hidden and a custom +/×
+   marker that rotates on open. No JS state. */
+.faq-item > summary { list-style: none; }
+.faq-item > summary::-webkit-details-marker { display: none; }
+.faq-item .faq-marker { transition: transform 0.2s ease; }
+.faq-item[open] > summary .faq-marker { transform: rotate(45deg); }
