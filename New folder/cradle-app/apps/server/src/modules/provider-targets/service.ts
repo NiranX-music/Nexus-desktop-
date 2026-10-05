@@ -1,0 +1,965 @@
+import { randomUUID } from 'node:crypto'
+
+import type { ProviderTarget as ProviderTargetRow } from '@cradle/db'
+import {
+  agentCredentials,
+  agents,
+  agentSessions,
+  backendCapabilitySnapshots,
+  externalProviderRecords,
+  providerTargetModelCache,
+  providerTargets,
+  runtimeAuditLog,
+  sessions,
+  usageLogs,
+} from '@cradle/db'
+import { and, eq, inArray } from 'drizzle-orm'
+import { z } from 'zod'
+
+import { AppError } from '../../errors/app-error'
+import { db } from '../../infra'
+import {
+  cancelProviderTargetSessionQueuesInTransaction,
+} from '../chat-runtime/es/commands'
+import { publishSessionTailEvents } from '../chat-runtime/es/event-tail'
+import * as ChatRuntime from '../chat-runtime/runtime'
+import {
+  CODEX_BEDROCK_API_KEY_SECRET_KIND,
+  CODEX_CHATGPT_AUTH_SECRET_KIND,
+  CODEX_PERSONAL_ACCESS_TOKEN_SECRET_KIND,
+} from '../chat-runtime-providers/codex/app-server/chatgpt-auth'
+import type { ClaudeAgentConfigPatch } from '../provider-contracts/claude-agent-config'
+import {
+  applyClaudeAgentConfigPatch,
+  normalizeClaudeAgentConfigPatch,
+} from '../provider-contracts/claude-agent-config'
+import { parseCodexNativeConfig } from '../provider-contracts/codex-native-config'
+import { CodexAuthModeSchema, readTrustedUniversalConfig } from '../provider-contracts/provider-base'
+import {
+  listProviderKindsForRuntime,
+  listRuntimeOwnedProviderTargets,
+  projectRuntimeOwnedProviderTarget,
+  readRuntimeOwnedProviderTargetOwner,
+  readRuntimeProviderBinding,
+  readRuntimeUniversalProviderKind,
+  runtimeOwnsProviderBinding,
+  runtimeSupportsProviderKind,
+} from '../provider-contracts/runtime-compatibility'
+import type { ModelCapabilities, ProviderKind, RuntimeKind } from '../provider-contracts/types'
+import {
+  ensureProviderExtensionRuntimeRouteReady,
+  isProviderTargetCredentialLeased,
+  prepareProviderTargetExtensionDeletion,
+  readEffectiveProviderKinds,
+  readProviderExtensionRuntimeRoute,
+  reconcileProviderExtensionsForTarget,
+  suspendProviderExtensionsForTarget,
+} from '../provider-extensions/service'
+import {
+  releaseLiveProviderRuntimeSessionsForProviderTarget,
+  unlinkProviderTargetFromDurableProviderRuntimeBindings,
+} from '../provider-runtime/service'
+import * as Workspace from '../workspace/service'
+
+const ProviderTargetRefSchema = z.object({
+  id: z.string().trim().min(1),
+  kind: z.enum(['manual', 'external']).optional(),
+})
+
+export type ProviderTarget = z.infer<typeof ProviderTargetRefSchema>
+
+export interface UpsertManualProviderTargetInput {
+  id?: string
+  displayName: string
+  providerKind: ProviderKind
+  enabled?: boolean
+  connectionConfigJson: string
+  credentialRef?: string | null
+  iconSlug?: string | null
+  /** Explicit integration identity only — never inferred from URL. */
+  providerId?: string | null
+}
+
+export interface ListProviderTargetsInput {
+  runtimeKind?: RuntimeKind
+  workspaceId?: string | null
+}
+
+export interface ResolvedProviderTarget {
+  target: {
+    id: string
+    kind: 'manual' | 'external'
+  }
+  id: string
+  kind: 'manual' | 'external'
+  label: string
+  providerKind: ProviderKind
+  enabled: boolean
+  connectionConfigJson: string
+  configJson: string
+  credentialRef: string | null
+  enabledModelsJson: string
+  customModelsJson: string
+  iconSlug: string | null
+  sourceMetadata: {
+    sourceKey: string
+    externalRecordId: string
+    app: string
+  } | null
+  extensionBinding: {
+    id: string
+    owner: string
+    extensionId: string
+  } | null
+  effectiveModelId: string | null
+}
+
+export interface ProviderTargetModelSettings {
+  providerTargetId: string
+  configJson: string
+  connectionConfigJson: string
+  enabledModelsJson: string
+  customModelsJson: string
+  providerTargetKind?: 'manual' | 'external'
+}
+
+export interface CustomModelEntry {
+  id: string
+  label: string
+  capabilities: ModelCapabilities
+}
+
+/**
+ * Projection of a target's stored `enabledModelsJson` visibility setting.
+ * Provider Targets owns the stored form; consumers apply the projection.
+ */
+export type ProviderTargetModelVisibility
+  = | { kind: 'all' }
+    | { kind: 'all-disabled' }
+    | { kind: 'subset', modelIds: readonly string[] }
+
+const ALL_MODELS_DISABLED_SENTINEL = '__all_disabled__'
+
+const JsonObjectTextSchema = z
+  .string()
+  .transform(raw => JSON.parse(raw))
+  .pipe(z.record(z.string(), z.unknown()).default({}))
+
+const EnabledModelsJsonSchema = z
+  .string()
+  .transform(raw => JSON.parse(raw))
+  .pipe(z.array(z.string().min(1)).default([]))
+
+const CustomModelInputSchema = z.object({
+  id: z.string().trim().min(1),
+  label: z.string().trim().optional(),
+})
+
+function nowUnix(): number {
+  return Math.floor(Date.now() / 1000)
+}
+
+function parseTargetId(input: ProviderTarget | string): string {
+  if (typeof input === 'string') {
+    return z.string().trim().min(1).parse(input)
+  }
+  return ProviderTargetRefSchema.parse(input).id
+}
+
+function mergeConnectionConfigWithEnabledModels(
+  connectionConfigJson: string,
+  enabledModelsJson: string,
+): string {
+  const config = JsonObjectTextSchema.parse(connectionConfigJson)
+  const enabledModels = EnabledModelsJsonSchema.parse(enabledModelsJson)
+  return JSON.stringify({
+    ...config,
+    enabledModels,
+  })
+}
+
+function normalizeManualConnectionConfig(input: UpsertManualProviderTargetInput): string {
+  const parsed = JsonObjectTextSchema.parse(input.connectionConfigJson)
+  if (parsed.codex !== undefined) {
+    validateCodexNativeConfig(parsed.codex)
+  }
+  if (input.providerKind !== 'openai-compatible') {
+    return input.connectionConfigJson
+  }
+
+  const config = JsonObjectTextSchema.parse(input.connectionConfigJson)
+  const credentialAuthMode = resolveCredentialAuthMode(input.credentialRef ?? null)
+  const storedAuthMode = CodexAuthModeSchema.safeParse(config.authMode)
+  const inlineApiKey = typeof config.apiKey === 'string' && config.apiKey.trim().length > 0
+  const baseUrl = typeof config.baseUrl === 'string' && config.baseUrl.trim().length > 0
+  const authMode = credentialAuthMode
+    ?? (storedAuthMode.success ? storedAuthMode.data : null)
+    ?? (inlineApiKey || baseUrl ? 'apikey' : null)
+
+  return JSON.stringify({
+    ...config,
+    ...(authMode ? { authMode } : {}),
+  })
+}
+
+function validateCodexNativeConfig(value: unknown) {
+  try {
+    return parseCodexNativeConfig(value)
+  }
+  catch (error) {
+    throw new AppError({
+      code: 'invalid_codex_config',
+      status: 400,
+      message: error instanceof Error ? error.message : 'Invalid Codex configuration',
+    })
+  }
+}
+
+export function updateProviderTargetCodexConfig(providerTargetId: string, value: unknown): ProviderTargetModelSettings {
+  const target = resolveProviderTarget(providerTargetId)
+  if (target.kind !== 'manual') {
+    throw new AppError({ code: 'invalid_provider_target', status: 400, message: 'External provider configuration is read-only' })
+  }
+  const codex = validateCodexNativeConfig(value)
+  const config = JsonObjectTextSchema.parse(target.connectionConfigJson)
+  if (Object.keys(codex).length > 0) { config.codex = codex }
+  else { delete config.codex }
+  db().update(providerTargets).set({
+    connectionConfigJson: JSON.stringify(config),
+    updatedAt: nowUnix(),
+  }).where(eq(providerTargets.id, providerTargetId)).run()
+  db().delete(providerTargetModelCache).where(eq(providerTargetModelCache.providerTargetId, providerTargetId)).run()
+  return getProviderTargetModelSettings(providerTargetId)
+}
+
+function resolveCredentialAuthMode(credentialRef: string | null): z.infer<typeof CodexAuthModeSchema> | null {
+  if (!credentialRef) {
+    return null
+  }
+  const credential = db()
+    .select({ kind: agentCredentials.kind })
+    .from(agentCredentials)
+    .where(eq(agentCredentials.id, credentialRef))
+    .get()
+  if (!credential) {
+    return null
+  }
+  switch (credential.kind) {
+    case CODEX_CHATGPT_AUTH_SECRET_KIND:
+      return 'chatgptAuthTokens'
+    case CODEX_PERSONAL_ACCESS_TOKEN_SECRET_KIND:
+      return 'personalAccessToken'
+    case CODEX_BEDROCK_API_KEY_SECRET_KIND:
+      return 'bedrockApiKey'
+    default:
+      return 'apikey'
+  }
+}
+
+function assertChatgptCredentialProviderInvariant(input: UpsertManualProviderTargetInput): void {
+  if (resolveCredentialAuthMode(input.credentialRef ?? null) !== 'chatgptAuthTokens') {
+    return
+  }
+  if (input.providerKind !== 'openai-compatible') {
+    throw new AppError({
+      code: 'invalid_provider_target',
+      status: 400,
+      message: 'ChatGPT login credentials can only be used by OpenAI-compatible provider targets',
+      details: { providerKind: input.providerKind },
+    })
+  }
+  const config = JsonObjectTextSchema.parse(input.connectionConfigJson)
+  const storedAuthMode = CodexAuthModeSchema.safeParse(config.authMode)
+  if (storedAuthMode.success && storedAuthMode.data !== 'chatgptAuthTokens') {
+    throw new AppError({
+      code: 'invalid_provider_target',
+      status: 400,
+      message: 'ChatGPT login authentication mode cannot be changed',
+      details: { authMode: storedAuthMode.data },
+    })
+  }
+}
+
+function toResolvedProviderTarget(row: ProviderTargetRow): ResolvedProviderTarget {
+  const sourceMetadata
+    = row.kind === 'external' && row.sourceKey && row.externalRecordId
+      ? (() => {
+          const record = db()
+            .select()
+            .from(externalProviderRecords)
+            .where(
+              and(
+                eq(externalProviderRecords.sourceKey, row.sourceKey),
+                eq(externalProviderRecords.externalId, row.externalRecordId),
+              ),
+            )
+            .get()
+          return {
+            sourceKey: row.sourceKey,
+            externalRecordId: row.externalRecordId,
+            app: record?.app ?? 'external',
+          }
+        })()
+      : null
+
+  return {
+    target: {
+      id: row.id,
+      kind: row.kind,
+    },
+    id: row.id,
+    kind: row.kind,
+    label: row.displayName,
+    providerKind: row.providerKind,
+    enabled: row.enabled,
+    connectionConfigJson: row.connectionConfigJson,
+    configJson: mergeConnectionConfigWithEnabledModels(
+      row.connectionConfigJson,
+      row.enabledModelsJson,
+    ),
+    credentialRef: row.credentialRef ?? null,
+    enabledModelsJson: row.enabledModelsJson,
+    customModelsJson: row.customModelsJson,
+    iconSlug: row.iconSlug ?? null,
+    sourceMetadata,
+    extensionBinding: null,
+    effectiveModelId: null,
+  }
+}
+
+type ProviderTargetWriteDb = Pick<ReturnType<typeof db>, 'update'>
+
+function disableAgentsForProviderTargetInDb(providerTargetId: string, d: ProviderTargetWriteDb): void {
+  d.update(agents)
+    .set({
+      enabled: false,
+      updatedAt: nowUnix(),
+    })
+    .where(eq(agents.providerTargetId, providerTargetId))
+    .run()
+}
+
+export function providerTargetFromLegacyProfileId(
+  profileId: string | null | undefined,
+): ProviderTarget | null {
+  if (!profileId) {
+    return null
+  }
+  return { id: profileId, kind: 'manual' }
+}
+
+export function providerTargetCacheId(target: ProviderTarget | string): string {
+  return parseTargetId(target)
+}
+
+export function listStoredProviderTargets(): ProviderTargetRow[] {
+  return db().select().from(providerTargets).all()
+}
+
+export async function listProviderTargets(input: ListProviderTargetsInput = {}): Promise<Array<ProviderTargetRow & {
+  effectiveProviderKinds: ProviderKind[]
+}>> {
+  const rows = listStoredProviderTargets()
+  const projectedRows = rows.map(row => ({
+    ...row,
+    effectiveProviderKinds: readEffectiveProviderKinds(row.id, row.providerKind),
+  }))
+  if (!input.runtimeKind) {
+    return projectedRows
+  }
+  const runtimeKind = input.runtimeKind
+  const workspacePath = input.workspaceId ? Workspace.getLocalWorkspacePath(input.workspaceId) ?? undefined : undefined
+  const runtimeOwnedTargets = await listRuntimeOwnedProviderTargets({
+    runtimeKind,
+    workspacePath,
+    now: nowUnix(),
+  })
+  const providerBinding = readRuntimeProviderBinding(runtimeKind)
+  if (providerBinding === 'runtime-owned') {
+    return runtimeOwnedTargets.map(row => ({ ...row, effectiveProviderKinds: [row.providerKind] }))
+  }
+  if (providerBinding === 'none') {
+    return []
+  }
+  return [
+    ...projectedRows.filter(row => row.effectiveProviderKinds.some(
+      kind => runtimeSupportsProviderKind(runtimeKind, kind),
+    )),
+    ...runtimeOwnedTargets.map(row => ({ ...row, effectiveProviderKinds: [row.providerKind] })),
+  ]
+}
+
+export function getProviderTarget(id: string): ProviderTargetRow | null {
+  const runtimeOwnedTarget = projectRuntimeOwnedProviderTarget({ providerTargetId: id, now: nowUnix() })
+  if (runtimeOwnedTarget) {
+    return runtimeOwnedTarget
+  }
+  return db().select().from(providerTargets).where(eq(providerTargets.id, id)).get() ?? null
+}
+
+export function resolveProviderTarget(input: ProviderTarget | string): ResolvedProviderTarget {
+  const id = parseTargetId(input)
+  const row = getProviderTarget(id)
+  if (!row) {
+    throw new AppError({
+      code: 'provider_target_not_found',
+      status: 404,
+      message: 'Provider target not found',
+      details: { providerTargetId: id },
+    })
+  }
+  return toResolvedProviderTarget(row)
+}
+
+function projectUniversalProviderTargetForRuntime(
+  target: ResolvedProviderTarget,
+  runtimeKind: RuntimeKind,
+): ResolvedProviderTarget {
+  const providerKind = readRuntimeUniversalProviderKind(runtimeKind)
+  if (!providerKind) {
+    return target
+  }
+
+  const config = JsonObjectTextSchema.parse(target.configJson)
+  const universalConfig = readTrustedUniversalConfig(target.configJson)
+  const baseUrl = providerKind === 'anthropic'
+    ? universalConfig.anthropicBaseUrl
+    : universalConfig.openaiBaseUrl
+
+  return {
+    ...target,
+    providerKind,
+    configJson: JSON.stringify({
+      ...config,
+      ...(baseUrl ? { baseUrl } : {}),
+    }),
+  }
+}
+
+export function resolveProviderTargetForRuntime(
+  input: ProviderTarget | string,
+  runtimeKind: RuntimeKind,
+  publicModelId?: string | null,
+): ResolvedProviderTarget {
+  const target = resolveProviderTarget(input)
+  const acceptedProviderKinds = [...listProviderKindsForRuntime(runtimeKind)]
+  const exclusiveRoute = readProviderExtensionRuntimeRoute({
+    providerTargetId: target.id,
+    acceptedProviderKinds,
+    publicModelId,
+    exclusiveOnly: true,
+  })
+  if (exclusiveRoute) {
+    return projectProviderExtensionRoute(target, exclusiveRoute)
+  }
+  if (isProviderTargetCredentialLeased(target.id)) {
+    throw new AppError({
+      code: 'provider_extension_not_ready',
+      status: 409,
+      message: 'The Provider credential is leased to an unavailable extension route',
+      details: { providerTargetId: target.id, runtimeKind },
+    })
+  }
+  const borrowedRoute = readProviderExtensionRuntimeRoute({
+    providerTargetId: target.id,
+    acceptedProviderKinds,
+    publicModelId,
+  })
+  if (borrowedRoute) {
+    return projectProviderExtensionRoute(target, borrowedRoute)
+  }
+  if (target.providerKind === 'universal') {
+    const projected = projectUniversalProviderTargetForRuntime(target, runtimeKind)
+    if (runtimeSupportsProviderKind(runtimeKind, projected.providerKind)) {
+      return projected
+    }
+  }
+  if (runtimeSupportsProviderKind(runtimeKind, target.providerKind)) {
+    return target
+  }
+  return target
+}
+
+function projectProviderExtensionRoute(
+  target: ResolvedProviderTarget,
+  route: NonNullable<ReturnType<typeof readProviderExtensionRuntimeRoute>>,
+): ResolvedProviderTarget {
+  return {
+    ...target,
+    providerKind: route.providerKind,
+    configJson: JSON.stringify({
+      ...JsonObjectTextSchema.parse(target.configJson),
+      ...JsonObjectTextSchema.parse(route.configJson),
+    }),
+    credentialRef: route.credentialRef,
+    extensionBinding: {
+      id: route.bindingId,
+      owner: route.extensionOwner,
+      extensionId: route.extensionId,
+    },
+    effectiveModelId: route.effectiveModelId,
+  }
+}
+
+export async function ensureProviderTargetReadyForRuntime(
+  input: ProviderTarget | string,
+  runtimeKind: RuntimeKind,
+): Promise<void> {
+  const target = resolveProviderTarget(input)
+  const acceptedProviderKinds = [...listProviderKindsForRuntime(runtimeKind)]
+  const exclusive = readProviderExtensionRuntimeRoute({
+    providerTargetId: target.id,
+    acceptedProviderKinds,
+    exclusiveOnly: true,
+  })
+  if (exclusive) {
+    await ensureProviderExtensionRuntimeRouteReady({
+      providerTargetId: target.id,
+      acceptedProviderKinds,
+      exclusiveOnly: true,
+    })
+    return
+  }
+  if (isProviderTargetCredentialLeased(target.id)) {
+    throw new AppError({
+      code: 'provider_extension_not_ready',
+      status: 409,
+      message: 'The Provider credential is leased to an unavailable extension route',
+      details: { providerTargetId: target.id, runtimeKind },
+    })
+  }
+  if (runtimeSupportsProviderKind(runtimeKind, target.providerKind)) {
+    return
+  }
+  await ensureProviderExtensionRuntimeRouteReady({
+    providerTargetId: target.id,
+    acceptedProviderKinds,
+  })
+}
+
+export async function upsertManualProviderTarget(
+  input: UpsertManualProviderTargetInput,
+): Promise<ProviderTargetRow & { effectiveProviderKinds: ProviderKind[] }> {
+  const id = input.id?.trim() || randomUUID()
+  const now = nowUnix()
+  const existing = getProviderTarget(id)
+  const providerKindChanged = !!existing && existing.providerKind !== input.providerKind
+  if (existing && existing.kind !== 'manual') {
+    throw new AppError({
+      code: 'invalid_provider_target',
+      status: 400,
+      message: 'External provider targets cannot be overwritten as manual targets',
+      details: { providerTargetId: id },
+    })
+  }
+  assertChatgptCredentialProviderInvariant(input)
+
+  const nextEnabled = input.enabled ?? existing?.enabled ?? true
+  const disabling = existing?.enabled === true && !nextEnabled
+  const connectionConfigJson = normalizeManualConnectionConfig(input)
+  const enabledModelsJson = providerKindChanged ? '[]' : (existing?.enabledModelsJson ?? '[]')
+  const customModelsJson = providerKindChanged ? '[]' : (existing?.customModelsJson ?? '[]')
+  const nextProviderId = input.providerId !== undefined
+    ? (input.providerId?.trim() || null)
+    : (existing?.providerId ?? null)
+  const mutatesLeasedCredential = !!existing && (
+    existing.providerKind !== input.providerKind
+    || existing.connectionConfigJson !== connectionConfigJson
+    || existing.credentialRef !== (input.credentialRef ?? null)
+  )
+  if (mutatesLeasedCredential && isProviderTargetCredentialLeased(id)) {
+    throw new AppError({
+      code: 'provider_extension_credential_leased',
+      status: 409,
+      message: 'Disable the Provider extension before changing this Provider credential or connection',
+      details: { providerTargetId: id },
+    })
+  }
+  if (disabling) {
+    await suspendProviderExtensionsForTarget(id)
+  }
+  const d = db()
+  const queueEvents = d.transaction((tx) => {
+    tx.insert(providerTargets)
+      .values({
+        id,
+        kind: 'manual',
+        providerKind: input.providerKind,
+        displayName: input.displayName,
+        enabled: nextEnabled,
+        connectionConfigJson,
+        credentialRef: input.credentialRef ?? null,
+        iconSlug: input.iconSlug ?? null,
+        providerId: nextProviderId,
+        enabledModelsJson,
+        customModelsJson,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: providerTargets.id,
+        set: {
+          providerKind: input.providerKind,
+          displayName: input.displayName,
+          enabled: nextEnabled,
+          connectionConfigJson,
+          credentialRef: input.credentialRef ?? null,
+          ...(input.iconSlug !== undefined ? { iconSlug: input.iconSlug } : {}),
+          ...(input.providerId !== undefined ? { providerId: nextProviderId } : {}),
+          ...(providerKindChanged ? { enabledModelsJson, customModelsJson } : {}),
+          updatedAt: now,
+        },
+      })
+      .run()
+    if (providerKindChanged) {
+      unlinkProviderTargetFromDurableProviderRuntimeBindings({
+        providerTargetId: id,
+        writer: tx,
+      })
+      tx.delete(providerTargetModelCache).where(eq(providerTargetModelCache.providerTargetId, id)).run()
+      tx.delete(agentSessions).where(eq(agentSessions.providerTargetId, id)).run()
+    }
+    else if (
+      existing
+      && (
+        existing.connectionConfigJson !== connectionConfigJson
+        || existing.credentialRef !== (input.credentialRef ?? null)
+      )
+    ) {
+      // Connection/credential changes invalidate inventory — upstream model list may differ.
+      tx.delete(providerTargetModelCache).where(eq(providerTargetModelCache.providerTargetId, id)).run()
+    }
+    if (!nextEnabled) {
+      disableAgentsForProviderTargetInDb(id, tx)
+    }
+    return disabling
+      ? cancelProviderTargetSessionQueuesInTransaction(tx, {
+          providerTargetId: id,
+          updatedAt: now,
+        })
+      : []
+  })
+  publishSessionTailEvents(queueEvents)
+  if (disabling) {
+    await ChatRuntime.cancelProviderTargetSessions(id)
+    releaseLiveProviderRuntimeSessionsForProviderTarget(id)
+  }
+  if (providerKindChanged) {
+    releaseLiveProviderRuntimeSessionsForProviderTarget(id)
+  }
+
+  if (nextEnabled && existing) {
+    await reconcileProviderExtensionsForTarget(id)
+  }
+
+  const target = getProviderTarget(id)!
+  return {
+    ...target,
+    effectiveProviderKinds: readEffectiveProviderKinds(target.id, target.providerKind),
+  }
+}
+
+export function updateProviderTargetIcon(
+  providerTargetId: string,
+  iconSlug: string | null,
+): ProviderTargetRow {
+  const target = resolveProviderTarget(providerTargetId)
+  db()
+    .update(providerTargets)
+    .set({ iconSlug, updatedAt: nowUnix() })
+    .where(eq(providerTargets.id, target.id))
+    .run()
+  return getProviderTarget(target.id)!
+}
+
+export async function updateProviderTargetEnabled(
+  providerTargetId: string,
+  enabled: boolean,
+): Promise<ProviderTargetRow> {
+  const target = resolveProviderTarget(providerTargetId)
+  const disabling = target.enabled && !enabled
+  const d = db()
+  const queueEvents = d.transaction((tx) => {
+    tx.update(providerTargets)
+      .set({ enabled, updatedAt: nowUnix() })
+      .where(eq(providerTargets.id, target.id))
+      .run()
+    if (!enabled) {
+      disableAgentsForProviderTargetInDb(target.id, tx)
+    }
+    return disabling
+      ? cancelProviderTargetSessionQueuesInTransaction(tx, {
+          providerTargetId: target.id,
+          updatedAt: nowUnix(),
+        })
+      : []
+  })
+  publishSessionTailEvents(queueEvents)
+  if (disabling) {
+    await ChatRuntime.cancelProviderTargetSessions(target.id)
+    releaseLiveProviderRuntimeSessionsForProviderTarget(target.id)
+  }
+  return getProviderTarget(target.id)!
+}
+
+export async function removeProviderTarget(providerTargetId: string): Promise<void> {
+  const target = resolveProviderTarget(providerTargetId)
+  await prepareProviderTargetExtensionDeletion(target.id)
+  const d = db()
+  const cancellationEvents = d.transaction((tx) => {
+    const now = nowUnix()
+    tx.update(providerTargets)
+      .set({ enabled: false, updatedAt: now })
+      .where(eq(providerTargets.id, target.id))
+      .run()
+    return cancelProviderTargetSessionQueuesInTransaction(tx, {
+      providerTargetId: target.id,
+      updatedAt: now,
+    })
+  })
+  publishSessionTailEvents(cancellationEvents)
+  await ChatRuntime.cancelProviderTargetSessions(target.id)
+
+  const storedSessionEvents = d.transaction((tx) => {
+    const now = nowUnix()
+    const ownedAgentIds = tx
+      .select({ id: agents.id })
+      .from(agents)
+      .where(eq(agents.providerTargetId, target.id))
+      .all()
+      .map(row => row.id)
+
+    tx.update(sessions)
+      .set({ providerTargetId: null, updatedAt: now })
+      .where(eq(sessions.providerTargetId, target.id))
+      .run()
+    unlinkProviderTargetFromDurableProviderRuntimeBindings({
+      providerTargetId: target.id,
+      writer: tx,
+    })
+    tx.update(backendCapabilitySnapshots)
+      .set({ providerTargetId: null })
+      .where(eq(backendCapabilitySnapshots.providerTargetId, target.id))
+      .run()
+    tx.update(runtimeAuditLog)
+      .set({ providerTargetId: null })
+      .where(eq(runtimeAuditLog.providerTargetId, target.id))
+      .run()
+    tx.update(usageLogs)
+      .set({ providerTargetId: null })
+      .where(eq(usageLogs.providerTargetId, target.id))
+      .run()
+    tx.delete(providerTargetModelCache).where(eq(providerTargetModelCache.providerTargetId, target.id)).run()
+    tx.delete(agentSessions).where(eq(agentSessions.providerTargetId, target.id)).run()
+    if (ownedAgentIds.length > 0) {
+      tx.update(agents)
+        .set({
+          providerTargetId: null,
+          enabled: false,
+          updatedAt: now,
+        })
+        .where(inArray(agents.id, ownedAgentIds))
+        .run()
+    }
+    tx.delete(providerTargets).where(eq(providerTargets.id, target.id)).run()
+    return []
+  })
+  publishSessionTailEvents(storedSessionEvents)
+  releaseLiveProviderRuntimeSessionsForProviderTarget(target.id)
+}
+
+export function assertProviderTargetCompatibleWithRuntime(
+  target: ProviderTarget | string,
+  runtimeKind: RuntimeKind,
+): void {
+  const providerTargetId = parseTargetId(target)
+  const owningRuntimeKind = readRuntimeOwnedProviderTargetOwner(providerTargetId)
+  if (owningRuntimeKind) {
+    if (owningRuntimeKind === runtimeKind) {
+      return
+    }
+    throw new AppError({
+      code: 'invalid_provider_target',
+      status: 400,
+      message: 'Runtime-owned provider target is not compatible with the selected runtime',
+      details: {
+        providerTargetId,
+        runtimeKind,
+        owningRuntimeKind,
+      },
+    })
+  }
+  if (readRuntimeProviderBinding(runtimeKind) === 'none') {
+    // Binding-'none' runtimes never bind to a provider; a stored target only carries legacy
+    // launch configuration, so no provider-kind compatibility applies.
+    return
+  }
+  if (runtimeOwnsProviderBinding(runtimeKind)) {
+    throw new AppError({
+      code: 'invalid_provider_target',
+      status: 400,
+      message: 'Runtime only supports runtime-owned provider targets',
+      details: {
+        providerTargetId,
+        runtimeKind,
+      },
+    })
+  }
+  const resolved = resolveProviderTargetForRuntime(target, runtimeKind)
+  if (!runtimeSupportsProviderKind(runtimeKind, resolved.providerKind)) {
+    throw new AppError({
+      code: 'invalid_provider_target',
+      status: 400,
+      message: 'Provider target is not compatible with the selected runtime',
+      details: {
+        providerTargetId: resolved.id,
+        runtimeKind,
+        providerKind: resolved.providerKind,
+      },
+    })
+  }
+}
+
+export function getProviderTargetModelSettings(
+  input: ProviderTarget | string,
+): ProviderTargetModelSettings {
+  const resolved = resolveProviderTarget(input)
+  return {
+    providerTargetId: resolved.id,
+    providerTargetKind: resolved.kind,
+    configJson: resolved.configJson,
+    connectionConfigJson: resolved.connectionConfigJson,
+    enabledModelsJson: resolved.enabledModelsJson,
+    customModelsJson: resolved.customModelsJson,
+  }
+}
+
+/**
+ * Read the stored model visibility for a target: an empty/malformed list means
+ * every model is visible, the `__all_disabled__` sentinel disables all models,
+ * and any other list restricts visibility to the listed model ids.
+ */
+export function readProviderTargetModelVisibility(enabledModelsJson: string): ProviderTargetModelVisibility {
+  const parsed = EnabledModelsJsonSchema.safeParse(enabledModelsJson)
+  const enabledModels = parsed.success ? parsed.data : []
+  if (enabledModels.length === 0) {
+    return { kind: 'all' }
+  }
+  if (enabledModels.length === 1 && enabledModels[0] === ALL_MODELS_DISABLED_SENTINEL) {
+    return { kind: 'all-disabled' }
+  }
+  return {
+    kind: 'subset',
+    modelIds: enabledModels.filter(id => id !== ALL_MODELS_DISABLED_SENTINEL),
+  }
+}
+
+export function updateProviderTargetModelVisibility(
+  input: ProviderTarget | string,
+  enabledModels: string[],
+): ProviderTargetModelSettings {
+  const providerTargetId = parseTargetId(input)
+  resolveProviderTarget(providerTargetId)
+  const enabledModelsJson = JSON.stringify(z.array(z.string().trim().min(1)).parse(enabledModels))
+  db()
+    .update(providerTargets)
+    .set({
+      enabledModelsJson,
+      updatedAt: nowUnix(),
+    })
+    .where(eq(providerTargets.id, providerTargetId))
+    .run()
+
+  return getProviderTargetModelSettings(providerTargetId)
+}
+
+export function updateProviderTargetClaudeAgentConfig(
+  input: ProviderTarget | string,
+  patch: ClaudeAgentConfigPatch | null,
+): ProviderTargetModelSettings {
+  const providerTargetId = parseTargetId(input)
+  const target = resolveProviderTarget(providerTargetId)
+  const connectionConfig = JsonObjectTextSchema.parse(target.connectionConfigJson)
+  const nextConnectionConfig = applyClaudeAgentConfigPatch(connectionConfig, patch)
+
+  db()
+    .update(providerTargets)
+    .set({
+      connectionConfigJson: JSON.stringify(nextConnectionConfig),
+      updatedAt: nowUnix(),
+    })
+    .where(eq(providerTargets.id, providerTargetId))
+    .run()
+
+  return getProviderTargetModelSettings(providerTargetId)
+}
+
+export function updateProviderTargetClaudeAgentConfigFromJson(
+  input: ProviderTarget | string,
+  value: unknown,
+): ProviderTargetModelSettings {
+  return updateProviderTargetClaudeAgentConfig(input, normalizeClaudeAgentConfigPatch(value))
+}
+
+export async function updateProviderTargetCustomModels(
+  input: ProviderTarget | string,
+  models: Array<{ id: string, label?: string }>,
+): Promise<CustomModelEntry[]> {
+  const providerTargetId = parseTargetId(input)
+  resolveProviderTarget(providerTargetId)
+  const parsedModels = z.array(CustomModelInputSchema).parse(models)
+  const entries: CustomModelEntry[] = parsedModels.map(model => ({
+    id: model.id,
+    label: model.label ?? model.id,
+    capabilities: {},
+  }))
+
+  db()
+    .update(providerTargets)
+    .set({
+      customModelsJson: JSON.stringify(entries.map(({ id, label }) => ({ id, label }))),
+      updatedAt: nowUnix(),
+    })
+    .where(eq(providerTargets.id, providerTargetId))
+    .run()
+
+  return entries
+}
+
+/**
+ * Remove custom-model rows that the provider has just reported itself.
+ *
+ * Custom models are an escape hatch for incomplete model endpoints, not a
+ * second copy of live inventory. Pruning only after a successful upstream
+ * response preserves every user entry the provider did not actually return.
+ */
+export function pruneDiscoveredProviderTargetCustomModels(
+  input: ProviderTarget | string,
+  discoveredModelIds: readonly string[],
+): CustomModelEntry[] {
+  const providerTargetId = parseTargetId(input)
+  const target = resolveProviderTarget(providerTargetId)
+  const customModels = z.array(CustomModelInputSchema).parse(JSON.parse(target.customModelsJson))
+  const discovered = new Set(z.array(z.string().trim().min(1)).parse(discoveredModelIds))
+  const remaining = customModels.filter(model => !discovered.has(model.id))
+  const entries: CustomModelEntry[] = remaining.map(model => ({
+    id: model.id,
+    label: model.label ?? model.id,
+    capabilities: {},
+  }))
+
+  if (remaining.length === customModels.length) {
+    return entries
+  }
+
+  db()
+    .update(providerTargets)
+    .set({
+      customModelsJson: JSON.stringify(entries.map(({ id, label }) => ({ id, label }))),
+      updatedAt: nowUnix(),
+    })
+    .where(eq(providerTargets.id, providerTargetId))
+    .run()
+
+  return entries
+}
