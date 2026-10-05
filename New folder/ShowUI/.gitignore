@@ -1,0 +1,20 @@
+.gitignore
+
+# Useless
+.ipynb_checkpoints/
+__pycache__/
+*.py[cod]
+venv/
+.env/
+
+## Uncleaned sections
+# Mind2Web
+
+# AITW
+
+# MiniWob
+synapse/
+test_miniwob.py
+
+# Personal
+push.sh
