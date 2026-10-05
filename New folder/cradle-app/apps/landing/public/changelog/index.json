@@ -1,0 +1,146 @@
+[
+  {
+    "version": "dev-20260718.1",
+    "date": "2026-07-18",
+    "languages": [
+      "en",
+      "zh"
+    ],
+    "title": {
+      "en": "Ultra Reasoning and More Resilient Runtimes",
+      "zh": "Ultra 推理与更稳健的运行时"
+    }
+  },
+  {
+    "version": "dev-20260717.1",
+    "date": "2026-07-17",
+    "languages": [
+      "en",
+      "zh"
+    ],
+    "title": {
+      "en": "Calmer Database Upgrades and Startup",
+      "zh": "更安心的数据库升级与启动体验"
+    }
+  },
+  {
+    "version": "dev-20260716.1",
+    "date": "2026-07-16",
+    "languages": [
+      "en",
+      "zh"
+    ],
+    "title": {
+      "en": "Cradle Work: Let Agents Finish the Job",
+      "zh": "Cradle Work：让 Agent 真正完成一件事"
+    }
+  },
+  {
+    "version": "dev-20260706.1",
+    "date": "2026-07-06",
+    "languages": [
+      "en",
+      "zh"
+    ],
+    "title": {
+      "en": "Open Source! Split Workspace, Plugin Ecosystem, Workspace Migration & Major Stability Hardening",
+      "zh": "正式开源！分屏工作区、插件生态、Workspace 迁移，以及大规模稳定性加固。"
+    }
+  },
+  {
+    "version": "dev-20260628.1",
+    "date": "2026-06-28",
+    "languages": [
+      "en",
+      "zh"
+    ],
+    "title": {
+      "en": "Tear-off Surfaces & Diff Review Hardening",
+      "zh": "任意 Surface 窗口分离，Diff Review 生命周期加固，以及一轮稳定性提升。"
+    }
+  },
+  {
+    "version": "dev-20260625.1",
+    "date": "2026-06-25",
+    "languages": [
+      "en",
+      "zh"
+    ],
+    "title": {
+      "en": "Claude Subscription Login & Changelog Launch",
+      "zh": "Claude 订阅登录与 Changelog 上线"
+    }
+  },
+  {
+    "version": "dev-20260625.2",
+    "date": "2026-06-25",
+    "languages": [
+      "en",
+      "zh"
+    ],
+    "title": {
+      "en": "Release Pipeline Fixes",
+      "zh": "发布流程修复"
+    }
+  },
+  {
+    "version": "dev-20260624.1",
+    "date": "2026-06-24",
+    "languages": [
+      "en",
+      "zh"
+    ],
+    "title": {
+      "en": "Remote Runtime & Claude Subscription Login",
+      "zh": "Remote Runtime / Relay 全链路打通，Command Palette 重建，Claude 订阅登录，以及大量体验优化。"
+    }
+  },
+  {
+    "version": "dev-20260621.1",
+    "date": "2026-06-21",
+    "languages": [
+      "en",
+      "zh"
+    ],
+    "title": {
+      "en": "Conversation Bridge & Diffs Preview",
+      "zh": "Conversation Bridge 与 Diffs Preview"
+    }
+  },
+  {
+    "version": "dev-20260620.1",
+    "date": "2026-06-20",
+    "languages": [
+      "en",
+      "zh"
+    ],
+    "title": {
+      "en": "Plugin Management & Streaming Reliability",
+      "zh": "插件管理与流式稳定性优化"
+    }
+  },
+  {
+    "version": "dev-20260619.1",
+    "date": "2026-06-19",
+    "languages": [
+      "en",
+      "zh"
+    ],
+    "title": {
+      "en": "Codex Auth Modes & Background Terminal",
+      "zh": "Codex 认证模式与后台终端面板"
+    }
+  },
+  {
+    "version": "dev-20260618.1",
+    "date": "2026-06-18",
+    "languages": [
+      "en",
+      "zh"
+    ],
+    "title": {
+      "en": "First Public Dev Build",
+      "zh": "首个公开 Dev 构建"
+    }
+  }
+]
