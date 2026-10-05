@@ -1,0 +1,24 @@
+FROM node:20-slim
+
+# Install system utilities needed for isolated agent testing
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /nexus-sandbox
+
+# Create unprivileged sandbox user
+RUN useradd -m -s /bin/bash sandboxuser && \
+    mkdir -p /nexus-sandbox/workspace /nexus-sandbox/temp && \
+    chown -R sandboxuser:sandboxuser /nexus-sandbox
+
+USER sandboxuser
+
+ENV NODE_ENV=development
+ENV NEXUS_SANDBOX_MODE=true
+
+WORKDIR /nexus-sandbox/workspace
+
+CMD ["bash"]
