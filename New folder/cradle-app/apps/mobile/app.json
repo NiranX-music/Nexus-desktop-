@@ -1,0 +1,77 @@
+{
+  "expo": {
+    "name": "Cradle",
+    "slug": "cradle-mobile",
+    "scheme": "cradle",
+    "version": "0.1.0",
+    "icon": "../../resources/icon.png",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "app.cradle.mobile",
+      "entitlements": {
+        "keychain-access-groups": [
+          "$(AppIdentifierPrefix)$(CFBundleIdentifier)"
+        ]
+      },
+      "infoPlist": {
+        "NSCameraUsageDescription": "Cradle needs camera access so you can take a photo and attach it to a chat.",
+        "NSLocalNetworkUsageDescription": "Cradle connects to your Cradle Server on the local network.",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        },
+        "UIApplicationSceneManifest": {
+          "UIApplicationSupportsMultipleScenes": false,
+          "UISceneConfigurations": {
+            "UIWindowSceneSessionRoleApplication": [
+              {
+                "UISceneConfigurationName": "Default Configuration",
+                "UISceneDelegateClassName": "$(PRODUCT_MODULE_NAME).CradleSceneDelegate"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "android": {
+      "package": "app.cradle.mobile",
+      "adaptiveIcon": {
+        "foregroundImage": "../../resources/icon.png",
+        "backgroundColor": "#fafafa"
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Cradle needs camera access so you can take a photo and attach it to a chat.",
+          "microphonePermission": false,
+          "photosPermission": "Cradle needs access to your photos so you can attach them to a chat."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          },
+          "ios": {
+            "deploymentTarget": "26.0"
+          }
+        }
+      ],
+      "./plugins/with-markdown-view",
+      "./plugins/with-ios-scene-lifecycle"
+    ],
+    "experiments": {
+      "inlineModules": {
+        "watchedDirectories": ["src"]
+      },
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}
