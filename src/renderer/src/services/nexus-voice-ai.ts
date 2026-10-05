@@ -67,6 +67,14 @@ import { normalizeGeminiLiveModel } from '@renderer/config/gemini-models'
 import { createWhiteboardPayload, publishWhiteboardWrite } from '@renderer/services/whiteboard'
 import { getAllMcpTools, callMcpTool, listMcpServers } from './mcp-api'
 import { dispatchFleetTask, getFleetStatus, onFleetTaskComplete } from './agent-fleet-api'
+import { setDesktopWallpaper, openWallpaperHUD } from '@renderer/tools/wallpaper-api'
+import { forgePresentation, forgeSpreadsheet, openDocForgeHUD } from '@renderer/tools/doc-forge-api'
+import { startFocusSession, stopFocusSession, openFocusHUD } from '@renderer/tools/focus-api'
+import {
+  sendWhatsAppMessage as sendWhatsAppDirect,
+  scheduleWhatsAppMessage as scheduleWhatsAppDirect,
+  openWhatsAppHUD
+} from '@renderer/tools/whatsapp-api'
 
 export type NexusVoiceStatus = {
   isConnected: boolean
@@ -878,15 +886,6 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
                     name: 'take_screenshot',
                     description: 'Take a screenshot.',
                     parameters: { type: 'OBJECT', properties: {}, required: [] }
-                  },
-                  {
-                    name: 'google_search',
-                    description: 'Search Google.',
-                    parameters: {
-                      type: 'OBJECT',
-                      properties: { query: { type: 'STRING' } },
-                      required: ['query']
-                    }
                   },
                   {
                     name: 'click_on_screen',
@@ -1776,6 +1775,137 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
                       required: ['entity']
                     }
                   },
+                  {
+                    name: 'set_wallpaper',
+                    description:
+                      'Set or change the desktop wallpaper background. Can accept an image URL, preset name (cyber-matrix, tokyo-neon, quantum-core, deep-space), or local image path.',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {
+                        source: {
+                          type: 'STRING',
+                          description: 'The image URL, local file path, or preset ID to apply as desktop wallpaper.'
+                        }
+                      },
+                      required: ['source']
+                    }
+                  },
+                  {
+                    name: 'open_wallpaper_forge',
+                    description:
+                      'Open the AI Wallpaper Engine HUD on screen for visual preset browsing and custom prompt synthesis.',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {
+                        prompt: {
+                          type: 'STRING',
+                          description: 'Optional initial prompt for wallpaper synthesis.'
+                        }
+                      }
+                    }
+                  },
+                  {
+                    name: 'forge_presentation',
+                    description:
+                      'Autonomously generate and open an interactive modern HTML slide presentation deck saved directly to Downloads.',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {
+                        title: { type: 'STRING', description: 'Title of the presentation.' },
+                        topic: { type: 'STRING', description: 'Theme or topic of the presentation.' },
+                        slides: {
+                          type: 'ARRAY',
+                          description: 'List of slides with title, optional subtitle, bullets array, and optional footer.',
+                          items: {
+                            type: 'OBJECT',
+                            properties: {
+                              title: { type: 'STRING' },
+                              subtitle: { type: 'STRING' },
+                              bullets: { type: 'ARRAY', items: { type: 'STRING' } },
+                              footer: { type: 'STRING' }
+                            },
+                            required: ['title', 'bullets']
+                          }
+                        }
+                      },
+                      required: ['title', 'topic', 'slides']
+                    }
+                  },
+                  {
+                    name: 'forge_spreadsheet',
+                    description:
+                      'Autonomously generate and open a structured spreadsheet (.csv / Excel format) saved directly to Downloads.',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {
+                        title: { type: 'STRING', description: 'Title or topic of the spreadsheet.' },
+                        columns: {
+                          type: 'ARRAY',
+                          description: 'Array of column objects with key and label.',
+                          items: {
+                            type: 'OBJECT',
+                            properties: {
+                              key: { type: 'STRING' },
+                              label: { type: 'STRING' }
+                            },
+                            required: ['key', 'label']
+                          }
+                        },
+                        rows: {
+                          type: 'ARRAY',
+                          description: 'Array of row objects matching column keys.',
+                          items: { type: 'OBJECT' }
+                        }
+                      },
+                      required: ['title', 'columns', 'rows']
+                    }
+                  },
+                  {
+                    name: 'open_doc_forge',
+                    description:
+                      'Open the Document & Office Forge HUD widget on screen for interactive slide deck or spreadsheet creation.',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {
+                        type: {
+                          type: 'STRING',
+                          description: '"presentation" or "spreadsheet"'
+                        }
+                      }
+                    }
+                  },
+                  {
+                    name: 'start_focus_session',
+                    description:
+                      'Engage the Deep Work Focus Protocol: starts a timed focus session and activates the distraction shield terminating blacklisted gaming/social apps.',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {
+                        minutes: {
+                          type: 'INTEGER',
+                          description: 'Duration of deep work session in minutes (default 25).'
+                        }
+                      }
+                    }
+                  },
+                  {
+                    name: 'stop_focus_session',
+                    description: 'Deactivate the Deep Work Focus Protocol and distraction shield.',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {}
+                    }
+                  },
+                  {
+                    name: 'open_focus_protocol',
+                    description: 'Open the Deep Work Focus Protocol HUD widget on screen.',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {
+                        minutes: { type: 'INTEGER', description: 'Planned focus minutes.' }
+                      }
+                    }
+                  },
                   ...mcpDeclarations
                 ]
               }
@@ -1966,18 +2096,34 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
               } else if (call.name === 'execute_sequence') {
                 result = await executeGhostSequence(call.args.json_actions)
               } else if (call.name === 'send_whatsapp') {
-                result = await sendWhatsAppMessage(
-                  call.args.name,
-                  call.args.message,
-                  call.args.file_path
-                )
+                const target = String(call.args.phone || call.args.name || '').trim()
+                if (target && /^\+?[\d\s\-()]+$/.test(target) && target.replace(/\D/g, '').length >= 7) {
+                  result = await sendWhatsAppDirect(target, call.args.message)
+                } else {
+                  result = await sendWhatsAppMessage(
+                    call.args.name || target,
+                    call.args.message,
+                    call.args.file_path
+                  )
+                }
               } else if (call.name === 'schedule_whatsapp') {
-                result = await scheduleWhatsAppMessage(
-                  call.args.name,
-                  call.args.message,
-                  call.args.delay_minutes,
-                  call.args.file_path
-                )
+                const target = String(call.args.phone || call.args.name || '').trim()
+                const delay = Number(call.args.delay_minutes || 1)
+                if (target && /^\+?[\d\s\-()]+$/.test(target) && target.replace(/\D/g, '').length >= 7) {
+                  result = await scheduleWhatsAppDirect({
+                    phone: target,
+                    recipientName: call.args.name,
+                    message: call.args.message,
+                    delayMinutes: delay
+                  })
+                } else {
+                  result = await scheduleWhatsAppMessage(
+                    call.args.name || target,
+                    call.args.message,
+                    delay,
+                    call.args.file_path
+                  )
+                }
               } else if (call.name === 'play_spotify_music') {
                 result = await playSpotifyMusic(call.args.song_name)
               } else if (call.name === 'set_volume') {
@@ -2096,10 +2242,26 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
                 result = await ingestCodebase(call.args.dirPath)
               } else if (call.name === 'consult_oracle') {
                 result = await consultOracle(call.args.query)
-              } else if (call.name === 'ingest_codebase') {
-                result = await ingestCodebase(call.args.dirPath)
-              } else if (call.name === 'consult_oracle') {
-                result = await consultOracle(call.args.query)
+              } else if (call.name === 'set_wallpaper') {
+                result = await setDesktopWallpaper(call.args.source)
+              } else if (call.name === 'open_wallpaper_forge') {
+                result = openWallpaperHUD(call.args.prompt)
+              } else if (call.name === 'forge_presentation') {
+                result = await forgePresentation(call.args.title, call.args.topic, call.args.slides)
+              } else if (call.name === 'forge_spreadsheet') {
+                result = await forgeSpreadsheet({
+                  title: call.args.title,
+                  columns: call.args.columns,
+                  rows: call.args.rows
+                })
+              } else if (call.name === 'open_doc_forge') {
+                result = openDocForgeHUD(call.args.type)
+              } else if (call.name === 'start_focus_session') {
+                result = await startFocusSession(Number(call.args.minutes || 25))
+              } else if (call.name === 'stop_focus_session') {
+                result = await stopFocusSession()
+              } else if (call.name === 'open_focus_protocol') {
+                result = openFocusHUD(Number(call.args.minutes || 25))
               } else if (call.name === 'deep_research') {
                 result = await runDeepResearch(call.args.query)
               } else if (call.name === 'create_widget') {

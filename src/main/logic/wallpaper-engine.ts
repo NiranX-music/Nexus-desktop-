@@ -61,10 +61,21 @@ export default function registerWallpaperEngine(ipcMain: IpcMain) {
     return { success: true, presets: PRESET_WALLPAPERS }
   })
 
-  // Set wallpaper from base64 data or image URL or local file
+  // Set wallpaper from base64 data, preset ID, image URL, or local file
   ipcMain.handle('wallpaper-set', async (_event, payload: { source: string; filename?: string }) => {
     try {
-      const { source, filename = `nexus_${Date.now()}.png` } = payload
+      let { source, filename = `nexus_${Date.now()}.png` } = payload
+
+      // Resolve preset ID if specified
+      const matchedPreset = PRESET_WALLPAPERS.find(
+        (p) =>
+          p.id === source.toLowerCase().trim() ||
+          p.title.toLowerCase().trim() === source.toLowerCase().trim()
+      )
+      if (matchedPreset) {
+        source = matchedPreset.url
+      }
+
       let targetFilePath = ''
 
       if (source.startsWith('data:image/')) {
@@ -102,6 +113,21 @@ public class Wallpaper {
 `
         const encodedScript = Buffer.from(psScript, 'utf16le').toString('base64')
         await execAsync(`powershell.exe -NoProfile -NonInteractive -EncodedCommand ${encodedScript}`)
+      } else if (process.platform === 'darwin') {
+        await execAsync(
+          `osascript -e 'tell application "System Events" to tell every desktop to set picture to "${targetFilePath}"'`
+        )
+      } else if (process.platform === 'linux') {
+        try {
+          await execAsync(
+            `gsettings set org.gnome.desktop.background picture-uri "file://${targetFilePath}"`
+          )
+          await execAsync(
+            `gsettings set org.gnome.desktop.background picture-uri-dark "file://${targetFilePath}"`
+          )
+        } catch {
+          await execAsync(`feh --bg-fill "${targetFilePath}" 2>/dev/null || true`)
+        }
       }
 
       return {

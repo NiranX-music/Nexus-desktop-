@@ -34,22 +34,74 @@ export default function registerFocusProtocol(ipcMain: IpcMain) {
     totalFocusMinutes: 0
   }
 
-  // Terminate distracting blacklisted processes
-  const purgeDistractions = async (blacklist = DEFAULT_BLACKLIST): Promise<string[]> => {
-    if (process.platform !== 'win32') return []
+  let activeBlacklist: string[] = DEFAULT_BLACKLIST
+  let shieldTimer: NodeJS.Timeout | null = null
+
+  // Terminate distracting blacklisted processes across platforms
+  const purgeDistractions = async (blacklist = activeBlacklist): Promise<string[]> => {
     const terminated: string[] = []
 
-    for (const appName of blacklist) {
-      try {
-        const { stdout } = await execAsync(`taskkill /F /IM ${appName}.exe 2>nul || exit 0`)
-        if (stdout && stdout.toLowerCase().includes('success')) {
-          terminated.push(appName)
+    if (process.platform === 'win32') {
+      for (const appName of blacklist) {
+        try {
+          const { stdout } = await execAsync(`taskkill /F /IM ${appName}.exe 2>nul || exit 0`)
+          if (stdout && stdout.toLowerCase().includes('success')) {
+            terminated.push(appName)
+          }
+        } catch {
+          // Ignored if process was not running
         }
-      } catch {
-        // Ignored if process was not running
+      }
+    } else if (process.platform === 'darwin' || process.platform === 'linux') {
+      for (const appName of blacklist) {
+        try {
+          await execAsync(`pkill -f -i "${appName}" || true`)
+          terminated.push(appName)
+        } catch {
+          // Ignored
+        }
       }
     }
+
     return terminated
+  }
+
+  const stopShield = () => {
+    if (shieldTimer) {
+      clearInterval(shieldTimer)
+      shieldTimer = null
+    }
+  }
+
+  const startShield = () => {
+    stopShield()
+    shieldTimer = setInterval(async () => {
+      if (!session.isActive || !session.startTime) {
+        stopShield()
+        return
+      }
+
+      // Check if session duration has completed
+      const elapsedMs = Date.now() - session.startTime
+      const totalPlannedMs = session.plannedMinutes * 60 * 1000
+
+      if (elapsedMs >= totalPlannedMs) {
+        session.completedSessions += 1
+        session.totalFocusMinutes += session.plannedMinutes
+        session.isActive = false
+        session.startTime = null
+        stopShield()
+        return
+      }
+
+      // Active distraction shield enforcement
+      const newlyTerminated = await purgeDistractions(activeBlacklist)
+      if (newlyTerminated.length > 0) {
+        session.blockedAppsTerminated = Array.from(
+          new Set([...session.blockedAppsTerminated, ...newlyTerminated])
+        )
+      }
+    }, 15000)
   }
 
   // Start deep work protocol
@@ -57,14 +109,18 @@ export default function registerFocusProtocol(ipcMain: IpcMain) {
     'focus-start-session',
     async (_event, payload?: { minutes?: number; blacklist?: string[] }) => {
       const minutes = payload?.minutes || 25
-      const blacklist = payload?.blacklist || DEFAULT_BLACKLIST
+      activeBlacklist = payload?.blacklist || DEFAULT_BLACKLIST
 
-      const terminated = await purgeDistractions(blacklist)
+      const terminated = await purgeDistractions(activeBlacklist)
 
       session.isActive = true
       session.startTime = Date.now()
       session.plannedMinutes = minutes
-      session.blockedAppsTerminated = [...session.blockedAppsTerminated, ...terminated]
+      session.blockedAppsTerminated = Array.from(
+        new Set([...session.blockedAppsTerminated, ...terminated])
+      )
+
+      startShield()
 
       return {
         success: true,
@@ -97,6 +153,8 @@ export default function registerFocusProtocol(ipcMain: IpcMain) {
 
   // Stop / abort focus session
   ipcMain.handle('focus-stop-session', async () => {
+    stopShield()
+
     if (session.isActive && session.startTime) {
       const elapsed = Math.max(1, Math.floor((Date.now() - session.startTime) / 60000))
       session.totalFocusMinutes += elapsed

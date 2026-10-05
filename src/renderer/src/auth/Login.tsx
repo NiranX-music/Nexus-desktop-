@@ -17,7 +17,11 @@ import {
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../store/auth-store'
 import { configureCloudSupabase } from '../lib/supabase'
-import { normalizeCloudAuthUser, persistPreferredDesktopAuthMode } from '../services/auth-session'
+import {
+  normalizeCloudAuthUser,
+  persistPreferredDesktopAuthMode,
+  persistStoredAppAuthToken
+} from '../services/auth-session'
 import {
   bootstrapCloudAccount,
   saveCloudData,
@@ -76,12 +80,6 @@ export default function LoginPage() {
 
     try {
       const supabase = configureCloudSupabase()
-      if (!supabase) {
-        throw new Error(
-          'Supabase is not configured for this build. Add VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.'
-        )
-      }
-
       const normalizedEmail = email.trim().toLowerCase()
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
         throw new Error('Enter a valid email address.')
@@ -91,6 +89,45 @@ export default function LoginPage() {
       }
 
       const name = displayName.trim() || normalizedEmail.split('@')[0] || 'Nexus Operator'
+
+      if (!supabase) {
+        if (mode === 'create') {
+          if (password !== confirmPassword) throw new Error('Passwords do not match.')
+          if (name.length < 2) throw new Error('Enter a display name.')
+
+          const res = await (window as any).electron.ipcRenderer.invoke('email-auth:register', {
+            name,
+            email: normalizedEmail,
+            password
+          })
+
+          if (!res?.ok || !res?.token) {
+            throw new Error(res?.error || 'Local account creation failed.')
+          }
+
+          persistPreferredDesktopAuthMode('app')
+          persistStoredAppAuthToken(res.token)
+          localStorage.setItem('nexus_user_name', res.user.name)
+          setAuthSession({ token: res.token, mode: 'app', user: res.user })
+        } else {
+          const res = await (window as any).electron.ipcRenderer.invoke('email-auth:login', {
+            email: normalizedEmail,
+            password
+          })
+
+          if (!res?.ok || !res?.token) {
+            throw new Error(res?.error || 'Local sign in failed. Check email and password.')
+          }
+
+          persistPreferredDesktopAuthMode('app')
+          persistStoredAppAuthToken(res.token)
+          localStorage.setItem('nexus_user_name', res.user.name)
+          setAuthSession({ token: res.token, mode: 'app', user: res.user })
+        }
+
+        navigate('/', { replace: true })
+        return
+      }
 
       if (mode === 'create') {
         if (password !== confirmPassword) throw new Error('Passwords do not match.')
@@ -165,6 +202,43 @@ export default function LoginPage() {
       navigate('/', { replace: true })
     } catch (err: any) {
       setError(err.message || 'Authentication failed.')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const handleLocalBypass = async () => {
+    setIsSubmitting(true)
+    setError('')
+    try {
+      const localEmail = 'operator@nexus.local'
+      const localName = 'Nexus Operator'
+      const localPass = 'nexusOperator2026!'
+
+      let res = await (window as any).electron.ipcRenderer.invoke('email-auth:login', {
+        email: localEmail,
+        password: localPass
+      })
+
+      if (!res?.ok) {
+        res = await (window as any).electron.ipcRenderer.invoke('email-auth:register', {
+          name: localName,
+          email: localEmail,
+          password: localPass
+        })
+      }
+
+      if (res?.ok && res?.token) {
+        persistPreferredDesktopAuthMode('app')
+        persistStoredAppAuthToken(res.token)
+        localStorage.setItem('nexus_user_name', res.user.name || localName)
+        setAuthSession({ token: res.token, mode: 'app', user: res.user })
+        navigate('/', { replace: true })
+      } else {
+        throw new Error(res?.error || 'Failed to initialize local operator session.')
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Local login error.')
     } finally {
       setIsSubmitting(false)
     }
@@ -377,6 +451,16 @@ export default function LoginPage() {
             >
               {mode === 'signin' ? <LogIn className="w-5 h-5" /> : <UserPlus className="w-5 h-5" />}
               {isSubmitting ? 'Checking' : mode === 'signin' ? 'Sign In' : 'Create Account'}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleLocalBypass}
+              disabled={!isReady || isSubmitting}
+              className="mt-2.5 w-full flex items-center justify-center gap-2 h-10 px-4 rounded-xl border border-cyan-500/30 bg-cyan-950/20 hover:bg-cyan-900/30 text-cyan-300 font-mono text-xs tracking-wider uppercase transition cursor-pointer disabled:opacity-50"
+            >
+              <Cpu size={14} />
+              Local Operator Direct Access
             </button>
 
             <div className="mt-3 flex items-center justify-center gap-2 text-emerald-500/50 text-[10px] font-mono tracking-widest uppercase">

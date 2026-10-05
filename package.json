@@ -22,7 +22,7 @@
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
-    "postinstall": "electron-builder install-app-deps",
+    "postinstall": "electron-builder install-app-deps && node scripts/patch-native-fallbacks.cjs",
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "electron-vite build && electron-builder --mac",
@@ -67,7 +67,6 @@
     "lucide-react": "^1.8.0",
     "mammoth": "^1.12.0",
     "monaco-editor": "^0.55.1",
-    "node-window-manager": "^2.2.4",
     "openai": "^6.38.0",
     "pdf-parse": "^2.4.5",
     "prismjs": "^1.30.0",
@@ -109,7 +108,7 @@
     "electron": "^41.2.1",
     "electron-builder": "^26.8.1",
     "electron-vite": "^5.0.0",
-    "eslint": "^10.2.0",
+    "eslint": "^9.39.5",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.0",
     "eslint-plugin-react-refresh": "^0.5.2",
@@ -119,5 +118,8 @@
     "tailwindcss": "^4.1.18",
     "typescript": "^6.0.3",
     "vite": "^7.3.0"
+  },
+  "optionalDependencies": {
+    "node-window-manager": "^2.2.4"
   }
 }

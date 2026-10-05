@@ -3,6 +3,7 @@ import fs from 'fs'
 import fsPromises from 'fs/promises'
 import path from 'path'
 import { globalSnapshotManager } from './snapshot-manager'
+import { globalSandboxManager } from '../security/sandbox-manager'
 
 interface PatchFilePayload {
   filePath: string
@@ -101,8 +102,15 @@ export default function registerFilePatcher(ipcMain: IpcMain) {
           return { success: false, error: 'File path is required.' }
         }
 
-        const isAbsolutePath = filePath.includes('/') || filePath.includes('\\')
-        const targetPath = isAbsolutePath ? path.resolve(filePath) : path.join(app.getPath('desktop'), filePath)
+        const resolution = globalSandboxManager.resolveWritePath(filePath)
+        if (!resolution.allowed) {
+          return {
+            success: false,
+            error: resolution.error || 'Patch blocked by Sandbox containment.'
+          }
+        }
+
+        const targetPath = resolution.targetPath
 
         if (!fs.existsSync(targetPath)) {
           if (createIfMissing) {

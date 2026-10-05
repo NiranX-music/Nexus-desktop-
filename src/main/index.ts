@@ -69,6 +69,7 @@ import registerDropZoneControl from './handlers/SmartDropZone-Handler'
 import registerScreenPeeler from './handlers/ScreenPeeler-handler'
 import registerPhantomKeyboard from './handlers/PhantomControl-handler'
 import registerSecurityVault from './security/Security'
+import registerSandboxManager from './security/sandbox-manager'
 import registerEmailAuth from './security/email-auth'
 import registerLockSystem from './security/lock-system'
 import { autoUpdater } from 'electron-updater'
@@ -690,6 +691,7 @@ app.whenReady().then(() => {
   registerLockSystem()
   registerEmailAuth()
   registerSecurityVault()
+  registerSandboxManager(ipcMain)
   registerPhantomKeyboard()
   registerScreenPeeler()
   registerDropZoneControl(ipcMain)

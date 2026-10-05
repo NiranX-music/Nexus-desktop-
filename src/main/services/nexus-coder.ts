@@ -3,14 +3,23 @@ import path from 'path'
 import { IpcMain, App } from 'electron'
 import { exec } from 'child_process'
 import { GoogleGenAI } from '@google/genai'
+import { globalSandboxManager } from '../security/sandbox-manager'
 
 export default function registerNexusCoder({ ipcMain, app }: { ipcMain: IpcMain; app: App }) {
-  const PROJECTS_DIR = path.resolve(app.getPath('userData'), 'Projects')
-  if (!fs.existsSync(PROJECTS_DIR)) fs.mkdirSync(PROJECTS_DIR, { recursive: true })
+  const getProjectsDir = () => {
+    if (globalSandboxManager.isEnabled()) {
+      return globalSandboxManager.getWorkspaceDir()
+    }
+    const dir = path.resolve(app.getPath('userData'), 'Projects')
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+    return dir
+  }
 
   ipcMain.handle('start-live-coding', async (event, { prompt, filename, geminiKey }) => {
     try {
-      const filePath = path.join(PROJECTS_DIR, filename)
+      const projectsDir = getProjectsDir()
+      const cleanFileName = path.basename(filename || 'untitled.js')
+      const filePath = path.join(projectsDir, cleanFileName)
 
       fs.writeFileSync(filePath, '// Boss, connection established. Waiting for AI stream...\n')
 

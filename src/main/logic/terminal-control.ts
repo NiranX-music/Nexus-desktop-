@@ -1,44 +1,55 @@
 import { IpcMain, BrowserWindow } from 'electron'
 import { spawn } from 'child_process'
-import path from 'path'
+import { globalSandboxManager } from '../security/sandbox-manager'
 
 export default function registerSystemControl(ipcMain: IpcMain) {
-
-  const sanitizePath = (inputPath: string) => {
-    let clean = path.normalize(inputPath)
-    if (clean.endsWith(path.sep)) clean = clean.slice(0, -1)
-    return clean
-  }
-
   ipcMain.handle('run-shell-command', async (_event, { command, cwd }) => {
     return new Promise((resolve) => {
-      const safeCwd = cwd ? sanitizePath(cwd) : undefined
+      // 1. Sandbox Command Firewall Validation
+      const validation = globalSandboxManager.validateCommand(command, cwd)
+      const broadcastTerminalData = (data: string) => {
+        const wins = BrowserWindow.getAllWindows()
+        for (const win of wins) {
+          if (!win.isDestroyed()) {
+            win.webContents.send('terminal-data', data)
+          }
+        }
+      }
 
-      const win = BrowserWindow.getAllWindows()[0]
+      if (!validation.allowed) {
+        const errorMsg = `\r\n\x1b[31;1m🛡️ [NEXUS SANDBOX FIREWALL BLOCKED]:\x1b[0m \x1b[31m${validation.reason}\x1b[0m\r\n\x1b[33mCommand:\x1b[0m ${command}\r\n\x1b[32mHost PC filesystem & registry preserved intact.\x1b[0m\r\n\r\n`
+        broadcastTerminalData(errorMsg)
+        return resolve({
+          success: false,
+          output: `[NEXUS SANDBOX BLOCKED]: ${validation.reason}`
+        })
+      }
+
+      const safeCwd = validation.safeCwd
 
       const child = spawn('powershell.exe', ['-Command', command], {
         cwd: safeCwd,
-        stdio: ['ignore', 'pipe', 'pipe'] 
+        stdio: ['ignore', 'pipe', 'pipe']
       })
 
       child.stdout.on('data', (data) => {
         const output = data.toString()
-        if (win) win.webContents.send('terminal-data', output)
+        broadcastTerminalData(output)
       })
 
       child.stderr.on('data', (data) => {
         const output = data.toString()
-        if (win) win.webContents.send('terminal-data', `\x1b[31m${output}\x1b[0m`)
+        broadcastTerminalData(`\x1b[31m${output}\x1b[0m`)
       })
 
       child.on('close', (code) => {
         const msg = `\r\n[Process exited with code ${code}]\r\n`
-        if (win) win.webContents.send('terminal-data', msg)
+        broadcastTerminalData(msg)
         resolve({ success: code === 0, output: `Completed with code ${code}` })
       })
 
       child.on('error', (err) => {
-        if (win) win.webContents.send('terminal-data', `Error: ${err.message}`)
+        broadcastTerminalData(`Error: ${err.message}`)
         resolve({ success: false, output: err.message })
       })
     })

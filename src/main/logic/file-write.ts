@@ -1,15 +1,24 @@
-import { IpcMain, app } from 'electron'
+import { IpcMain } from 'electron'
 import fs from 'fs/promises'
 import fsSync from 'fs'
 import path from 'path'
 import { globalSnapshotManager } from './snapshot-manager'
+import { globalSandboxManager } from '../security/sandbox-manager'
 
 export default function registerFileWrite(ipcMain: IpcMain) {
   ipcMain.handle('write-file', async (_event, { fileName, content }) => {
     try {
-      const isAbsolutePath = fileName.includes('/') || fileName.includes('\\')
+      const resolution = globalSandboxManager.resolveWritePath(fileName)
+      if (!resolution.allowed) {
+        return resolution.error || 'Write blocked by Sandbox.'
+      }
 
-      const targetPath = isAbsolutePath ? path.resolve(fileName) : path.join(app.getPath('desktop'), fileName)
+      const targetPath = resolution.targetPath
+
+      const targetDir = path.dirname(targetPath)
+      if (!fsSync.existsSync(targetDir)) {
+        await fs.mkdir(targetDir, { recursive: true })
+      }
 
       if (fsSync.existsSync(targetPath)) {
         await globalSnapshotManager.takeSnapshot(

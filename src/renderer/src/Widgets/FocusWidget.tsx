@@ -204,7 +204,7 @@ export default function FocusWidget() {
   // Minimal Pill Mode (Pinned at Screen Edge)
   if (isMinimal) {
     return (
-      <div className="fixed bottom-6 right-6 z-9700">
+      <div className="fixed bottom-6 right-6 z-[9700]">
         <motion.div
           initial={{ scale: 0.8, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
@@ -235,7 +235,7 @@ export default function FocusWidget() {
   // Maximal Control HUD
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-9700 flex items-center justify-center p-6 bg-black/80 backdrop-blur-md">
+      <div className="fixed inset-0 z-[9700] flex items-center justify-center p-6 bg-black/80 backdrop-blur-md">
         <motion.div
           initial={{ opacity: 0, scale: 0.94, y: 15 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}

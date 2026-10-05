@@ -24,7 +24,10 @@ import {
   RiRocketLine,
   RiRobot2Line,
   RiVideoLine,
-  RiToolsLine
+  RiToolsLine,
+  RiShieldCheckLine,
+  RiFolderShield2Line,
+  RiExternalLinkLine
 } from 'react-icons/ri'
 import McpSettingsTab from '@renderer/components/McpSettingsTab'
 import {
@@ -99,6 +102,9 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const [downloadProgress, setDownloadProgress] = useState(0)
   const [gatewayModels, setGatewayModels] =
     useState<Record<string, AiGatewayModel[]>>(DEFAULT_AI_GATEWAY_MODELS)
+  const [sandboxEnabled, setSandboxEnabled] = useState(true)
+  const [sandboxWorkspace, setSandboxWorkspace] = useState('')
+  const [sandboxBlockedCount, setSandboxBlockedCount] = useState(0)
 
   useEffect(() => {
     if (window.electron?.ipcRenderer) {
@@ -110,6 +116,21 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
         .then((res) => setFaceCount(res?.faceCount || 0))
 
       window.electron.ipcRenderer.invoke('get-app-version').then((v) => setAppVersion(v))
+
+      window.electron.ipcRenderer
+        .invoke('sandbox:get-status')
+        .then((res) => {
+          if (res) {
+            setSandboxEnabled(res.enabled)
+            setSandboxWorkspace(res.workspaceDir || res.rootDir)
+            setSandboxBlockedCount(res.blockedCount || 0)
+          }
+        })
+        .catch(() => {})
+
+      window.electron.ipcRenderer.on('sandbox:violation-alert', () => {
+        setSandboxBlockedCount((prev) => prev + 1)
+      })
 
       window.electron.ipcRenderer.on('updater-event', (_e, { status, data, error }) => {
         if (status === 'checking') setUpdateStatus('checking')
@@ -134,8 +155,10 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
       })
     }
     return () => {
-      if (window.electron?.ipcRenderer)
+      if (window.electron?.ipcRenderer) {
         window.electron.ipcRenderer.removeAllListeners('updater-event')
+        window.electron.ipcRenderer.removeAllListeners('sandbox:violation-alert')
+      }
     }
   }, [])
 
@@ -182,6 +205,22 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const saveUserName = () => {
     localStorage.setItem('nexus_user_name', userName)
     alert('User Designation Saved.')
+  }
+
+  const handleToggleSandbox = async () => {
+    const nextVal = !sandboxEnabled
+    setSandboxEnabled(nextVal)
+    try {
+      const res = await window.electron.ipcRenderer.invoke('sandbox:set-enabled', nextVal)
+      if (res) {
+        setSandboxEnabled(res.enabled)
+        setSandboxBlockedCount(res.blockedCount || 0)
+      }
+    } catch {}
+  }
+
+  const handleOpenSandboxFolder = () => {
+    window.electron.ipcRenderer.invoke('sandbox:open-folder').catch(() => {})
   }
 
   const saveApiKeys = async () => {
@@ -868,6 +907,108 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                         </button>
                       </div>
                     )}
+                  </div>
+
+                  {/* NEXUS SANDBOX SHIELD */}
+                  <div className="bg-[#111113] border border-white/10 p-7 rounded-2xl flex flex-col gap-6 md:col-span-2">
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-white/10 pb-4">
+                      <div className="flex items-center gap-3">
+                        <div
+                          className={`p-2.5 rounded-xl border ${
+                            sandboxEnabled
+                              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                              : 'bg-red-500/10 border-red-500/30 text-red-400'
+                          }`}
+                        >
+                          <RiShieldCheckLine size={24} />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className={titleClass}>Nexus Sandbox Shield</span>
+                            <span
+                              className={`text-[9px] font-mono tracking-widest px-2.5 py-0.5 rounded-full font-bold border ${
+                                sandboxEnabled
+                                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                                  : 'bg-red-500/10 text-red-400 border-red-500/20'
+                              }`}
+                            >
+                              {sandboxEnabled ? 'HOST PC PROTECTED' : 'SANDBOX OFF - UNRESTRICTED'}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-zinc-400 mt-0.5">
+                            Jails agent file mutations and shell executions inside an isolated workspace. Zero host PC file tampering.
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={handleToggleSandbox}
+                        className={`px-5 py-2.5 rounded-xl text-xs font-mono font-bold tracking-wider transition-all cursor-pointer border ${
+                          sandboxEnabled
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30 shadow-[0_0_20px_rgba(16,185,129,0.15)]'
+                            : 'bg-white/10 text-zinc-300 border-white/10 hover:bg-white/20'
+                        }`}
+                      >
+                        {sandboxEnabled ? 'ACTIVE (SAFE)' : 'DISABLED (RISK)'}
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="bg-black/40 border border-white/5 rounded-xl p-4 flex flex-col gap-1.5">
+                        <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-widest flex items-center gap-1.5">
+                          <RiFolderShield2Line size={13} className="text-emerald-400" /> Filesystem Jail
+                        </span>
+                        <span className="text-xs text-zinc-200 font-mono font-semibold">
+                          Strict Workspace Confinement
+                        </span>
+                        <p className="text-[10px] text-zinc-400 leading-normal">
+                          Writes, deletes, and patches outside the designated sandbox are intercepted and blocked.
+                        </p>
+                      </div>
+
+                      <div className="bg-black/40 border border-white/5 rounded-xl p-4 flex flex-col gap-1.5">
+                        <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-widest flex items-center gap-1.5">
+                          <RiTerminalWindowLine size={13} className="text-emerald-400" /> Command Firewall
+                        </span>
+                        <span className="text-xs text-zinc-200 font-mono font-semibold">
+                          Destructive Action Blocker
+                        </span>
+                        <p className="text-[10px] text-zinc-400 leading-normal">
+                          Stops recursive disk deletes, registry alterations, power commands, and OS process terminations.
+                        </p>
+                      </div>
+
+                      <div className="bg-black/40 border border-white/5 rounded-xl p-4 flex flex-col gap-1.5">
+                        <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-widest flex items-center gap-1.5">
+                          <RiShieldKeyholeLine size={13} className="text-emerald-400" /> Interceptions
+                        </span>
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-lg font-mono font-bold text-white">{sandboxBlockedCount}</span>
+                          <span className="text-[10px] text-zinc-500 font-mono">Violations Prevented</span>
+                        </div>
+                        <p className="text-[10px] text-zinc-400 leading-normal">
+                          Live telemetry monitoring untrusted actions from autonomous agent routines.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="bg-black/60 border border-white/5 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                      <div className="flex flex-col gap-1 overflow-hidden">
+                        <span className="text-[9px] text-zinc-500 font-mono uppercase tracking-widest">
+                          Active Sandbox Workspace Location
+                        </span>
+                        <code className="text-[11px] font-mono text-zinc-300 truncate max-w-xl">
+                          {sandboxWorkspace || 'Initializing Sandbox Workspace...'}
+                        </code>
+                      </div>
+
+                      <button
+                        onClick={handleOpenSandboxFolder}
+                        className="shrink-0 px-4 py-2 bg-white/5 hover:bg-white/10 text-zinc-200 text-xs font-mono rounded-lg border border-white/10 transition-colors flex items-center gap-2 cursor-pointer"
+                      >
+                        <RiExternalLinkLine size={14} /> Open Sandbox Folder
+                      </button>
+                    </div>
                   </div>
                 </div>
               </motion.div>

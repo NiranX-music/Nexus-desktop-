@@ -36,29 +36,62 @@ export default function registerWhatsAppManager(ipcMain: IpcMain) {
     return phone.replace(/[^\d+]/g, '').replace(/^0+/, '')
   }
 
+  const dispatchMessage = async (phone: string, message: string) => {
+    const cleanPhone = cleanPhoneNumber(phone)
+    const encodedText = encodeURIComponent(message)
+
+    if (!cleanPhone) {
+      throw new Error('Valid phone number with country code is required.')
+    }
+
+    const nativeProtocol = `whatsapp://send?phone=${cleanPhone}&text=${encodedText}`
+    const webUrl = `https://web.whatsapp.com/send?phone=${cleanPhone}&text=${encodedText}`
+
+    try {
+      await shell.openExternal(nativeProtocol)
+    } catch {
+      // Fallback to web WhatsApp in browser
+      await shell.openExternal(webUrl)
+    }
+
+    return cleanPhone
+  }
+
+  // Active background queue processor: checks pending scheduled items every 10 seconds
+  const processPendingQueue = async () => {
+    const queue = readQueue()
+    const now = Date.now()
+    let changed = false
+
+    for (const item of queue) {
+      if (item.status === 'pending' && item.scheduledTime <= now) {
+        try {
+          await dispatchMessage(item.recipientPhone, item.message)
+          item.status = 'sent'
+          changed = true
+        } catch (e) {
+          console.error(`[WhatsAppManager] Failed to dispatch scheduled message ${item.id}:`, e)
+        }
+      }
+    }
+
+    if (changed) {
+      writeQueue(queue)
+    }
+  }
+
+  const queueTimer = setInterval(() => {
+    void processPendingQueue()
+  }, 10000)
+
+  app.on('will-quit', () => clearInterval(queueTimer))
+
   // Direct dispatch of WhatsApp message
   ipcMain.handle(
     'whatsapp-send-direct',
     async (_event, payload: { phone: string; message: string }) => {
       try {
-        const cleanPhone = cleanPhoneNumber(payload.phone)
-        const encodedText = encodeURIComponent(payload.message)
-
-        if (!cleanPhone) {
-          throw new Error('Valid phone number with country code is required.')
-        }
-
-        // Try launching native desktop client first
-        const nativeProtocol = `whatsapp://send?phone=${cleanPhone}&text=${encodedText}`
-        const webUrl = `https://web.whatsapp.com/send?phone=${cleanPhone}&text=${encodedText}`
-
-        try {
-          await shell.openExternal(nativeProtocol)
-        } catch {
-          // Fallback to web WhatsApp in browser
-          await shell.openExternal(webUrl)
-        }
-
+        const cleanPhone = await dispatchMessage(payload.phone, payload.message)
         return {
           success: true,
           phone: cleanPhone,
@@ -125,5 +158,12 @@ export default function registerWhatsAppManager(ipcMain: IpcMain) {
       return { success: true }
     }
     return { success: false, error: 'Queue item not found.' }
+  })
+
+  // Delete scheduled item from queue
+  ipcMain.handle('whatsapp-delete-scheduled', async (_event, id: string) => {
+    const queue = readQueue().filter((q) => q.id !== id)
+    writeQueue(queue)
+    return { success: true }
   })
 }
