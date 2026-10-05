@@ -1,0 +1,43 @@
+/**
+ * Footer — minimal.
+ */
+
+export function Footer() {
+  return (
+    <footer
+      style={{
+        borderTop: '1px solid var(--border)',
+        padding: '20px 24px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 16,
+        flexWrap: 'wrap',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <img src="/icon-64.webp" alt="" width={14} height={14} style={{ borderRadius: 3 }} />
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+          Cradle — orchestrate your AI tools.
+        </span>
+      </div>
+      <span style={{ fontSize: 11, color: 'var(--border-strong)' }}>·</span>
+      <a href="#/blog" style={{ fontSize: 12, color: 'var(--text-muted)', textDecoration: 'none' }}>
+        Blog
+      </a>
+      <span style={{ fontSize: 11, color: 'var(--border-strong)' }}>·</span>
+      <a href="#/changelog" style={{ fontSize: 12, color: 'var(--text-muted)', textDecoration: 'none' }}>
+        Changelog
+      </a>
+      <span style={{ fontSize: 11, color: 'var(--border-strong)' }}>·</span>
+      <a
+        href="https://x.com/wibus_wee"
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{ fontSize: 12, color: 'var(--text-muted)', textDecoration: 'none' }}
+      >
+        By wibus
+      </a>
+    </footer>
+  )
+}
