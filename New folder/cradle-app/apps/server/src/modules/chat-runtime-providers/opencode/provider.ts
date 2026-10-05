@@ -1,0 +1,3872 @@
+import type {
+  AssistantMessage as OpencodeAssistantMessage,
+  Config,
+  File as OpencodeFile,
+  McpStatus as OpencodeMcpStatus,
+  Message as OpencodeMessage,
+  Part as OpencodePart,
+  Permission as OpencodePermission,
+  Session as OpencodeSession,
+  SessionStatus as OpencodeSessionStatus,
+  Todo as OpencodeTodo,
+  ToolPart as OpencodeToolPart,
+} from '@opencode-ai/sdk'
+import type { Event as OpencodeEvent, PermissionV2Request, QuestionInfo, QuestionRequest, SessionMessage, SkillV2Info } from '@opencode-ai/sdk/v2'
+import type { UIMessage, UIMessageChunk } from 'ai'
+
+import { appendHarnessFragmentsToSystemPrompt } from '../../chat-runtime/harness/projection'
+import type {
+  CancelTurnInput,
+  ChatRuntime,
+  ChatThinkingEffort,
+  ExecuteShellCommandInput,
+  ExecuteShellCommandResult,
+  ForkRuntimeSessionInput,
+  GenerateSessionTitleInput,
+  GetCapabilitiesInput,
+  GetContextUsageInput,
+  GetUiSlotStatesInput,
+  ListRuntimeModelsInput,
+  ProviderContext,
+  ProviderHealthStatus,
+  ProviderThread,
+  ProviderThreadDeleteInput,
+  ProviderThreadDeleteResult,
+  ProviderThreadListInput,
+  ProviderThreadListResult,
+  ProviderThreadReadInput,
+  ProviderThreadReadResult,
+  ProviderThreadTurn,
+  ProviderThreadTurnsInput,
+  ProviderThreadTurnsResult,
+  QuickQuestionInput,
+  ResumeChatSessionInput,
+  RollbackLastTurnInput,
+  RollbackLastTurnResult,
+  RuntimeContextUsage,
+  RuntimeLiveResourceLease,
+  RuntimeModelCatalog,
+  RuntimePresentationCapabilities,
+  RuntimeProviderTargetProfile,
+  RuntimeSession,
+  RuntimeSettings,
+  RuntimeUiSlotState,
+  RuntimeUserInputQuestion,
+  RuntimeUserInputResolution,
+  StartChatSessionInput,
+  StreamTurnInput,
+  SubmitRuntimeUserInputInput,
+  TokenUsage,
+  UpdateRuntimeSettingsInput,
+} from '../../chat-runtime/runtime-provider-types'
+import { ProviderErrors, ProviderRuntimeError } from '../../chat-runtime/runtime-provider-types'
+import type { RuntimeKind } from '../../provider-contracts/types'
+import { providerChunk } from '../kit/chunk-mapper'
+import { extractProviderInputText } from '../kit/input-projector'
+import { requestProviderToolApproval } from '../kit/permission-bridge'
+import { readProviderStateSnapshot } from '../kit/state-snapshot'
+import { resolveOpencodeConfig } from './config'
+import type { OpencodeStreamEvent } from './event-stream'
+import {
+  isOpencodeToolCallStepEndedEvent,
+  isTerminalOpencodeAssistant,
+  isTerminalOpencodeStepEndedEvent,
+  OpencodeEventStreamProjector,
+  readOpencodeStepFailedMessage,
+  readOpencodeTerminalAssistantForTurn,
+} from './event-stream'
+import type { OpencodePromptAsyncBody, OpencodePromptBody } from './input-projector'
+import {
+  projectOpencodePromptParts,
+  projectOpencodeQuickQuestionParts,
+  projectOpencodeReasoningVariant,
+  readOpencodeSlashCommandInvocation,
+} from './input-projector'
+import {
+  OPENCODE_RUNTIME_CAPABILITIES,
+  OPENCODE_RUNTIME_KIND,
+  OPENCODE_RUNTIME_METADATA,
+} from './metadata'
+import { listOpencodeRuntimeModels, OPENCODE_RUNTIME_NATIVE_PROVIDER_TARGET_ID } from './model-inventory'
+import { readOpenCodeRuntimeNativeProviderId } from './native-provider-target-id'
+import { OPENCODE_RUNTIME_OWNED_PROVIDER_TARGETS } from './owned-provider-targets'
+import { createOpencodeRuntimePresentation } from './presentation'
+import type { OpencodeAccessMode, OpencodeRuntimeResource } from './runtime-context'
+import { acquireOpencodeRuntimeResource, checkOpencodeServerHealth, tryRetainOpencodeRuntimeResource } from './runtime-context'
+import { checkOpencodeRuntimeHealth } from './runtime-installation'
+import type { OpencodeSubagentBinding } from './subagent-bridge'
+import {
+  OpencodeSubagentRegistry,
+  projectOpencodeCrewAgentProviderThread,
+  projectOpencodeSubagentProviderThread,
+  projectOpencodeSubagentStreamChunks,
+  readOpencodeEventSessionId,
+  readOpencodeSubagentBindingFromSessionCreated,
+  readOpencodeSubagentBindingFromTaskPart,
+  readOpencodeTaskBindingsFromMessages,
+  resolveOpencodeProviderThreadTarget,
+} from './subagent-bridge'
+import {
+  buildOpencodePermissionInput,
+  buildOpencodePermissionOutput,
+  buildOpencodeToolInput,
+  buildOpencodeToolOutput,
+} from './tools/mapper'
+
+interface OpencodeTurnResult {
+  data: {
+    info: OpencodeAssistantMessage
+    parts: OpencodePart[]
+  } | undefined
+  error: unknown | undefined
+}
+
+interface OpencodePermissionApprovalRecord {
+  id: string
+  targetItemId: string | null
+  status: 'pending' | 'approved' | 'denied'
+  label: string
+  riskLevel: string | null
+  rationale: string | null
+  startedAt: number | null
+  completedAt: number | null
+  updatedAt: number
+}
+
+type OpencodePermissionAskedProperties = Extract<OpencodeEvent, { type: 'permission.asked' }>['properties']
+
+type OpencodePermissionV2AskedProperties = Extract<OpencodeEvent, { type: 'permission.v2.asked' }>['properties']
+
+export interface OpencodeProviderOptions {
+  promptAcceptedRecoveryDelaysMs?: readonly number[]
+  promptAcceptedActivityTimeoutMs?: number
+  prematureIdleTimeoutMs?: number
+}
+
+const OPENCODE_SESSION_TITLE_MAX_LENGTH = 60
+const DEFAULT_PROMPT_ACCEPTED_RECOVERY_DELAYS_MS = [750, 2_000, 5_000] as const
+const DEFAULT_PROMPT_ACCEPTED_ACTIVITY_TIMEOUT_MS = 30_000
+const DEFAULT_PREMATURE_IDLE_TIMEOUT_MS = 10_000
+const OPENCODE_WAIT_BARRIER_TIMEOUT_MS = 5_000
+
+export function createOpencodeProvider(ctx: ProviderContext): ChatRuntime {
+  return new OpencodeProvider(ctx)
+}
+
+export class OpencodeProvider implements ChatRuntime {
+  readonly runtimeKind = OPENCODE_RUNTIME_KIND
+  readonly metadata = OPENCODE_RUNTIME_METADATA
+  readonly capabilities = OPENCODE_RUNTIME_CAPABILITIES
+  readonly ownedProviderTargets = OPENCODE_RUNTIME_OWNED_PROVIDER_TARGETS
+
+  private _lastUsage: TokenUsage | null = null
+  private _lastModelId: string | null = null
+  private readonly activePermissionIds = new Set<string>()
+  private readonly activeQuestionRequestIds = new Set<string>()
+  private readonly handledQuestionRequestIds = new Set<string>()
+  private readonly permissionApprovalsByChatSessionId = new Map<string, OpencodePermissionApprovalRecord[]>()
+  private readonly subagentRegistriesByChatSessionId = new Map<string, OpencodeSubagentRegistry>()
+  private readonly eventPumpsBySessionKey = new Map<string, OpencodeSessionEventPump>()
+  private readonly options: Required<OpencodeProviderOptions>
+
+  get lastUsage(): TokenUsage | null {
+    return this._lastUsage
+  }
+
+  get lastModelId(): string | null {
+    return this._lastModelId
+  }
+
+  constructor(
+    private readonly deps: ProviderContext,
+    options: OpencodeProviderOptions = {},
+  ) {
+    this.options = {
+      promptAcceptedRecoveryDelaysMs: options.promptAcceptedRecoveryDelaysMs ?? DEFAULT_PROMPT_ACCEPTED_RECOVERY_DELAYS_MS,
+      promptAcceptedActivityTimeoutMs: options.promptAcceptedActivityTimeoutMs ?? DEFAULT_PROMPT_ACCEPTED_ACTIVITY_TIMEOUT_MS,
+      prematureIdleTimeoutMs: options.prematureIdleTimeoutMs ?? DEFAULT_PREMATURE_IDLE_TIMEOUT_MS,
+    }
+  }
+
+  async listModels(input: ListRuntimeModelsInput): Promise<RuntimeModelCatalog> {
+    return await listOpencodeRuntimeModels({
+      runtimeKind: this.runtimeKind,
+      workspacePath: input.workspacePath,
+    })
+  }
+
+  async healthCheck(): Promise<ProviderHealthStatus> {
+    const installation = await checkOpencodeRuntimeHealth()
+    if (installation.status !== 'healthy') {
+      return installation
+    }
+
+    const lastCheckedAt = Math.floor(Date.now() / 1000)
+    const servers = await checkOpencodeServerHealth()
+    if (servers.length === 0) {
+      return installation
+    }
+    const unhealthy = servers.filter(server => !server.healthy)
+    if (unhealthy.length > 0) {
+      return {
+        status: 'unhealthy',
+        message: `OpenCode server health check failed: ${unhealthy.map(server => server.message ?? server.hostId).join('; ')}`,
+        lastCheckedAt,
+      }
+    }
+    const slowestLatencyMs = Math.max(...servers.map(server => server.latencyMs ?? 0))
+    return {
+      status: 'healthy',
+      message: `${installation.message ?? 'OpenCode runtime is available.'} ${servers.length} active server(s) healthy.`,
+      latencyMs: slowestLatencyMs,
+      lastCheckedAt,
+    }
+  }
+
+  getDraftPresentation(): RuntimePresentationCapabilities {
+    return createOpencodeRuntimePresentation()
+  }
+
+  async getPresentation(input: GetCapabilitiesInput): Promise<RuntimePresentationCapabilities> {
+    const handle = readOpencodeRuntimeHandle(this.runtimeKind, input.runtimeSession)
+    const result = await handle.client.command.list({
+      query: { directory: input.workspacePath },
+    })
+    if (result.error) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'command.list', formatOpencodeError(result.error)),
+      )
+    }
+    return createOpencodeRuntimePresentation(result.data, await readOpencodeSkills(handle))
+  }
+
+  async getUiSlotStates(input: GetUiSlotStatesInput): Promise<RuntimeUiSlotState[]> {
+    const providerSessionId = input.runtimeSession.providerSessionId
+    if (!providerSessionId) {
+      return []
+    }
+
+    const handle = readOpencodeRuntimeHandle(this.runtimeKind, input.runtimeSession)
+    const snapshot = readProviderStateSnapshot(input.runtimeSession.providerStateSnapshot)
+    const modelId = input.modelId ?? snapshot.models.currentModelId ?? null
+    const providerModel = parseOpenCodeModelRef(modelId)
+    const updatedAt = Date.now()
+    const subagentRegistry = this.readSubagentRegistry(input.runtimeSession.chatSessionId)
+    const [status, todos, diff, mcpStatus, fileStatus, taskBindings, questionRequests, pendingPermissions] = await Promise.all([
+      readOpencodeSessionStatus(handle, input.workspacePath, providerSessionId),
+      readOpencodeSessionTodo(handle, input.workspacePath, providerSessionId),
+      readOpencodeSessionDiff(handle, input.workspacePath, providerSessionId),
+      readOpencodeMcpStatus(handle, input.workspacePath),
+      readOpencodeFileStatus(handle, input.workspacePath),
+      readOpencodeParentTaskBindings(handle, input.workspacePath, providerSessionId),
+      readOpencodeSessionQuestionRequests(handle, input.workspacePath, providerSessionId),
+      readOpencodeSessionPermissionRequests(handle, providerSessionId),
+    ])
+    for (const binding of taskBindings) {
+      subagentRegistry.register(binding)
+    }
+    const subagentBindings = subagentRegistry
+      .listBindings()
+      .filter(binding => binding.parentSessionId === providerSessionId)
+    const approvalRecords = this.readApprovalRecordsWithPendingRecovery(
+      input.runtimeSession.chatSessionId,
+      pendingPermissions,
+    )
+    const states: RuntimeUiSlotState[] = [
+      {
+        kind: 'status',
+        slotId: 'opencode:status',
+        threadId: providerSessionId,
+        status: projectOpencodeRuntimeThreadStatus(status),
+        activeFlags: status?.type === 'retry' ? [`retry:${status.attempt}`] : [],
+        updatedAt,
+      },
+      {
+        kind: 'model',
+        slotId: 'opencode:model',
+        threadId: providerSessionId,
+        modelId,
+        modelLabel: providerModel?.modelID ?? modelId,
+        modelProvider: providerModel?.providerID ?? null,
+        serviceTier: null,
+        serviceTiers: [],
+        supportsImages: null,
+        supportsWebSearch: null,
+        supportsNamespaceTools: null,
+        updatedAt,
+      },
+    ]
+    if (todos.length > 0) {
+      states.push(projectOpencodeProgressState(providerSessionId, todos, updatedAt))
+    }
+    if (diff.length > 0) {
+      states.push({
+        kind: 'diff',
+        slotId: 'opencode:diff',
+        threadId: providerSessionId,
+        turnId: null,
+        fileCount: diff.length,
+        addedLines: diff.reduce((sum, file) => sum + file.additions, 0),
+        removedLines: diff.reduce((sum, file) => sum + file.deletions, 0),
+        hasDiff: diff.length > 0,
+        updatedAt,
+      })
+    }
+    if (approvalRecords.length > 0) {
+      states.push({
+        kind: 'approvals',
+        slotId: 'opencode:approvals',
+        threadId: providerSessionId,
+        turnId: null,
+        pendingCount: approvalRecords.filter(record => record.status === 'pending').length,
+        approvedCount: approvalRecords.filter(record => record.status === 'approved').length,
+        deniedCount: approvalRecords.filter(record => record.status === 'denied').length,
+        recentItems: approvalRecords.map(record => ({
+          id: toOpencodePermissionToolCallId(record.id),
+          targetItemId: record.targetItemId,
+          status: record.status,
+          label: record.label,
+          riskLevel: record.riskLevel,
+          rationale: record.rationale,
+          startedAt: record.startedAt,
+          completedAt: record.completedAt,
+        })),
+        updatedAt,
+      })
+    }
+    if (mcpStatus.size > 0) {
+      states.push(projectOpencodeMcpState(providerSessionId, mcpStatus, updatedAt))
+    }
+    if (fileStatus.length > 0) {
+      states.push(projectOpencodeFilesystemState(providerSessionId, fileStatus, updatedAt))
+    }
+    if (subagentBindings.length > 0) {
+      states.push(projectOpencodeCrewState(providerSessionId, subagentBindings, updatedAt))
+    }
+    for (const request of questionRequests) {
+      states.push(projectOpencodeQuestionRequestState({
+        request,
+        threadId: providerSessionId,
+        updatedAt,
+      }))
+    }
+    return states
+  }
+
+  async getContextUsage(input: GetContextUsageInput): Promise<RuntimeContextUsage | null> {
+    const providerSessionId = input.runtimeSession.providerSessionId
+    if (!providerSessionId) {
+      return null
+    }
+
+    const handle = readOpencodeRuntimeHandle(this.runtimeKind, input.runtimeSession)
+    const result = await handle.v2Client.v2.session.context({
+      sessionID: providerSessionId,
+    })
+    if (result.error) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'session.context', formatOpencodeError(result.error)),
+      )
+    }
+
+    return projectOpencodeContextUsage({
+      runtimeKind: this.runtimeKind,
+      providerSessionId,
+      modelId: input.modelId ?? null,
+      messages: result.data?.data ?? [],
+    })
+  }
+
+  async submitUserInput(input: SubmitRuntimeUserInputInput): Promise<RuntimeUserInputResolution | null> {
+    const providerSessionId = input.runtimeSession.providerSessionId
+    if (!providerSessionId) {
+      return null
+    }
+
+    const handle = readOpencodeRuntimeHandle(this.runtimeKind, input.runtimeSession)
+    const request = await resolveOpencodeQuestionRequestById({
+      resource: handle,
+      workspacePath: input.workspacePath,
+      sessionId: providerSessionId,
+      requestId: input.requestId,
+    })
+    if (!request) {
+      return null
+    }
+
+    const result = await handle.v2Client.question.reply({
+      requestID: input.requestId,
+      directory: input.workspacePath,
+      answers: request.questions.map((_, index) => input.answers[`question-${index + 1}`] ?? []),
+    })
+    if (result.error) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'question.reply', formatOpencodeError(result.error)),
+      )
+    }
+    return {
+      requestId: input.requestId,
+      answers: input.answers,
+    }
+  }
+
+  async startChatSession(input: StartChatSessionInput): Promise<RuntimeSession> {
+    const resolved = await this.resolveRuntimeConfig({
+      profile: input.profile,
+      requestedModelId: input.modelId,
+    })
+    const accessMode = readOpencodeAccessMode(input.settings)
+    const lease = await acquireOpencodeRuntimeResource({
+      runtimeKind: this.runtimeKind,
+      providerTargetId: resolved.hostProviderTargetId,
+      chatSessionId: input.chatSessionId,
+      config: resolved.config,
+      directory: input.workspacePath,
+      accessMode,
+    })
+
+    let leaseTransferred = false
+    try {
+      const session = await this.createNativeSession(lease.resource, input.workspacePath, input.chatSessionId)
+      leaseTransferred = true
+      return {
+        id: input.chatSessionId,
+        chatSessionId: input.chatSessionId,
+        providerTargetId: resolved.providerTargetId,
+        runtimeKind: this.runtimeKind,
+        providerSessionId: session.id,
+        providerRuntimeLease: lease,
+        providerStateSnapshot: JSON.stringify({
+          workspacePath: input.workspacePath,
+          models: { currentModelId: resolved.modelId },
+          opencode: {
+            serverUrl: lease.resource.server.url,
+            providerModel: resolved.model,
+            accessMode,
+          },
+        }),
+      }
+    }
+    finally {
+      if (!leaseTransferred) {
+        lease.release()
+      }
+    }
+  }
+
+  async resumeChatSession(input: ResumeChatSessionInput): Promise<RuntimeSession> {
+    const resolved = await this.resolveRuntimeConfig({
+      profile: input.profile,
+      requestedModelId: input.modelId,
+    })
+    const accessMode = readOpencodeAccessMode(input.settings)
+    const lease = await acquireOpencodeRuntimeResource({
+      runtimeKind: this.runtimeKind,
+      providerTargetId: resolved.hostProviderTargetId,
+      chatSessionId: input.runtimeSession.chatSessionId,
+      config: resolved.config,
+      directory: input.workspacePath,
+      accessMode,
+    })
+
+    const snapshot = readProviderStateSnapshot(input.runtimeSession.providerStateSnapshot)
+    return {
+      ...input.runtimeSession,
+      runtimeKind: this.runtimeKind,
+      providerRuntimeLease: lease,
+      providerStateSnapshot: JSON.stringify({
+        ...snapshot,
+        workspacePath: input.workspacePath,
+        models: { currentModelId: resolved.modelId ?? snapshot.models.currentModelId },
+        opencode: {
+          ...(snapshot.opencode as Record<string, unknown> | undefined),
+          serverUrl: lease.resource.server.url,
+          providerModel: resolved.model,
+          accessMode,
+        },
+      }),
+    }
+  }
+
+  async forkRuntimeSession(input: ForkRuntimeSessionInput): Promise<RuntimeSession> {
+    const sourceSessionId = input.sourceRuntimeSession.providerSessionId
+    if (!sourceSessionId) {
+      throw new ProviderRuntimeError(ProviderErrors.sessionNotFound(this.runtimeKind, input.sourceRuntimeSession.chatSessionId))
+    }
+
+    const resolved = await this.resolveRuntimeConfig({
+      profile: input.profile,
+      requestedModelId: input.modelId,
+    })
+    const sourceLease = input.sourceRuntimeSession.providerRuntimeLease as RuntimeLiveResourceLease<OpencodeRuntimeResource> | undefined
+    const accessMode = readOpencodeAccessMode(input.settings)
+    const lease = sourceLease
+      ? createOpencodeChildRuntimeLease(sourceLease.resource)
+      : await acquireOpencodeRuntimeResource({
+          runtimeKind: this.runtimeKind,
+          providerTargetId: resolved.hostProviderTargetId,
+          chatSessionId: input.childChatSessionId,
+          config: resolved.config,
+          directory: input.workspacePath,
+          accessMode,
+        })
+    let leaseTransferred = false
+    try {
+      const resource = lease.resource as OpencodeRuntimeResource
+      const result = await resource.client.session.fork({
+        path: { id: sourceSessionId },
+        query: { directory: input.workspacePath },
+        body: {},
+      })
+      if (result.error) {
+        throw new ProviderRuntimeError(
+          ProviderErrors.requestFailed(this.runtimeKind, 'session.fork', formatOpencodeError(result.error)),
+        )
+      }
+      const session = result.data
+      if (!session) {
+        throw new ProviderRuntimeError(
+          ProviderErrors.requestFailed(this.runtimeKind, 'session.fork', 'opencode returned no forked session'),
+        )
+      }
+      leaseTransferred = true
+      return {
+        id: input.childChatSessionId,
+        chatSessionId: input.childChatSessionId,
+        providerTargetId: resolved.providerTargetId,
+        runtimeKind: this.runtimeKind,
+        providerSessionId: session.id,
+        providerRuntimeLease: lease,
+        providerStateSnapshot: JSON.stringify({
+          workspacePath: input.workspacePath,
+          models: { currentModelId: resolved.modelId },
+          opencode: {
+            serverUrl: resource.server.url,
+            providerModel: resolved.model,
+            accessMode,
+            sideConversation: {
+              sessionId: session.id,
+              liveFork: true,
+              parentSessionId: sourceSessionId,
+              updatedAt: Date.now(),
+            },
+          },
+        }),
+      }
+    }
+    finally {
+      if (!leaseTransferred) {
+        lease.release()
+      }
+    }
+  }
+
+  async listProviderThreads(input: ProviderThreadListInput): Promise<ProviderThreadListResult> {
+    const providerSessionId = input.runtimeSession.providerSessionId
+    if (!providerSessionId || !supportsOpencodeProviderThreadSourceKinds(input.sourceKinds)) {
+      return {
+        runtimeKind: this.runtimeKind,
+        providerSessionId,
+        threads: [],
+        nextCursor: null,
+        backwardsCursor: null,
+      }
+    }
+
+    const handle = readOpencodeRuntimeHandle(this.runtimeKind, input.runtimeSession)
+    const result = await handle.client.session.list({
+      query: { directory: input.workspacePath },
+    })
+    if (result.error) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'session.list', formatOpencodeError(result.error)),
+      )
+    }
+    const sessions = result.data ?? []
+
+    const sortKey = input.sortKey ?? 'updated_at'
+    const sortDirection = input.sortDirection ?? 'desc'
+    const searchTerm = normalizeProviderThreadText(input.searchTerm)
+    const childCounts = countOpencodeSessionChildren(sessions)
+    const visibleSessions = input.archived ? [] : sessions
+    const threads = visibleSessions
+      .map(session => projectOpencodeProviderThread(session, childCounts.get(session.id) ?? 0))
+      .filter(thread => !searchTerm || opencodeProviderThreadMatchesSearch(thread, searchTerm))
+      .sort((left, right) => compareOpencodeProviderThreads(left, right, sortKey, sortDirection))
+
+    const offset = readProviderThreadOffset(input.cursor)
+    const limit = readProviderThreadLimit(input.limit)
+    const page = threads.slice(offset, offset + limit)
+    return {
+      runtimeKind: this.runtimeKind,
+      providerSessionId,
+      threads: page,
+      nextCursor: offset + limit < threads.length ? String(offset + limit) : null,
+      backwardsCursor: offset > 0 ? String(Math.max(0, offset - limit)) : null,
+    }
+  }
+
+  async readProviderThread(input: ProviderThreadReadInput): Promise<ProviderThreadReadResult> {
+    const handle = readOpencodeRuntimeHandle(this.runtimeKind, input.runtimeSession)
+    const registry = this.readSubagentRegistry(input.runtimeSession.chatSessionId)
+    let target
+    try {
+      target = await resolveOpencodeProviderThreadTarget({
+        threadId: input.threadId,
+        parentSessionId: input.runtimeSession.providerSessionId,
+        registry,
+        readChildSession: async (sessionId) => {
+          const result = await handle.client.session.get({
+            path: { id: sessionId },
+            query: { directory: input.workspacePath },
+          })
+          if (result.error || !result.data) {
+            return null
+          }
+          return result.data
+        },
+        readParentTaskBindings: async () => {
+          const parentSessionId = input.runtimeSession.providerSessionId
+          if (!parentSessionId) {
+            return []
+          }
+          const messages = await handle.client.session.messages({
+            path: { id: parentSessionId },
+            query: { directory: input.workspacePath, limit: 200 },
+          })
+          if (messages.error) {
+            return []
+          }
+          return await readOpencodeTaskBindingsFromMessages(parentSessionId, messages.data ?? [])
+        },
+      })
+    }
+    catch (error) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'session.get', formatOpencodeError(error)),
+      )
+    }
+
+    if (target.kind === 'crew-agent') {
+      return {
+        runtimeKind: this.runtimeKind,
+        providerSessionId: input.runtimeSession.providerSessionId,
+        thread: projectOpencodeCrewAgentProviderThread({
+          threadId: target.threadId,
+          sessionId: target.sessionId,
+          agentName: target.agentName,
+          parentSessionId: target.parentSessionId,
+        }),
+      }
+    }
+
+    const result = await handle.client.session.get({
+      path: { id: target.sessionId },
+      query: { directory: input.workspacePath },
+    })
+    if (result.error) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'session.get', formatOpencodeError(result.error)),
+      )
+    }
+    if (!result.data) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'session.get', 'opencode returned no session'),
+      )
+    }
+    const children = await readOpencodeSessionChildren(handle, input.workspacePath, target.sessionId)
+    const thread = target.binding
+      ? projectOpencodeSubagentProviderThread({
+          threadId: target.requestedThreadId,
+          binding: target.binding,
+          session: result.data,
+          childCount: children.length,
+        })
+      : projectOpencodeProviderThread(result.data, children.length)
+    return {
+      runtimeKind: this.runtimeKind,
+      providerSessionId: input.runtimeSession.providerSessionId,
+      thread,
+    }
+  }
+
+  async deleteProviderThread(input: ProviderThreadDeleteInput): Promise<ProviderThreadDeleteResult> {
+    if (input.threadId === input.runtimeSession.providerSessionId) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'session.delete', 'Cannot delete the active OpenCode runtime session through the provider-thread API'),
+      )
+    }
+    const handle = readOpencodeRuntimeHandle(this.runtimeKind, input.runtimeSession)
+    const result = await handle.client.session.delete({
+      path: { id: input.threadId },
+      query: { directory: input.workspacePath },
+    })
+    if (result.error) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'session.delete', formatOpencodeError(result.error)),
+      )
+    }
+    return {
+      runtimeKind: this.runtimeKind,
+      providerSessionId: input.runtimeSession.providerSessionId,
+      threadId: input.threadId,
+      deleted: true,
+    }
+  }
+
+  async deleteSessionStorage(input: GetCapabilitiesInput) {
+    const providerSessionId = input.runtimeSession.providerSessionId
+    if (!providerSessionId) {
+      return { status: 'not_applicable' as const }
+    }
+    const handle = readOpencodeRuntimeHandle(this.runtimeKind, input.runtimeSession)
+    const result = await handle.client.session.delete({
+      path: { id: providerSessionId },
+      query: { directory: input.workspacePath },
+    })
+    if (result.error) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'session.delete', formatOpencodeError(result.error)),
+      )
+    }
+    return { status: 'deleted' as const }
+  }
+
+  async updateRuntimeSettings(input: UpdateRuntimeSettingsInput): Promise<void> {
+    const providerSessionId = input.runtimeSession.providerSessionId
+    if (!providerSessionId) {
+      return
+    }
+
+    // Persist settings on the native session via the v2 sticky switch endpoints so the
+    // choice survives across turns and is visible to other opencode clients.
+    const handle = readOpencodeRuntimeHandle(this.runtimeKind, input.runtimeSession)
+    const agent = readOpencodeTurnAgentFromSettings(input.settings)
+    const agentSwitch = await handle.v2Client.v2.session.switchAgent({
+      sessionID: providerSessionId,
+      agent,
+    }).catch(() => null)
+    if (agentSwitch?.error) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'session.switchAgent', formatOpencodeError(agentSwitch.error)),
+      )
+    }
+
+    const modelRef = parseOpenCodeModelRef(readOptionalStringSetting(input.settings, 'model'))
+    if (modelRef) {
+      const modelSwitch = await handle.v2Client.v2.session.switchModel({
+        sessionID: providerSessionId,
+        model: {
+          id: modelRef.modelID,
+          providerID: modelRef.providerID,
+        },
+      }).catch(() => null)
+      if (modelSwitch?.error) {
+        throw new ProviderRuntimeError(
+          ProviderErrors.requestFailed(this.runtimeKind, 'session.switchModel', formatOpencodeError(modelSwitch.error)),
+        )
+      }
+    }
+  }
+
+  async listProviderThreadTurns(input: ProviderThreadTurnsInput): Promise<ProviderThreadTurnsResult> {
+    const handle = readOpencodeRuntimeHandle(this.runtimeKind, input.runtimeSession)
+    const registry = this.readSubagentRegistry(input.runtimeSession.chatSessionId)
+    let resolvedSessionId = input.threadId
+    try {
+      const target = await resolveOpencodeProviderThreadTarget({
+        threadId: input.threadId,
+        parentSessionId: input.runtimeSession.providerSessionId,
+        registry,
+        readChildSession: async () => null,
+        readParentTaskBindings: async () => {
+          const parentSessionId = input.runtimeSession.providerSessionId
+          if (!parentSessionId) {
+            return []
+          }
+          const messages = await handle.client.session.messages({
+            path: { id: parentSessionId },
+            query: { directory: input.workspacePath, limit: 200 },
+          })
+          if (messages.error) {
+            return []
+          }
+          return await readOpencodeTaskBindingsFromMessages(parentSessionId, messages.data ?? [])
+        },
+      })
+      if (target.kind === 'crew-agent') {
+        return {
+          runtimeKind: this.runtimeKind,
+          providerSessionId: input.runtimeSession.providerSessionId,
+          threadId: input.threadId,
+          turns: [],
+          messages: [],
+          nextCursor: null,
+          backwardsCursor: null,
+        }
+      }
+      resolvedSessionId = target.sessionId
+      if (target.binding) {
+        registry.register(target.binding)
+      }
+    }
+    catch (error) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'session.messages', formatOpencodeError(error)),
+      )
+    }
+
+    const result = await handle.client.session.messages({
+      path: { id: resolvedSessionId },
+      query: { directory: input.workspacePath, limit: 200 },
+    })
+    if (result.error) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'session.messages', formatOpencodeError(result.error)),
+      )
+    }
+
+    const sortDirection = input.sortDirection ?? 'asc'
+    const rows = result.data ?? []
+    const ordered = [...rows].sort((left, right) => readOpencodeMessageCreatedAt(left.info) - readOpencodeMessageCreatedAt(right.info))
+    const messages = sortDirection === 'desc' ? ordered.reverse() : ordered
+    const offset = readProviderThreadOffset(input.cursor)
+    const limit = readProviderThreadLimit(input.limit)
+    const page = messages.slice(offset, offset + limit)
+    return {
+      runtimeKind: this.runtimeKind,
+      providerSessionId: input.runtimeSession.providerSessionId,
+      threadId: input.threadId,
+      turns: page.map(projectOpencodeProviderThreadTurn),
+      messages: projectOpencodeProviderThreadMessages(input.threadId, page),
+      nextCursor: offset + limit < messages.length ? String(offset + limit) : null,
+      backwardsCursor: offset > 0 ? String(Math.max(0, offset - limit)) : null,
+    }
+  }
+
+  async* quickQuestion(input: QuickQuestionInput): AsyncGenerator<UIMessageChunk, void, void> {
+    const snapshot = readProviderStateSnapshot(input.runtimeSession.providerStateSnapshot)
+    const resolved = await this.resolveRuntimeConfig({
+      profile: input.profile,
+      requestedModelId: snapshot.models.currentModelId,
+    })
+    const resource = readOpencodeRuntimeHandle(this.runtimeKind, input.runtimeSession)
+    const session = await this.createNativeSession(
+      resource,
+      input.workspacePath,
+      `${input.runtimeSession.chatSessionId} quick question`,
+    )
+    const projector = new OpencodeEventStreamProjector(session.id)
+
+    try {
+      const result = await resource.client.session.prompt({
+        path: { id: session.id },
+        query: { directory: input.workspacePath },
+        body: {
+          ...(resolved.model ? { model: resolved.model } : {}),
+          parts: projectOpencodeQuickQuestionParts({
+            question: input.question,
+            transcript: input.transcript,
+          }),
+        },
+      })
+
+      if (result.error) {
+        throw new ProviderRuntimeError(
+          ProviderErrors.requestFailed(this.runtimeKind, 'quickQuestion', formatOpencodeError(result.error)),
+        )
+      }
+      if (result.data.info.error) {
+        throw new ProviderRuntimeError(
+          ProviderErrors.requestFailed(
+            this.runtimeKind,
+            'quickQuestion',
+            formatOpencodeAssistantError(result.data.info.error),
+          ),
+        )
+      }
+
+      for (const chunk of projector.projectPromptResult(result.data)) {
+        yield chunk
+      }
+      yield projector.finish(result.data.info)
+    }
+    finally {
+      await resource.client.session.delete({
+        path: { id: session.id },
+        query: { directory: input.workspacePath },
+      }).catch(() => undefined)
+    }
+  }
+
+  async generateSessionTitle(input: GenerateSessionTitleInput): Promise<string | null> {
+    const providerSessionId = input.runtimeSession.providerSessionId
+    if (!providerSessionId) {
+      return null
+    }
+
+    const handle = readOpencodeRuntimeHandle(this.runtimeKind, input.runtimeSession)
+    const resolved = await this.resolveRuntimeConfig({
+      profile: input.profile,
+      requestedModelId: input.modelId,
+    })
+    const titleModel = parseOpenCodeModelRef(resolved.config.small_model) ?? resolved.model
+    if (!titleModel) {
+      return null
+    }
+
+    const summarizeResult = await handle.client.session.summarize({
+      path: { id: providerSessionId },
+      query: { directory: input.workspacePath },
+      body: titleModel,
+    })
+    if (summarizeResult.error) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'session.summarize', formatOpencodeError(summarizeResult.error)),
+      )
+    }
+
+    const sessionResult = await handle.client.session.get({
+      path: { id: providerSessionId },
+      query: { directory: input.workspacePath },
+    })
+    if (sessionResult.error) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'session.get', formatOpencodeError(sessionResult.error)),
+      )
+    }
+
+    const title = normalizeOpencodeSessionTitle(sessionResult.data.title)
+    if (!title) {
+      return null
+    }
+
+    const updateResult = await handle.client.session.update({
+      path: { id: providerSessionId },
+      query: { directory: input.workspacePath },
+      body: { title },
+    })
+    if (updateResult.error) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'session.update', formatOpencodeError(updateResult.error)),
+      )
+    }
+    return title
+  }
+
+  async executeShellCommand(input: ExecuteShellCommandInput): Promise<ExecuteShellCommandResult> {
+    const command = input.command.trim()
+    if (!command) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'executeShellCommand', 'opencode shell command must not be empty'),
+      )
+    }
+
+    const providerSessionId = input.runtimeSession.providerSessionId
+    if (!providerSessionId) {
+      throw new ProviderRuntimeError(ProviderErrors.sessionNotFound(this.runtimeKind, input.runtimeSession.chatSessionId))
+    }
+
+    const handle = readOpencodeRuntimeHandle(this.runtimeKind, input.runtimeSession)
+    const resolved = await this.resolveRuntimeConfig({
+      profile: input.profile,
+      requestedModelId: input.modelId,
+    })
+    const startedAt = Date.now()
+    const result = await handle.client.session.shell({
+      path: { id: providerSessionId },
+      query: { directory: input.workspacePath },
+      body: {
+        agent: 'build',
+        ...(resolved.model ? { model: resolved.model } : {}),
+        command,
+      },
+      signal: input.signal,
+    })
+    if (result.error) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'session.shell', formatOpencodeError(result.error)),
+      )
+    }
+    if (result.data.error) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'session.shell', formatOpencodeAssistantError(result.data.error)),
+      )
+    }
+
+    const messageResult = await handle.client.session.message({
+      path: { id: providerSessionId, messageID: result.data.id },
+      query: { directory: input.workspacePath },
+    })
+    if (messageResult.error) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'session.message', formatOpencodeError(messageResult.error)),
+      )
+    }
+
+    const shell = projectOpencodeShellResult(messageResult.data.parts)
+    return {
+      command,
+      stdout: shell.stdout,
+      stderr: shell.stderr,
+      exitCode: null,
+      durationMs: shell.durationMs ?? Math.max(0, Date.now() - startedAt),
+      timedOut: false,
+      truncated: false,
+    }
+  }
+
+  async rollbackLastTurn(input: RollbackLastTurnInput): Promise<RollbackLastTurnResult> {
+    const providerSessionId = input.runtimeSession.providerSessionId
+    if (!providerSessionId) {
+      throw new ProviderRuntimeError(ProviderErrors.sessionNotFound(this.runtimeKind, input.runtimeSession.chatSessionId))
+    }
+
+    const handle = readOpencodeRuntimeHandle(this.runtimeKind, input.runtimeSession)
+    const messagesResult = await handle.client.session.messages({
+      path: { id: providerSessionId },
+      query: { directory: input.workspacePath },
+    })
+    if (messagesResult.error) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'session.messages', formatOpencodeError(messagesResult.error)),
+      )
+    }
+
+    const message = readAssistantMessageForRollback(messagesResult.data, input.numTurns)
+    if (!message) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(
+          this.runtimeKind,
+          'session.revert',
+          `Session does not contain ${input.numTurns} assistant turns to roll back`,
+        ),
+      )
+    }
+
+    const revertResult = await handle.client.session.revert({
+      path: { id: providerSessionId },
+      query: { directory: input.workspacePath },
+      body: { messageID: message.id },
+    })
+    if (revertResult.error) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'session.revert', formatOpencodeError(revertResult.error)),
+      )
+    }
+
+    return {
+      runtimeKind: this.runtimeKind,
+      providerSessionId,
+      rolledBackTurns: input.numTurns,
+      fileChangesReverted: false,
+      providerResult: revertResult.data,
+    }
+  }
+
+  async* streamTurn(input: StreamTurnInput): AsyncGenerator<UIMessageChunk, void, void> {
+    const initialOpencodeSessionId = input.runtimeSession.providerSessionId
+    const lease = input.runtimeSession.providerRuntimeLease
+    if (!initialOpencodeSessionId || !lease) {
+      throw new ProviderRuntimeError(ProviderErrors.sessionNotFound(this.runtimeKind, input.runtimeSession.chatSessionId))
+    }
+
+    const resolved = await this.resolveRuntimeConfig({
+      profile: input.profile,
+      requestedModelId: input.modelId,
+    })
+    this._lastUsage = null
+    this._lastModelId = resolved.modelId
+
+    const resource = lease.resource as OpencodeRuntimeResource
+    let opencodeSessionId = initialOpencodeSessionId
+    let projector = new OpencodeEventStreamProjector(opencodeSessionId)
+    const chunks = new AsyncChunkQueue()
+    const subagentRegistry = this.readSubagentRegistry(input.runtimeSession.chatSessionId)
+    const pendingTaskParts: OpencodeToolPart[] = []
+    const dispatchedPermissionIds = new Set<string>()
+    const pendingInteractionWork = new Set<Promise<void>>()
+    // Permission/question approvals wait on the user, so they run detached from the event
+    // pump loop. Blocking the loop here would stall every other event (tool progress,
+    // step ends, idle) until the user responds.
+    const trackInteractionWork = (work: Promise<void>): void => {
+      pendingInteractionWork.add(work)
+      void work.catch((error) => {
+        this.deps.logger?.warn('opencode interaction work failed', { error })
+      }).then(() => {
+        pendingInteractionWork.delete(work)
+      })
+    }
+    const waitPendingInteractionWork = async (): Promise<void> => {
+      while (pendingInteractionWork.size > 0) {
+        await Promise.allSettled([...pendingInteractionWork])
+      }
+    }
+    const turnTimers = new Set<ReturnType<typeof setTimeout>>()
+    let eventSubscription: OpencodeEventPumpSubscription | null = null
+    let asyncPromptBaselineMessageIds: ReadonlySet<string> | null = null
+    let asyncPromptDispatchStarted = false
+    let asyncPromptSubmitted = false
+    let eventStreamEnded = false
+    let asyncPromptSessionBecameBusy = false
+    let asyncPromptSessionBecameIdle = false
+    let eventStreamRecoveryStarted = false
+    let retriedWithFreshSession = false
+    let providerActivitySerial = 0
+    let completionActivitySerial = 0
+    let sawToolCallFinish = false
+    let sawFinalAssistant = false
+    let prematureIdleWatchdogStarted = false
+    const promptText = extractProviderInputText(input.message).trim()
+    const shouldGenerateTitle = shouldGenerateOpencodeSessionTitle({
+      history: input.history,
+      originalMessages: input.originalMessages,
+      promptText,
+      reportSessionTitle: input.reportSessionTitle,
+    })
+    let titleGenerationScheduled = false
+    const scheduleTitleGeneration = (): void => {
+      if (!shouldGenerateTitle || titleGenerationScheduled) {
+        return
+      }
+      titleGenerationScheduled = true
+      this.generateOpencodeSessionTitleInBackground({
+        runtimeSession: input.runtimeSession,
+        profile: input.profile,
+        promptText,
+        modelId: input.modelId ?? resolved.modelId,
+        workspaceId: input.workspaceId,
+        workspacePath: input.workspacePath,
+        agentId: input.agentId,
+        reportSessionTitle: input.reportSessionTitle,
+      })
+    }
+    const clearTurnTimers = (): void => {
+      for (const timer of turnTimers) {
+        clearTimeout(timer)
+      }
+      turnTimers.clear()
+    }
+    const failTurn = (error: unknown): void => {
+      clearTurnTimers()
+      chunks.fail(error)
+    }
+    const scheduleTurnTimer = (
+      delayMs: number,
+      callback: () => Promise<void> | void,
+    ): void => {
+      const timer = setTimeout(() => {
+        turnTimers.delete(timer)
+        void Promise.resolve(callback()).catch(failTurn)
+      }, Math.max(0, delayMs))
+      turnTimers.add(timer)
+    }
+    const schedulePromptAcceptedWatchdog = (): void => {
+      const providerActivityAtPromptAcceptance = providerActivitySerial
+      let cumulativeDelay = 0
+      for (const delayMs of this.options.promptAcceptedRecoveryDelaysMs) {
+        cumulativeDelay += delayMs
+        scheduleTurnTimer(cumulativeDelay, async () => {
+          if (!asyncPromptBaselineMessageIds || chunks.done) {
+            return
+          }
+          await this.closeAsyncPromptTurnFromHistory({
+            resource,
+            projector,
+            chunks,
+            sessionId: opencodeSessionId,
+            workspacePath: input.workspacePath,
+            baselineMessageIds: asyncPromptBaselineMessageIds,
+            onCompleted: scheduleTitleGeneration,
+          })
+        })
+      }
+      scheduleTurnTimer(cumulativeDelay + this.options.promptAcceptedActivityTimeoutMs, () => {
+        if (chunks.done || providerActivitySerial !== providerActivityAtPromptAcceptance) {
+          return
+        }
+        failTurn(new ProviderRuntimeError(
+          ProviderErrors.requestFailed(
+            this.runtimeKind,
+            'session.promptAsync',
+            'OpenCode did not produce any activity for this prompt. The session may be stuck; try sending again or restart OpenCode.',
+          ),
+        ))
+      })
+    }
+    const schedulePrematureIdleWatchdog = (idleAfterToolCalls: boolean): void => {
+      if (prematureIdleWatchdogStarted) {
+        return
+      }
+      prematureIdleWatchdogStarted = true
+      scheduleTurnTimer(this.options.prematureIdleTimeoutMs, () => {
+        if (chunks.done || sawFinalAssistant) {
+          return
+        }
+        const message = idleAfterToolCalls
+          ? 'OpenCode became idle after tool calls without producing a final assistant response.'
+          : 'OpenCode became idle before producing an assistant response.'
+        failTurn(new ProviderRuntimeError(
+          ProviderErrors.requestFailed(this.runtimeKind, 'session.promptAsync', message),
+        ))
+      })
+    }
+    const deferPrematureIdleCompletion = (): boolean => {
+      const idleBeforeAssistantActivity = completionActivitySerial === 0
+      const idleAfterToolCalls = sawToolCallFinish && !sawFinalAssistant
+      if (!idleBeforeAssistantActivity && !idleAfterToolCalls) {
+        return false
+      }
+      schedulePrematureIdleWatchdog(idleAfterToolCalls)
+      return true
+    }
+
+    const submitAsyncPromptTurn = async (): Promise<void> => {
+      asyncPromptDispatchStarted = true
+      asyncPromptBaselineMessageIds = await this.readAsyncPromptBaselineMessageIds({
+        resource,
+        sessionId: opencodeSessionId,
+        workspacePath: input.workspacePath,
+        chunks,
+      })
+      if (!asyncPromptBaselineMessageIds) {
+        return
+      }
+      projector.ignoreMessages(asyncPromptBaselineMessageIds)
+      const submission = await submitOpencodeTurn(resource, {
+        sessionId: opencodeSessionId,
+        workspacePath: input.workspacePath,
+        model: resolved.model,
+        agent: readOpencodeTurnAgent(input),
+        useAsyncPrompt: true,
+        thinkingEffort: input.providerOptions?.thinkingEffort ?? null,
+        systemPrompt: appendHarnessFragmentsToSystemPrompt(input.systemPrompt, input.harness),
+        message: input.message,
+      })
+      const { operation, result } = submission
+
+      if (chunks.done) {
+        return
+      }
+      if (result.error) {
+        failTurn(new ProviderRuntimeError(
+          ProviderErrors.requestFailed(this.runtimeKind, operation, formatOpencodeError(result.error)),
+        ))
+        return
+      }
+      if (operation === 'session.promptAsync') {
+        asyncPromptSubmitted = true
+        schedulePromptAcceptedWatchdog()
+        await recoverAsyncPromptIfTerminalSignalObserved()
+        return
+      }
+      const data = result.data
+      if (!data) {
+        failTurn(new ProviderRuntimeError(
+          ProviderErrors.requestFailed(this.runtimeKind, operation, 'opencode returned no turn data'),
+        ))
+        return
+      }
+      if (data.info.error) {
+        failTurn(new ProviderRuntimeError(
+          ProviderErrors.requestFailed(
+            this.runtimeKind,
+            operation,
+            formatOpencodeAssistantError(data.info.error),
+          ),
+        ))
+        return
+      }
+
+      for (const chunk of projector.projectPromptResult(data)) {
+        chunks.push(chunk)
+      }
+      this._lastUsage = projector.usage
+      chunks.push(projector.finish(data.info))
+      scheduleTitleGeneration()
+      clearTurnTimers()
+      chunks.close()
+    }
+
+    const retryAsyncPromptWithFreshSession = async (): Promise<void> => {
+      if (retriedWithFreshSession || chunks.done) {
+        return
+      }
+      retriedWithFreshSession = true
+      clearTurnTimers()
+      const previousSessionId = opencodeSessionId
+      const session = await this.createNativeSession(resource, input.workspacePath, input.runtimeSession.chatSessionId)
+      opencodeSessionId = session.id
+      input.runtimeSession.providerSessionId = session.id
+      projector = new OpencodeEventStreamProjector(opencodeSessionId)
+      asyncPromptBaselineMessageIds = null
+      asyncPromptDispatchStarted = false
+      asyncPromptSubmitted = false
+      asyncPromptSessionBecameBusy = false
+      asyncPromptSessionBecameIdle = false
+      eventStreamRecoveryStarted = false
+      providerActivitySerial = 0
+      completionActivitySerial = 0
+      sawToolCallFinish = false
+      sawFinalAssistant = false
+      prematureIdleWatchdogStarted = false
+      chunks.push({
+        type: 'data-runtime-event',
+        data: {
+          kind: 'opencode.session.recovered',
+          previousSessionId,
+          sessionId: opencodeSessionId,
+        },
+      })
+      await submitAsyncPromptTurn()
+    }
+
+    const recoverAsyncPromptIfTerminalSignalObserved = async (): Promise<void> => {
+      if (!asyncPromptBaselineMessageIds || chunks.done) {
+        return
+      }
+
+      const shouldRecoverFromEndedStream = eventStreamEnded && asyncPromptSubmitted
+      const shouldAttemptIdleHistoryClose
+        = !eventStreamRecoveryStarted
+          && asyncPromptDispatchStarted
+          && asyncPromptSessionBecameBusy
+          && asyncPromptSessionBecameIdle
+
+      if (!shouldRecoverFromEndedStream && !shouldAttemptIdleHistoryClose) {
+        return
+      }
+
+      if (shouldAttemptIdleHistoryClose && !shouldRecoverFromEndedStream) {
+        const recovered = await this.closeAsyncPromptTurnFromHistory({
+          resource,
+          projector,
+          chunks,
+          sessionId: opencodeSessionId,
+          workspacePath: input.workspacePath,
+          baselineMessageIds: asyncPromptBaselineMessageIds,
+          onCompleted: scheduleTitleGeneration,
+        })
+        if (recovered) {
+          eventStreamRecoveryStarted = true
+          return
+        }
+        // OpenCode may go idle between agent-loop steps; wait for busy again or stream end.
+        asyncPromptSessionBecameIdle = false
+        return
+      }
+
+      eventStreamRecoveryStarted = true
+      const recovered = await this.closeAsyncPromptTurnFromHistory({
+        resource,
+        projector,
+        chunks,
+        sessionId: opencodeSessionId,
+        workspacePath: input.workspacePath,
+        baselineMessageIds: asyncPromptBaselineMessageIds,
+        onCompleted: scheduleTitleGeneration,
+      })
+      if (recovered) {
+        return
+      }
+      if (!retriedWithFreshSession) {
+        await retryAsyncPromptWithFreshSession()
+        return
+      }
+      failTurn(new ProviderRuntimeError(
+        ProviderErrors.requestFailed(
+          this.runtimeKind,
+          'session.promptAsync',
+          'opencode event stream ended before the async prompt produced a terminal assistant message',
+        ),
+      ))
+    }
+
+    try {
+      const eventPump = this.ensureEventPump({
+        resource,
+        runtimeSession: input.runtimeSession,
+        workspacePath: input.workspacePath,
+      })
+      eventSubscription = eventPump.subscribe()
+      await eventPump.ready
+      // Recover permissions that were asked while the pump was disconnected or before
+      // Cradle restarted. The v2 pending list is authoritative; events only supplement it.
+      trackInteractionWork(this.recoverPendingOpencodePermissions({
+        input,
+        resource,
+        chunks,
+        sessionId: opencodeSessionId,
+        dispatchedPermissionIds,
+        interactionWork: pendingInteractionWork,
+      }))
+      void (async () => {
+        if (!eventSubscription) {
+          return
+        }
+        try {
+          for await (const message of eventSubscription.messages) {
+            if (message.kind === 'error') {
+              eventStreamEnded = true
+              chunks.push({
+                type: 'data-runtime-event',
+                data: {
+                  kind: 'opencode.event-stream-error',
+                  message: formatOpencodeError(message.error),
+                },
+              })
+              await recoverAsyncPromptIfTerminalSignalObserved()
+              continue
+            }
+            if (message.kind === 'end') {
+              eventStreamEnded = true
+              await recoverAsyncPromptIfTerminalSignalObserved()
+              continue
+            }
+
+            const event = message.event
+            const idleEvent = isOpencodeSessionStatusEvent(event, opencodeSessionId, 'idle')
+              || isOpencodeSessionIdleEvent(event, opencodeSessionId)
+            if (isMeaningfulOpencodeProviderActivity(event, opencodeSessionId)) {
+              providerActivitySerial += 1
+            }
+            if (isOpencodeSessionStatusEvent(event, opencodeSessionId, 'busy')) {
+              asyncPromptSessionBecameBusy = true
+            }
+            if (idleEvent) {
+              asyncPromptSessionBecameIdle = true
+            }
+            if (event.type === 'permission.asked') {
+              this.dispatchOpencodePermissionRequest({
+                input,
+                resource,
+                chunks,
+                permission: projectOpencodePermissionAsked(event.properties),
+                dispatchedPermissionIds,
+                interactionWork: pendingInteractionWork,
+              })
+            }
+            if (event.type === 'permission.v2.asked' && event.properties.sessionID === opencodeSessionId) {
+              this.dispatchOpencodePermissionRequest({
+                input,
+                resource,
+                chunks,
+                permission: projectOpencodePermissionV2Request(event.properties),
+                dispatchedPermissionIds,
+                interactionWork: pendingInteractionWork,
+              })
+            }
+            if (event.type === 'permission.replied') {
+              // Legacy and v2 replied events share the discriminator but not the payload.
+              const properties = event.properties
+              if ('permissionID' in properties) {
+                this.markOpencodePermissionReplied(
+                  input.runtimeSession.chatSessionId,
+                  properties.permissionID,
+                  readOpencodeLegacyPermissionReplyApproval(properties.response),
+                )
+              }
+              else {
+                this.markOpencodePermissionReplied(
+                  input.runtimeSession.chatSessionId,
+                  properties.requestID,
+                  properties.reply !== 'reject',
+                )
+              }
+            }
+            if (event.type === 'permission.v2.replied' && event.properties.sessionID === opencodeSessionId) {
+              this.markOpencodePermissionReplied(
+                input.runtimeSession.chatSessionId,
+                event.properties.requestID,
+                event.properties.reply !== 'reject',
+              )
+            }
+            if (isOpencodeQuestionLifecycleEvent(event) && event.properties.sessionID === opencodeSessionId) {
+              chunks.push({
+                type: 'data-runtime-event',
+                data: {
+                  kind: `opencode.${event.type}`,
+                  event,
+                },
+              })
+            }
+            if (
+              (event.type === 'question.asked' || event.type === 'question.v2.asked')
+              && event.properties.sessionID === opencodeSessionId
+            ) {
+              trackInteractionWork(this.handleOpencodeQuestionRequest({
+                input,
+                resource,
+                chunks,
+                request: event.properties,
+              }))
+            }
+            this.registerOpencodeSubagentFromEvent({
+              event,
+              parentSessionId: opencodeSessionId,
+              registry: subagentRegistry,
+              pendingTaskParts,
+            })
+            const eventSessionId = readOpencodeEventSessionId(event)
+            if (eventSessionId) {
+              const childBinding = subagentRegistry.getByChildSessionId(eventSessionId)
+              if (childBinding) {
+                this.publishOpencodeSubagentThreadEvent(input, childBinding, event, subagentRegistry)
+              }
+            }
+
+            const projectedChunks = projector.projectEvent(event)
+            if (projectedChunks.some(isOpencodeCompletionActivityChunk)) {
+              completionActivitySerial += 1
+            }
+            if (isOpencodeToolCallStepEndedEvent(event, opencodeSessionId)) {
+              sawToolCallFinish = true
+            }
+            if (isTerminalOpencodeStepEndedEvent(event, opencodeSessionId)) {
+              sawFinalAssistant = true
+            }
+            for (const chunk of projectedChunks) {
+              chunks.push(chunk)
+            }
+            if (event.type === 'message.part.updated' && event.properties.part.type === 'tool') {
+              trackInteractionWork(this.handleOpencodeQuestionToolPart({
+                input,
+                resource,
+                chunks,
+                part: event.properties.part as OpencodeToolPart,
+                sessionId: opencodeSessionId,
+              }))
+            }
+
+            const stepFailedMessage = readOpencodeStepFailedMessage(event)
+            if (stepFailedMessage) {
+              failTurn(new ProviderRuntimeError(
+                ProviderErrors.requestFailed(this.runtimeKind, 'session.promptAsync', stepFailedMessage),
+              ))
+              return
+            }
+            if (isTerminalOpencodeStepEndedEvent(event, opencodeSessionId)) {
+              this._lastUsage = projector.usage
+              await waitPendingInteractionWork()
+              if (chunks.done) {
+                return
+              }
+              scheduleTitleGeneration()
+              clearTurnTimers()
+              chunks.close()
+              return
+            }
+
+            const terminalAssistant = asyncPromptBaselineMessageIds
+              ? readOpencodeTerminalAssistantForTurn(event, {
+                  sessionId: opencodeSessionId,
+                  baselineMessageIds: asyncPromptBaselineMessageIds,
+                })
+              : null
+            if (terminalAssistant) {
+              sawFinalAssistant = isTerminalOpencodeAssistant(terminalAssistant)
+              if (terminalAssistant.finish === 'tool-calls' || terminalAssistant.finish === 'unknown') {
+                sawToolCallFinish = true
+              }
+              await waitPendingInteractionWork()
+              if (chunks.done) {
+                return
+              }
+              await this.closeAsyncPromptTurn({
+                resource,
+                projector,
+                chunks,
+                sessionId: opencodeSessionId,
+                workspacePath: input.workspacePath,
+                assistant: terminalAssistant,
+                onCompleted: scheduleTitleGeneration,
+              })
+              clearTurnTimers()
+              return
+            }
+            await recoverAsyncPromptIfTerminalSignalObserved()
+            if (idleEvent && !chunks.done) {
+              deferPrematureIdleCompletion()
+            }
+          }
+          eventStreamEnded = true
+          await recoverAsyncPromptIfTerminalSignalObserved()
+        }
+        catch (error) {
+          chunks.push({
+            type: 'data-runtime-event',
+            data: {
+              kind: 'opencode.event-stream-error',
+              message: formatOpencodeError(error),
+            },
+          })
+        }
+      })()
+    }
+    catch (error) {
+      const message = formatOpencodeError(error)
+      this.deps.logger?.warn('opencode event stream subscription failed', {
+        error,
+        sessionId: opencodeSessionId,
+        workspacePath: input.workspacePath,
+      })
+      this.deps.recordObservability?.({
+        source: 'provider',
+        code: 'OPENCODE_EVENT_STREAM_SUBSCRIBE_FAILED',
+        severity: 'warn',
+        category: 'provider',
+        message: `OpenCode event stream subscription failed: ${message}`,
+        attrs: {
+          runtimeKind: this.runtimeKind,
+          providerSessionId: opencodeSessionId,
+          workspacePath: input.workspacePath,
+        },
+      })
+      if (!asyncPromptBaselineMessageIds) {
+        chunks.fail(new ProviderRuntimeError(
+          ProviderErrors.requestFailed(
+            this.runtimeKind,
+            'event.subscribe',
+            `opencode event stream subscription failed before async prompt recovery was initialized: ${message}`,
+          ),
+        ))
+      }
+    }
+
+    void submitAsyncPromptTurn().catch(error => chunks.fail(error))
+
+    try {
+      for await (const chunk of chunks) {
+        yield chunk
+      }
+    }
+    finally {
+      eventSubscription?.unsubscribe()
+      clearTurnTimers()
+    }
+  }
+
+  async cancelTurn(input: CancelTurnInput): Promise<void> {
+    const opencodeSessionId = input.runtimeSession.providerSessionId
+    const lease = input.runtimeSession.providerRuntimeLease
+    if (!opencodeSessionId || !lease) {
+      return
+    }
+
+    try {
+      await (lease.resource as OpencodeRuntimeResource).client.session.abort({
+        path: { id: opencodeSessionId },
+      })
+    }
+    catch {
+      // opencode abort is best-effort from the unified runtime boundary.
+    }
+  }
+
+  private dispatchOpencodePermissionRequest(context: {
+    input: StreamTurnInput
+    resource: OpencodeRuntimeResource
+    chunks: AsyncChunkQueue
+    permission: OpencodePermission
+    dispatchedPermissionIds: Set<string>
+    interactionWork: Set<Promise<void>>
+  }): void {
+    const work = this.handleOpencodePermissionRequest(context)
+    context.interactionWork.add(work)
+    void work.catch((error) => {
+      this.deps.logger?.warn('opencode permission approval work failed', { error })
+    }).then(() => {
+      context.interactionWork.delete(work)
+    })
+  }
+
+  private async recoverPendingOpencodePermissions(context: {
+    input: StreamTurnInput
+    resource: OpencodeRuntimeResource
+    chunks: AsyncChunkQueue
+    sessionId: string
+    dispatchedPermissionIds: Set<string>
+    interactionWork: Set<Promise<void>>
+  }): Promise<void> {
+    const requests = await readOpencodeSessionPermissionRequests(context.resource, context.sessionId)
+    for (const request of requests) {
+      this.dispatchOpencodePermissionRequest({
+        input: context.input,
+        resource: context.resource,
+        chunks: context.chunks,
+        permission: projectOpencodePermissionV2Request(request),
+        dispatchedPermissionIds: context.dispatchedPermissionIds,
+        interactionWork: context.interactionWork,
+      })
+    }
+  }
+
+  private markOpencodePermissionReplied(
+    chatSessionId: string,
+    permissionId: string,
+    approved: boolean,
+  ): void {
+    const records = this.permissionApprovalsByChatSessionId.get(chatSessionId)
+    if (!records) {
+      return
+    }
+    for (const record of records) {
+      if (record.id === permissionId && record.status === 'pending') {
+        record.status = approved ? 'approved' : 'denied'
+        record.completedAt = Date.now()
+        record.updatedAt = record.completedAt
+      }
+    }
+  }
+
+  private async handleOpencodePermissionRequest(input: {
+    input: StreamTurnInput
+    resource: OpencodeRuntimeResource
+    chunks: AsyncChunkQueue
+    permission: OpencodePermission
+    dispatchedPermissionIds: Set<string>
+  }): Promise<void> {
+    const permission = input.permission
+    if (permission.sessionID !== input.input.runtimeSession.providerSessionId) {
+      return
+    }
+
+    const toolCallId = toOpencodePermissionToolCallId(permission.id)
+    // Synchronous dedup guard: both live events and pending-list recovery may race to
+    // dispatch the same request, so claim it before the first await.
+    if (input.dispatchedPermissionIds.has(toolCallId) || this.activePermissionIds.has(toolCallId)) {
+      return
+    }
+    input.dispatchedPermissionIds.add(toolCallId)
+    this.activePermissionIds.add(toolCallId)
+    this.recordPermissionApproval({
+      chatSessionId: input.input.runtimeSession.chatSessionId,
+      permission,
+      status: 'pending',
+    })
+
+    if (!input.chunks.done) {
+      input.chunks.push(providerChunk.toolInputStart(toolCallId, 'server_request_opencode_permission'))
+      input.chunks.push(providerChunk.toolInputAvailable({
+        toolCallId,
+        toolName: 'server_request_opencode_permission',
+        input: buildOpencodePermissionInput(permission),
+      }))
+    }
+
+    // Full-access mode mirrors opencode's own `--auto` semantics: auto-approve every
+    // request that reaches the client. Explicit deny rules never emit requests, so they
+    // stay enforced server-side.
+    const autoApprove = readOpencodeAccessMode(input.input.providerOptions?.runtimeSettings) === 'full-access'
+    if (autoApprove && !input.chunks.done) {
+      const reply = await input.resource.v2Client.v2.session.permission.reply({
+        sessionID: permission.sessionID,
+        requestID: permission.id,
+        reply: 'once',
+      })
+      this.recordPermissionApproval({
+        chatSessionId: input.input.runtimeSession.chatSessionId,
+        permission,
+        status: reply.error ? 'denied' : 'approved',
+      })
+      if (reply.error) {
+        input.chunks.push(providerChunk.toolOutputError(
+          toolCallId,
+          formatOpencodeError(reply.error),
+        ))
+      }
+      else {
+        input.chunks.push(providerChunk.toolOutputAvailable({
+          toolCallId,
+          output: buildOpencodePermissionOutput({
+            permission,
+            response: 'once',
+            approved: true,
+            reason: 'Auto-approved: full access mode.',
+          }),
+        }))
+      }
+      this.activePermissionIds.delete(toolCallId)
+      return
+    }
+
+    if (!input.chunks.done) {
+      input.chunks.push(providerChunk.toolApprovalRequest(toolCallId))
+    }
+
+    let replied = false
+    try {
+      const profileProviderKind = input.input.profile?.providerKind ?? 'universal'
+      const resolution = await requestProviderToolApproval({
+        deps: this.deps,
+        sessionId: input.input.runtimeSession.chatSessionId,
+        runId: input.input.runId,
+        providerRequestId: permission.id,
+        providerKind: profileProviderKind,
+        runtimeKind: this.runtimeKind,
+        providerMethod: 'permission.asked',
+        toolCallId,
+        metadata: { permission },
+      })
+      const response = readOpencodePermissionReply(resolution)
+      replied = true
+      const reply = await input.resource.v2Client.v2.session.permission.reply({
+        sessionID: permission.sessionID,
+        requestID: permission.id,
+        reply: response,
+        ...(resolution.reason ? { message: resolution.reason } : {}),
+      })
+      if (reply.error) {
+        throw new ProviderRuntimeError(
+          ProviderErrors.requestFailed(this.runtimeKind, 'session.permission.reply', formatOpencodeError(reply.error)),
+        )
+      }
+      this.recordPermissionApproval({
+        chatSessionId: input.input.runtimeSession.chatSessionId,
+        permission,
+        status: resolution.approved ? 'approved' : 'denied',
+      })
+      if (!input.chunks.done) {
+        input.chunks.push(providerChunk.toolOutputAvailable({
+          toolCallId,
+          output: buildOpencodePermissionOutput({
+            permission,
+            response,
+            approved: resolution.approved,
+            reason: resolution.reason,
+          }),
+        }))
+      }
+    }
+    catch (error) {
+      this.recordPermissionApproval({
+        chatSessionId: input.input.runtimeSession.chatSessionId,
+        permission,
+        status: 'denied',
+      })
+      if (!input.chunks.done) {
+        input.chunks.push(providerChunk.toolOutputError(toolCallId, formatOpencodeError(error)))
+      }
+      // Only auto-reject when we never managed to answer opencode; replying again after a
+      // successful reply would reject a request the user already approved.
+      if (!replied) {
+        await input.resource.v2Client.v2.session.permission.reply({
+          sessionID: permission.sessionID,
+          requestID: permission.id,
+          reply: 'reject',
+        }).catch(() => undefined)
+      }
+    }
+    finally {
+      this.activePermissionIds.delete(toolCallId)
+    }
+  }
+
+  private async handleOpencodeQuestionToolPart(input: {
+    input: StreamTurnInput
+    resource: OpencodeRuntimeResource
+    chunks: AsyncChunkQueue
+    part: OpencodeToolPart
+    sessionId: string
+  }): Promise<void> {
+    if (input.part.sessionID !== input.sessionId || input.part.tool !== 'question') {
+      return
+    }
+
+    const questions = projectOpencodeQuestionToolQuestions(input.part)
+    if (questions.length === 0) {
+      return
+    }
+
+    const request = await resolveOpencodeQuestionRequest({
+      resource: input.resource,
+      workspacePath: input.input.workspacePath,
+      sessionId: input.sessionId,
+      toolCallId: input.part.callID,
+    })
+    if (!request) {
+      return
+    }
+    await this.handleOpencodeQuestionRequest({
+      input: input.input,
+      resource: input.resource,
+      chunks: input.chunks,
+      request,
+      toolCallId: input.part.callID,
+      params: input.part.state.input,
+      messageID: input.part.messageID,
+    })
+  }
+
+  private async handleOpencodeQuestionRequest(input: {
+    input: StreamTurnInput
+    resource: OpencodeRuntimeResource
+    chunks: AsyncChunkQueue
+    request: QuestionRequest
+    toolCallId?: string
+    params?: unknown
+    messageID?: string
+  }): Promise<void> {
+    if (input.request.sessionID !== input.input.runtimeSession.providerSessionId) {
+      return
+    }
+
+    const questions = projectOpencodeQuestionInfos(input.request.questions)
+    if (
+      questions.length === 0
+      || this.activeQuestionRequestIds.has(input.request.id)
+      || this.handledQuestionRequestIds.has(input.request.id)
+    ) {
+      return
+    }
+    const toolCallId = input.toolCallId ?? input.request.tool?.callID ?? toOpencodeQuestionToolCallId(input.request.id)
+    if (!this.deps.requestUserInput) {
+      input.chunks.push(providerChunk.toolOutputError(
+        toolCallId,
+        'Chat Runtime does not expose pending user input handling for OpenCode questions.',
+      ))
+      return
+    }
+
+    this.activeQuestionRequestIds.add(input.request.id)
+    try {
+      const resolution = await this.deps.requestUserInput({
+        sessionId: input.input.runtimeSession.chatSessionId,
+        runId: input.input.runId,
+        providerRequestId: input.request.id,
+        providerKind: input.input.profile?.providerKind ?? 'universal',
+        runtimeKind: this.runtimeKind,
+        providerMethod: 'question',
+        toolCallId,
+        questions,
+        metadata: {
+          params: input.params ?? null,
+          opencode: {
+            sessionID: input.request.sessionID,
+            requestID: input.request.id,
+            messageID: input.messageID ?? input.request.tool?.messageID ?? null,
+          },
+        },
+      })
+      const reply = await input.resource.v2Client.question.reply({
+        requestID: input.request.id,
+        directory: input.input.workspacePath,
+        answers: questions.map(question => resolution.answers[question.id] ?? []),
+      })
+      if (reply.error) {
+        throw new ProviderRuntimeError(
+          ProviderErrors.requestFailed(this.runtimeKind, 'question.reply', formatOpencodeError(reply.error)),
+        )
+      }
+    }
+    catch (error) {
+      input.chunks.push(providerChunk.toolOutputError(toolCallId, formatOpencodeError(error)))
+      await input.resource.v2Client.question.reject({
+        requestID: input.request.id,
+        directory: input.input.workspacePath,
+      }).catch(() => undefined)
+    }
+    finally {
+      this.activeQuestionRequestIds.delete(input.request.id)
+      this.handledQuestionRequestIds.add(input.request.id)
+    }
+  }
+
+  private async closeAsyncPromptTurn(input: {
+    resource: OpencodeRuntimeResource
+    projector: OpencodeEventStreamProjector
+    chunks: AsyncChunkQueue
+    sessionId: string
+    workspacePath?: string
+    assistant: OpencodeAssistantMessage
+    onCompleted?: () => void
+  }): Promise<void> {
+    if (input.assistant.error) {
+      input.chunks.fail(new ProviderRuntimeError(
+        ProviderErrors.requestFailed(
+          this.runtimeKind,
+          'session.promptAsync',
+          formatOpencodeAssistantError(input.assistant.error),
+        ),
+      ))
+      return
+    }
+
+    const recovered = await input.resource.client.session.message({
+      path: {
+        id: input.sessionId,
+        messageID: input.assistant.id,
+      },
+      query: { directory: input.workspacePath },
+    })
+    if (!recovered.error && recovered.data?.info.role === 'assistant') {
+      for (const chunk of input.projector.projectPromptResult({
+        info: recovered.data.info,
+        parts: recovered.data.parts,
+      })) {
+        input.chunks.push(chunk)
+      }
+    }
+    else if (recovered.error) {
+      input.chunks.push({
+        type: 'data-runtime-event',
+        data: {
+          kind: 'opencode.promptAsync-recovery-error',
+          message: formatOpencodeError(recovered.error),
+        },
+      })
+    }
+    else if (!recovered.data) {
+      input.chunks.push({
+        type: 'data-runtime-event',
+        data: {
+          kind: 'opencode.promptAsync-recovery-error',
+          message: 'opencode returned no recovered assistant message',
+        },
+      })
+    }
+
+    this._lastUsage = input.projector.usage
+    input.chunks.push(input.projector.finish(input.assistant))
+    input.onCompleted?.()
+    input.chunks.close()
+  }
+
+  private async closeAsyncPromptTurnFromHistory(input: {
+    resource: OpencodeRuntimeResource
+    projector: OpencodeEventStreamProjector
+    chunks: AsyncChunkQueue
+    sessionId: string
+    workspacePath?: string
+    baselineMessageIds: ReadonlySet<string>
+    onCompleted?: () => void
+  }): Promise<boolean> {
+    if (input.chunks.done) {
+      return true
+    }
+
+    // Bounded v2 wait barrier: give the opencode agent loop a chance to settle before
+    // reading history, so recovery does not race an in-flight turn.
+    await waitForOpencodeSessionIdle(input.resource, input.sessionId, OPENCODE_WAIT_BARRIER_TIMEOUT_MS)
+
+    const messages = await input.resource.client.session.messages({
+      path: { id: input.sessionId },
+      query: { directory: input.workspacePath, limit: 50 },
+    })
+    if (messages.error) {
+      input.chunks.fail(new ProviderRuntimeError(
+        ProviderErrors.requestFailed(
+          this.runtimeKind,
+          'session.promptAsync',
+          `opencode event stream ended before completion and history recovery failed: ${formatOpencodeError(messages.error)}`,
+        ),
+      ))
+      return true
+    }
+
+    const terminalAssistant = readTerminalAssistantAfterBaseline(messages.data ?? [], input.baselineMessageIds)
+    if (!terminalAssistant) {
+      return false
+    }
+
+    await this.closeAsyncPromptTurn({
+      resource: input.resource,
+      projector: input.projector,
+      chunks: input.chunks,
+      sessionId: input.sessionId,
+      workspacePath: input.workspacePath,
+      assistant: terminalAssistant,
+      onCompleted: input.onCompleted,
+    })
+    return true
+  }
+
+  private generateOpencodeSessionTitleInBackground(input: {
+    runtimeSession: RuntimeSession
+    profile: RuntimeProviderTargetProfile | null
+    promptText: string
+    modelId: string | null
+    workspaceId?: string | null
+    workspacePath?: string
+    agentId?: string | null
+    reportSessionTitle?: (title: string) => void
+  }): void {
+    setTimeout(() => {
+      void (async () => {
+        try {
+          if (!input.workspacePath) {
+            return
+          }
+          const title = await this.generateSessionTitle({
+            runtimeSession: input.runtimeSession,
+            profile: input.profile,
+            promptText: input.promptText,
+            modelId: input.modelId,
+            workspaceId: input.workspaceId,
+            workspacePath: input.workspacePath,
+            agentId: input.agentId,
+          })
+          if (title) {
+            input.reportSessionTitle?.(title)
+          }
+        }
+        catch {
+          // Title generation is opportunistic and must not affect the active turn.
+        }
+      })()
+    }, 0)
+  }
+
+  private async readAsyncPromptBaselineMessageIds(input: {
+    resource: OpencodeRuntimeResource
+    sessionId: string
+    workspacePath?: string
+    chunks: AsyncChunkQueue
+  }): Promise<ReadonlySet<string> | null> {
+    const messages = await input.resource.client.session.messages({
+      path: { id: input.sessionId },
+      query: { directory: input.workspacePath, limit: 50 },
+    })
+    if (messages.error) {
+      input.chunks.fail(new ProviderRuntimeError(
+        ProviderErrors.requestFailed(
+          this.runtimeKind,
+          'session.promptAsync',
+          `opencode async prompt baseline failed: ${formatOpencodeError(messages.error)}`,
+        ),
+      ))
+      return null
+    }
+    return readOpencodeMessageIds(messages.data ?? [])
+  }
+
+  private recordPermissionApproval(input: {
+    chatSessionId: string
+    permission: OpencodePermission
+    status: OpencodePermissionApprovalRecord['status']
+  }): void {
+    const existing = this.permissionApprovalsByChatSessionId.get(input.chatSessionId) ?? []
+    const now = Date.now()
+    const startedAt = input.permission.time.created || now
+    const nextRecord: OpencodePermissionApprovalRecord = {
+      id: input.permission.id,
+      targetItemId: input.permission.callID ?? input.permission.messageID,
+      status: input.status,
+      label: input.permission.title || input.permission.type,
+      riskLevel: typeof input.permission.metadata.riskLevel === 'string' ? input.permission.metadata.riskLevel : null,
+      rationale: typeof input.permission.metadata.reason === 'string' ? input.permission.metadata.reason : null,
+      startedAt,
+      completedAt: input.status === 'pending' ? null : now,
+      updatedAt: now,
+    }
+    const withoutCurrent = existing.filter(record => record.id !== input.permission.id)
+    this.permissionApprovalsByChatSessionId.set(input.chatSessionId, [nextRecord, ...withoutCurrent].slice(0, 20))
+  }
+
+  /**
+   * Merges the authoritative v2 pending permission list into the locally tracked approval
+   * records so approvals asked outside the current turn (pump disconnected, Cradle
+   * restarted) still surface as pending.
+   */
+  private readApprovalRecordsWithPendingRecovery(
+    chatSessionId: string,
+    pendingPermissions: PermissionV2Request[],
+  ): OpencodePermissionApprovalRecord[] {
+    const records = (this.permissionApprovalsByChatSessionId.get(chatSessionId) ?? [])
+      .map(record => ({ ...record }))
+    const knownIds = new Set(records.map(record => record.id))
+    for (const request of pendingPermissions) {
+      if (knownIds.has(request.id)) {
+        continue
+      }
+      const permission = projectOpencodePermissionV2Request(request)
+      records.unshift({
+        id: permission.id,
+        targetItemId: permission.callID || permission.messageID || null,
+        status: 'pending',
+        label: permission.title || permission.type,
+        riskLevel: typeof permission.metadata.riskLevel === 'string' ? permission.metadata.riskLevel : null,
+        rationale: typeof permission.metadata.reason === 'string' ? permission.metadata.reason : null,
+        startedAt: permission.time.created,
+        completedAt: null,
+        updatedAt: Date.now(),
+      })
+    }
+    return records
+  }
+
+  private async createNativeSession(
+    resource: OpencodeRuntimeResource,
+    workspacePath: string | undefined,
+    chatSessionId: string,
+  ): Promise<OpencodeSession & { id: string }> {
+    const result = await resource.client.session.create({
+      query: { directory: workspacePath },
+      body: { title: `Cradle ${chatSessionId}` },
+    })
+    if (result.error) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'session.create', formatOpencodeError(result.error)),
+      )
+    }
+    if (!result.data?.id) {
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(this.runtimeKind, 'session.create', 'opencode returned no created session'),
+      )
+    }
+    return result.data as OpencodeSession & { id: string }
+  }
+
+  private ensureEventPump(input: {
+    resource: OpencodeRuntimeResource
+    runtimeSession: RuntimeSession
+    workspacePath?: string
+  }): OpencodeSessionEventPump {
+    const key = readOpencodeEventPumpKey(input)
+    const existing = this.eventPumpsBySessionKey.get(key)
+    if (existing && !existing.done) {
+      return existing
+    }
+    existing?.stop()
+    const pump = new OpencodeSessionEventPump({
+      resource: input.resource,
+      workspacePath: input.workspacePath,
+    })
+    this.eventPumpsBySessionKey.set(key, pump)
+    return pump
+  }
+
+  private readSubagentRegistry(chatSessionId: string): OpencodeSubagentRegistry {
+    let registry = this.subagentRegistriesByChatSessionId.get(chatSessionId)
+    if (!registry) {
+      registry = new OpencodeSubagentRegistry()
+      this.subagentRegistriesByChatSessionId.set(chatSessionId, registry)
+    }
+    return registry
+  }
+
+  private registerOpencodeSubagentFromEvent(input: {
+    event: OpencodeStreamEvent
+    parentSessionId: string
+    registry: OpencodeSubagentRegistry
+    pendingTaskParts: OpencodeToolPart[]
+  }): OpencodeSubagentBinding | null {
+    if (input.event.type === 'message.part.updated') {
+      const part = input.event.properties.part as OpencodeToolPart
+      if (part.type !== 'tool' || part.tool !== 'task' || part.sessionID !== input.parentSessionId) {
+        return null
+      }
+      const existingIndex = input.pendingTaskParts.findIndex(candidate => candidate.id === part.id)
+      if (existingIndex >= 0) {
+        input.pendingTaskParts[existingIndex] = part
+      }
+      else {
+        input.pendingTaskParts.push(part)
+      }
+      const binding = readOpencodeSubagentBindingFromTaskPart(part, input.parentSessionId)
+      if (binding) {
+        input.registry.register(binding)
+      }
+      return binding
+    }
+    if (input.event.type === 'session.created') {
+      const binding = readOpencodeSubagentBindingFromSessionCreated(
+        input.event.properties.info as OpencodeSession,
+        input.pendingTaskParts,
+      )
+      if (binding) {
+        input.registry.register(binding)
+      }
+      return binding
+    }
+    return null
+  }
+
+  private publishOpencodeSubagentThreadEvent(
+    turnInput: StreamTurnInput,
+    binding: OpencodeSubagentBinding,
+    event: OpencodeStreamEvent,
+    registry: OpencodeSubagentRegistry,
+  ): void {
+    if (!turnInput.onProviderThreadEvent) {
+      return
+    }
+    const chunks = projectOpencodeSubagentStreamChunks(event, binding, registry)
+    if (chunks.length === 0) {
+      return
+    }
+    try {
+      turnInput.onProviderThreadEvent({
+        providerThreadId: binding.toolCallId,
+        providerTurnId: null,
+        notification: event,
+        chunks,
+      })
+    }
+    catch {
+      // Provider-thread subscribers must not affect the parent turn stream.
+    }
+  }
+
+  private async resolveRuntimeConfig(input: {
+    profile: StartChatSessionInput['profile']
+    requestedModelId?: string | null
+  }): Promise<{
+    config: Config
+    model: { providerID: string, modelID: string } | null
+    modelId: string | null
+    providerTargetId: string | null
+    hostProviderTargetId: string
+  }> {
+    const nativeConfig = resolveNativeOpencodeRuntimeConfig({
+      providerTargetId: input.profile?.providerTargetId,
+      requestedModelId: input.requestedModelId,
+    })
+    if (nativeConfig) {
+      return nativeConfig
+    }
+
+    if (input.profile) {
+      const resolved = await resolveOpencodeConfig({
+        profile: input.profile,
+        requestedModelId: input.requestedModelId,
+        readSecret: ref => this.deps.readSecret(ref),
+      })
+      return {
+        ...resolved,
+        modelId: resolved.requestedModelId,
+        providerTargetId: input.profile.providerTargetId,
+        hostProviderTargetId: input.profile.providerTargetId,
+      }
+    }
+
+    const model = parseOpenCodeModelRef(input.requestedModelId)
+    return {
+      config: {
+        ...(input.requestedModelId ? { model: input.requestedModelId } : {}),
+      },
+      model,
+      modelId: input.requestedModelId ?? null,
+      providerTargetId: null,
+      hostProviderTargetId: OPENCODE_RUNTIME_NATIVE_PROVIDER_TARGET_ID,
+    }
+  }
+}
+
+export function resolveNativeOpencodeRuntimeConfig(input: {
+  providerTargetId?: string | null
+  requestedModelId?: string | null
+}): {
+  config: Config
+  model: { providerID: string, modelID: string } | null
+  modelId: string | null
+  providerTargetId: null
+  hostProviderTargetId: string
+} | null {
+  if (!readOpenCodeRuntimeNativeProviderId(input.providerTargetId ?? '')) {
+    return null
+  }
+  return {
+    config: {
+      ...(input.requestedModelId ? { model: input.requestedModelId } : {}),
+    },
+    model: parseOpenCodeModelRef(input.requestedModelId),
+    modelId: input.requestedModelId ?? null,
+    providerTargetId: null,
+    hostProviderTargetId: OPENCODE_RUNTIME_NATIVE_PROVIDER_TARGET_ID,
+  }
+}
+
+type OpencodePumpMessage
+  = | { kind: 'event', event: OpencodeStreamEvent }
+    | { kind: 'error', error: unknown }
+    | { kind: 'end' }
+
+class AsyncQueue<T> implements AsyncIterable<T> {
+  private readonly values: T[] = []
+  private readonly waiters: Array<{
+    resolve: (result: IteratorResult<T>) => void
+    reject: (error: unknown) => void
+  }> = []
+
+  private closed = false
+  private failure: unknown
+
+  get done(): boolean {
+    return this.closed
+  }
+
+  push(value: T): void {
+    if (this.closed) {
+      return
+    }
+    const waiter = this.waiters.shift()
+    if (waiter) {
+      waiter.resolve({ value, done: false })
+      return
+    }
+    this.values.push(value)
+  }
+
+  close(): void {
+    this.closed = true
+    while (this.waiters.length > 0) {
+      this.waiters.shift()?.resolve({ value: undefined, done: true })
+    }
+  }
+
+  fail(error: unknown): void {
+    this.failure = error
+    this.closed = true
+    while (this.waiters.length > 0) {
+      this.waiters.shift()?.reject(error)
+    }
+  }
+
+  async next(): Promise<IteratorResult<T>> {
+    if (this.values.length > 0) {
+      return { value: this.values.shift()!, done: false }
+    }
+    if (this.failure) {
+      throw this.failure
+    }
+    if (this.closed) {
+      return { value: undefined, done: true }
+    }
+    return await new Promise<IteratorResult<T>>((resolve, reject) => {
+      this.waiters.push({ resolve, reject })
+    })
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<T> {
+    return this
+  }
+}
+
+class AsyncChunkQueue extends AsyncQueue<UIMessageChunk> {}
+
+interface OpencodeEventPumpSubscription {
+  messages: AsyncQueue<OpencodePumpMessage>
+  unsubscribe: () => void
+}
+
+class OpencodeSessionEventPump {
+  private readonly abortController = new AbortController()
+  private readonly subscribers = new Set<AsyncQueue<OpencodePumpMessage>>()
+  private readySettled = false
+  private readyResolve: (() => void) | null = null
+  private readyReject: ((error: unknown) => void) | null = null
+  private closed = false
+
+  readonly ready: Promise<void>
+
+  get done(): boolean {
+    return this.closed || this.abortController.signal.aborted
+  }
+
+  constructor(private readonly input: {
+    resource: OpencodeRuntimeResource
+    workspacePath?: string
+  }) {
+    this.ready = new Promise<void>((resolve, reject) => {
+      this.readyResolve = resolve
+      this.readyReject = reject
+    })
+    void this.run()
+  }
+
+  subscribe(): OpencodeEventPumpSubscription {
+    const messages = new AsyncQueue<OpencodePumpMessage>()
+    if (this.closed) {
+      messages.push({ kind: 'end' })
+      messages.close()
+      return {
+        messages,
+        unsubscribe: () => undefined,
+      }
+    }
+
+    this.subscribers.add(messages)
+    return {
+      messages,
+      unsubscribe: () => {
+        this.subscribers.delete(messages)
+        messages.close()
+      },
+    }
+  }
+
+  stop(): void {
+    this.abortController.abort()
+    this.closeSubscribers()
+  }
+
+  private async run(): Promise<void> {
+    try {
+      const subscription = await this.input.resource.v2Client.event.subscribe(
+        this.input.workspacePath ? { directory: this.input.workspacePath } : undefined,
+        {
+          signal: this.abortController.signal,
+          sseMaxRetryAttempts: 0,
+        },
+      )
+      this.resolveReady()
+      for await (const event of subscription.stream as AsyncIterable<OpencodeStreamEvent>) {
+        this.publish({ kind: 'event', event })
+      }
+      this.publish({ kind: 'end' })
+    }
+    catch (error) {
+      if (!this.abortController.signal.aborted) {
+        if (!this.readySettled) {
+          this.rejectReady(error)
+        }
+        this.publish({ kind: 'error', error })
+      }
+    }
+    finally {
+      this.closed = true
+      this.closeSubscribers()
+    }
+  }
+
+  private publish(message: OpencodePumpMessage): void {
+    for (const subscriber of this.subscribers) {
+      subscriber.push(message)
+    }
+  }
+
+  private closeSubscribers(): void {
+    for (const subscriber of this.subscribers) {
+      subscriber.close()
+    }
+    this.subscribers.clear()
+  }
+
+  private resolveReady(): void {
+    this.readySettled = true
+    this.readyResolve?.()
+  }
+
+  private rejectReady(error: unknown): void {
+    this.readySettled = true
+    this.readyReject?.(error)
+  }
+}
+
+function readOpencodeEventPumpKey(input: {
+  resource: OpencodeRuntimeResource
+  runtimeSession: RuntimeSession
+  workspacePath?: string
+}): string {
+  return [
+    input.runtimeSession.chatSessionId,
+    input.resource.server.url,
+    input.workspacePath ?? '',
+  ].join('\u0000')
+}
+
+function parseOpenCodeModelRef(modelId: string | null | undefined): { providerID: string, modelID: string } | null {
+  if (!modelId) {
+    return null
+  }
+  const slashIndex = modelId.indexOf('/')
+  if (slashIndex <= 0 || slashIndex === modelId.length - 1) {
+    return null
+  }
+  return {
+    providerID: modelId.slice(0, slashIndex),
+    modelID: modelId.slice(slashIndex + 1),
+  }
+}
+
+function readOpencodeRuntimeHandle(runtimeKind: RuntimeKind, runtimeSession: RuntimeSession): OpencodeRuntimeResource {
+  const lease = runtimeSession.providerRuntimeLease
+  if (!runtimeSession.providerSessionId || !lease) {
+    throw new ProviderRuntimeError(ProviderErrors.sessionNotFound(runtimeKind, runtimeSession.chatSessionId))
+  }
+  return lease.resource as OpencodeRuntimeResource
+}
+
+function createOpencodeChildRuntimeLease(
+  resource: OpencodeRuntimeResource,
+): RuntimeLiveResourceLease<OpencodeRuntimeResource> {
+  return tryRetainOpencodeRuntimeResource(resource) ?? {
+    resource,
+    refresh() {},
+    release() {},
+  }
+}
+
+async function submitOpencodeTurn(
+  resource: OpencodeRuntimeResource,
+  input: {
+    sessionId: string
+    workspacePath?: string
+    model: { providerID: string, modelID: string } | null
+    agent: string
+    useAsyncPrompt: boolean
+    thinkingEffort?: ChatThinkingEffort | null
+    systemPrompt?: string
+    message: StreamTurnInput['message']
+  },
+): Promise<{
+  operation: 'session.command' | 'session.prompt' | 'session.promptAsync'
+  result: OpencodeTurnResult
+}> {
+  const variant = projectOpencodeReasoningVariant(input.thinkingEffort)
+  const buildBody = (): OpencodePromptBody & OpencodePromptAsyncBody => ({
+    ...(input.model ? { model: input.model } : {}),
+    agent: input.agent,
+    ...(variant ? { variant } : {}),
+    ...(input.systemPrompt ? { system: input.systemPrompt } : {}),
+    parts: projectOpencodePromptParts(input.message),
+  })
+  const invocation = readOpencodeSlashCommandInvocation(input.message)
+  if (invocation) {
+    const commandList = await resource.client.command.list({
+      query: { directory: input.workspacePath },
+    })
+    if (commandList.error) {
+      return {
+        operation: 'session.prompt',
+        result: normalizeOpencodeTurnResult(await resource.client.session.prompt({
+          path: { id: input.sessionId },
+          query: { directory: input.workspacePath },
+          body: buildBody(),
+        })),
+      }
+    }
+
+    const command = (commandList.data ?? []).find(candidate => candidate.name === invocation.command)
+    if (command) {
+      return {
+        operation: 'session.command',
+        result: normalizeOpencodeTurnResult(await resource.client.session.command({
+          path: { id: input.sessionId },
+          query: { directory: input.workspacePath },
+          body: {
+            command: invocation.command,
+            arguments: invocation.arguments,
+            ...(command.agent ? { agent: command.agent } : {}),
+            ...(command.model ? { model: command.model } : {}),
+          },
+        })),
+      }
+    }
+  }
+
+  if (input.useAsyncPrompt) {
+    const result = await resource.client.session.promptAsync({
+      path: { id: input.sessionId },
+      query: { directory: input.workspacePath },
+      body: buildBody(),
+    })
+    return {
+      operation: 'session.promptAsync',
+      result: {
+        data: undefined,
+        error: result.error,
+      },
+    }
+  }
+
+  return {
+    operation: 'session.prompt',
+    result: normalizeOpencodeTurnResult(await resource.client.session.prompt({
+      path: { id: input.sessionId },
+      query: { directory: input.workspacePath },
+      body: buildBody(),
+    })),
+  }
+}
+
+function normalizeOpencodeTurnResult(result: {
+  data?: {
+    info: OpencodeAssistantMessage
+    parts: OpencodePart[]
+  }
+  error?: unknown
+}): OpencodeTurnResult {
+  return {
+    data: result.data,
+    error: result.error,
+  }
+}
+
+function readOpencodeTurnAgent(input: StreamTurnInput): string {
+  return input.providerOptions?.runtimeSettings?.interactionMode === 'plan' ? 'plan' : 'build'
+}
+
+function readOpencodeTurnAgentFromSettings(settings: RuntimeSettings): string {
+  return settings.interactionMode === 'plan' ? 'plan' : 'build'
+}
+
+function readOpencodeAccessMode(settings: RuntimeSettings | undefined): OpencodeAccessMode {
+  return settings?.accessMode === 'approval-required' ? 'approval-required' : 'full-access'
+}
+
+function readOptionalStringSetting(settings: RuntimeSettings, key: string): string | null {
+  const value = settings[key]
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+}
+
+function shouldGenerateOpencodeSessionTitle(input: {
+  history?: StreamTurnInput['history']
+  originalMessages?: StreamTurnInput['originalMessages']
+  promptText: string
+  reportSessionTitle?: (title: string) => void
+}): boolean {
+  return Boolean(input.reportSessionTitle)
+    && (input.originalMessages ? input.originalMessages.length <= 1 : !input.history || input.history.length === 0)
+    && input.promptText.length > 0
+}
+
+function normalizeOpencodeSessionTitle(title: string | null | undefined): string | null {
+  const normalized = title
+    ?.replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^title\s*:\s*/i, '')
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .replace(/[.!?。！？]+$/g, '')
+    .trim()
+  if (!normalized) {
+    return null
+  }
+  if (normalized.length <= OPENCODE_SESSION_TITLE_MAX_LENGTH) {
+    return normalized
+  }
+  return normalized.slice(0, OPENCODE_SESSION_TITLE_MAX_LENGTH).trim().replace(/[.!?。！？]+$/g, '') || null
+}
+
+function isOpencodeSessionStatusEvent(
+  event: OpencodeStreamEvent,
+  sessionId: string,
+  status: 'busy' | 'idle',
+): boolean {
+  return event.type === 'session.status'
+    && event.properties.sessionID === sessionId
+    && event.properties.status.type === status
+}
+
+function isOpencodeSessionIdleEvent(event: OpencodeStreamEvent, sessionId: string): boolean {
+  return event.type === 'session.idle' && event.properties.sessionID === sessionId
+}
+
+function isMeaningfulOpencodeProviderActivity(event: OpencodeStreamEvent, sessionId: string): boolean {
+  const eventSessionId = readOpencodeEventSessionId(event)
+  if (eventSessionId !== sessionId) {
+    return false
+  }
+  switch (event.type) {
+    case 'message.updated':
+      return event.properties.info.role === 'assistant'
+    case 'session.status':
+      return event.properties.status.type !== 'idle'
+    case 'session.idle':
+      return false
+    default:
+      return true
+  }
+}
+
+function isOpencodeCompletionActivityChunk(chunk: UIMessageChunk): boolean {
+  return chunk.type === 'text-delta'
+    || chunk.type === 'reasoning-delta'
+    || chunk.type === 'tool-input-start'
+    || chunk.type === 'tool-input-available'
+    || chunk.type === 'tool-output-available'
+    || chunk.type === 'tool-output-error'
+}
+
+function toOpencodePermissionToolCallId(permissionId: string): string {
+  return `server-request-${permissionId}`
+}
+
+function toOpencodeQuestionToolCallId(requestId: string): string {
+  return `question:${requestId}`
+}
+
+function isOpencodeQuestionLifecycleEvent(event: OpencodeStreamEvent): event is Extract<
+  OpencodeStreamEvent,
+  {
+    type:
+      | 'question.asked'
+      | 'question.replied'
+      | 'question.rejected'
+      | 'question.v2.asked'
+      | 'question.v2.replied'
+      | 'question.v2.rejected'
+  }
+> {
+  return event.type === 'question.asked'
+    || event.type === 'question.replied'
+    || event.type === 'question.rejected'
+    || event.type === 'question.v2.asked'
+    || event.type === 'question.v2.replied'
+    || event.type === 'question.v2.rejected'
+}
+
+function projectOpencodePermissionAsked(permission: OpencodePermissionAskedProperties): OpencodePermission {
+  return {
+    id: permission.id,
+    type: permission.permission,
+    pattern: permission.patterns,
+    sessionID: permission.sessionID,
+    messageID: permission.tool?.messageID ?? '',
+    callID: permission.tool?.callID,
+    title: permission.permission,
+    metadata: permission.metadata,
+    time: { created: Date.now() },
+  }
+}
+
+function projectOpencodePermissionV2Request(request: OpencodePermissionV2AskedProperties | PermissionV2Request): OpencodePermission {
+  const metadata = request.metadata ?? {}
+  const title = typeof metadata.title === 'string' && metadata.title.trim().length > 0
+    ? metadata.title
+    : request.action
+  return {
+    id: request.id,
+    type: request.action,
+    pattern: request.resources,
+    sessionID: request.sessionID,
+    messageID: request.source?.type === 'tool' ? request.source.messageID : '',
+    callID: request.source?.type === 'tool' ? request.source.callID : undefined,
+    title,
+    metadata,
+    time: { created: Date.now() },
+  }
+}
+
+function readOpencodePermissionReply(resolution: { approved: boolean, scope?: 'once' | 'always' }): 'once' | 'always' | 'reject' {
+  if (!resolution.approved) {
+    return 'reject'
+  }
+  return resolution.scope === 'always' ? 'always' : 'once'
+}
+
+function readOpencodeLegacyPermissionReplyApproval(response: string): boolean {
+  return response === 'once' || response === 'always'
+}
+
+async function readOpencodeSessionPermissionRequests(
+  resource: OpencodeRuntimeResource,
+  sessionId: string,
+): Promise<PermissionV2Request[]> {
+  const result = await resource.v2Client.v2.session.permission.list({
+    sessionID: sessionId,
+  }).catch(() => null)
+  if (!result || result.error) {
+    return []
+  }
+  return result.data?.data ?? []
+}
+
+async function readOpencodeSkills(resource: OpencodeRuntimeResource): Promise<string[]> {
+  const result = await resource.v2Client.v2.skill.list().catch(() => null)
+  if (!result || result.error) {
+    return []
+  }
+  return (result.data?.data ?? []).map((skill: SkillV2Info) => skill.name)
+}
+
+async function waitForOpencodeSessionIdle(
+  resource: OpencodeRuntimeResource,
+  sessionId: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      resource.v2Client.v2.session.wait({ sessionID: sessionId })
+        .then(result => !result.error)
+        .catch(() => false),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs, false)
+        timer.unref?.()
+      }),
+    ])
+  }
+  finally {
+    clearTimeout(timer)
+  }
+}
+
+async function readOpencodeSessionStatus(
+  resource: OpencodeRuntimeResource,
+  workspacePath: string,
+  sessionId: string,
+): Promise<OpencodeSessionStatus | null> {
+  const result = await resource.client.session.status({
+    query: { directory: workspacePath },
+  }).catch(() => null)
+  if (!result || result.error) {
+    return null
+  }
+  return result.data[sessionId] ?? null
+}
+
+async function readOpencodeSessionTodo(
+  resource: OpencodeRuntimeResource,
+  workspacePath: string,
+  sessionId: string,
+): Promise<OpencodeTodo[]> {
+  const result = await resource.client.session.todo({
+    path: { id: sessionId },
+    query: { directory: workspacePath },
+  }).catch(() => null)
+  if (!result || result.error) {
+    return []
+  }
+  return result.data ?? []
+}
+
+async function readOpencodeSessionDiff(
+  resource: OpencodeRuntimeResource,
+  workspacePath: string,
+  sessionId: string,
+): Promise<Array<{ additions: number, deletions: number }>> {
+  const result = await resource.client.session.diff({
+    path: { id: sessionId },
+    query: { directory: workspacePath },
+  }).catch(() => null)
+  if (!result || result.error) {
+    return []
+  }
+  return result.data ?? []
+}
+
+async function readOpencodeSessionChildren(
+  resource: OpencodeRuntimeResource,
+  workspacePath: string,
+  sessionId: string,
+): Promise<OpencodeSession[]> {
+  const result = await resource.client.session.children({
+    path: { id: sessionId },
+    query: { directory: workspacePath },
+  }).catch(() => null)
+  if (!result || result.error) {
+    return []
+  }
+  return result.data ?? []
+}
+
+async function readOpencodeMcpStatus(
+  resource: OpencodeRuntimeResource,
+  workspacePath: string,
+): Promise<Map<string, OpencodeMcpStatus>> {
+  const result = await resource.client.mcp.status({
+    query: { directory: workspacePath },
+  }).catch(() => null)
+  if (!result || result.error || !result.data) {
+    return new Map()
+  }
+  return new Map(Object.entries(result.data))
+}
+
+async function readOpencodeFileStatus(
+  resource: OpencodeRuntimeResource,
+  workspacePath: string,
+): Promise<OpencodeFile[]> {
+  const result = await resource.client.file.status({
+    query: { directory: workspacePath },
+  }).catch(() => null)
+  if (!result || result.error) {
+    return []
+  }
+  return result.data ?? []
+}
+
+async function readOpencodeParentTaskBindings(
+  resource: OpencodeRuntimeResource,
+  workspacePath: string,
+  sessionId: string,
+): Promise<OpencodeSubagentBinding[]> {
+  const result = await resource.client.session.messages({
+    path: { id: sessionId },
+    query: { directory: workspacePath, limit: 200 },
+  }).catch(() => null)
+  if (!result || result.error) {
+    return []
+  }
+  return await readOpencodeTaskBindingsFromMessages(sessionId, result.data ?? [])
+}
+
+function projectOpencodeRuntimeThreadStatus(status: OpencodeSessionStatus | null): Extract<RuntimeUiSlotState, { kind: 'status' }>['status'] {
+  if (!status) {
+    return 'notLoaded'
+  }
+  switch (status.type) {
+    case 'busy':
+    case 'retry':
+      return 'active'
+    case 'idle':
+      return 'idle'
+  }
+}
+
+function projectOpencodeProgressState(
+  sessionId: string,
+  todos: OpencodeTodo[],
+  updatedAt: number,
+): RuntimeUiSlotState {
+  const items = todos.map(todo => ({
+    // OpenCode's live /session/:id/todo endpoint currently omits `id` even
+    // though the generated SDK declares it as required. The UI-slot contract
+    // deliberately represents absent provider ids as null.
+    id: todo.id ?? null,
+    label: todo.content,
+    status: projectOpencodeTodoStatus(todo.status),
+    sourceStatus: todo.status,
+  }))
+  return {
+    kind: 'progress',
+    slotId: 'opencode:progress',
+    threadId: sessionId,
+    turnId: null,
+    source: 'opencode.todo',
+    items,
+    currentItem: items.find(item => item.status === 'inProgress')?.label ?? null,
+    pendingCount: items.filter(item => item.status === 'pending').length,
+    inProgressCount: items.filter(item => item.status === 'inProgress').length,
+    completedCount: items.filter(item => item.status === 'completed').length,
+    updatedAt,
+  }
+}
+
+function projectOpencodeTodoStatus(status: string): 'pending' | 'inProgress' | 'completed' {
+  switch (status) {
+    case 'completed':
+      return 'completed'
+    case 'in_progress':
+    case 'inProgress':
+      return 'inProgress'
+    default:
+      return 'pending'
+  }
+}
+
+function projectOpencodeMcpState(
+  sessionId: string,
+  serversByName: Map<string, OpencodeMcpStatus>,
+  updatedAt: number,
+): RuntimeUiSlotState {
+  const servers = Array.from(serversByName.entries(), ([name, status]) => ({
+      name,
+      status: projectOpencodeMcpServerStatus(status),
+      authStatus: projectOpencodeMcpAuthStatus(status),
+      toolCount: 0,
+      resourceCount: 0,
+      error: readOpencodeMcpError(status),
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name))
+  return {
+    kind: 'mcp',
+    slotId: 'opencode:mcp',
+    threadId: sessionId,
+    serverCount: servers.length,
+    readyCount: servers.filter(server => server.status === 'ready').length,
+    failedCount: servers.filter(server => server.status === 'failed').length,
+    needsLoginCount: servers.filter(server => server.authStatus === 'notLoggedIn').length,
+    recentProgress: null,
+    servers,
+    updatedAt,
+  }
+}
+
+function projectOpencodeMcpServerStatus(status: OpencodeMcpStatus): Extract<RuntimeUiSlotState, { kind: 'mcp' }>['servers'][number]['status'] {
+  switch (status.status) {
+    case 'connected':
+      return 'ready'
+    case 'failed':
+      return 'failed'
+    case 'disabled':
+      return 'cancelled'
+    case 'needs_auth':
+    case 'needs_client_registration':
+      return 'unknown'
+  }
+}
+
+function projectOpencodeMcpAuthStatus(status: OpencodeMcpStatus): Extract<RuntimeUiSlotState, { kind: 'mcp' }>['servers'][number]['authStatus'] {
+  switch (status.status) {
+    case 'needs_auth':
+    case 'needs_client_registration':
+      return 'notLoggedIn'
+    case 'disabled':
+      return 'unsupported'
+    case 'connected':
+    case 'failed':
+      return 'unknown'
+  }
+}
+
+function readOpencodeMcpError(status: OpencodeMcpStatus): string | null {
+  switch (status.status) {
+    case 'failed':
+    case 'needs_client_registration':
+      return status.error
+    case 'connected':
+    case 'disabled':
+    case 'needs_auth':
+      return null
+  }
+}
+
+function projectOpencodeFilesystemState(
+  sessionId: string,
+  files: OpencodeFile[],
+  updatedAt: number,
+): RuntimeUiSlotState {
+  return {
+    kind: 'filesystem',
+    slotId: 'opencode:filesystem',
+    threadId: sessionId,
+    changedPathCount: files.length,
+    recentPaths: files.map(file => file.path).slice(0, 20),
+    updatedAt,
+  }
+}
+
+function projectOpencodeCrewState(
+  sessionId: string,
+  bindings: OpencodeSubagentBinding[],
+  updatedAt: number,
+): RuntimeUiSlotState {
+  const sortedBindings = [...bindings].sort((left, right) =>
+    (right.startedAt ?? 0) - (left.startedAt ?? 0)
+    || left.toolCallId.localeCompare(right.toolCallId))
+  const agents = sortedBindings.map(binding => ({
+    threadId: binding.toolCallId,
+    status: binding.status,
+    message: binding.description,
+    name: binding.subagentType,
+    preview: binding.description,
+    modelProvider: null,
+    agentNickname: binding.subagentType,
+    agentRole: binding.description,
+  }))
+  const calls = sortedBindings.map(binding => ({
+    id: binding.toolCallId,
+    tool: 'task',
+    status: binding.status,
+    senderThreadId: sessionId,
+    receiverThreadIds: [binding.toolCallId],
+    prompt: binding.description,
+    model: null,
+    reasoningEffort: null,
+    agents: [{
+      threadId: binding.toolCallId,
+      status: binding.status,
+      message: binding.description,
+      name: binding.subagentType,
+      preview: binding.description,
+      modelProvider: null,
+      agentNickname: binding.subagentType,
+      agentRole: binding.description,
+    }],
+    startedAt: binding.startedAt,
+    completedAt: binding.completedAt,
+  }))
+  const recentItems = sortedBindings.map(binding => ({
+    id: binding.toolCallId,
+    type: 'subagent',
+    label: binding.description ?? binding.subagentType ?? binding.toolCallId,
+    status: binding.status,
+    startedAt: binding.startedAt,
+    completedAt: binding.completedAt,
+  }))
+  return {
+    kind: 'crew',
+    slotId: 'opencode:crew',
+    threadId: sessionId,
+    activeCount: sortedBindings.filter(binding => binding.status === 'running').length,
+    completedCount: sortedBindings.filter(binding => binding.status === 'completed').length,
+    failedCount: sortedBindings.filter(binding => binding.status === 'failed').length,
+    recentItems,
+    agents,
+    collaborationModeCount: 0,
+    collaborationModes: [],
+    calls,
+    updatedAt,
+  }
+}
+
+function supportsOpencodeProviderThreadSourceKinds(sourceKinds: ProviderThreadListInput['sourceKinds']): boolean {
+  return !sourceKinds || sourceKinds.length === 0 || sourceKinds.includes('appServer') || sourceKinds.includes('unknown')
+}
+
+function projectOpencodeProviderThread(session: OpencodeSession, childCount = 0): ProviderThread {
+  return {
+    id: session.id,
+    providerSessionTreeId: session.parentID ?? null,
+    forkedFromId: session.parentID ?? null,
+    preview: normalizeProviderThreadTitle(session.title),
+    ephemeral: false,
+    modelProvider: null,
+    createdAt: session.time.created,
+    updatedAt: session.time.updated,
+    status: session.time.compacting ? 'active' : 'idle',
+    sourceKind: 'appServer',
+    source: {
+      type: 'opencode-session',
+      projectID: session.projectID,
+      version: session.version,
+      shareUrl: session.share?.url ?? null,
+      summary: session.summary ?? null,
+      revert: session.revert ?? null,
+      childCount,
+    },
+    threadSource: {
+      kind: 'opencode-session',
+      directory: session.directory,
+      parentID: session.parentID ?? null,
+      shareUrl: session.share?.url ?? null,
+      childCount,
+    },
+    agentNickname: null,
+    agentRole: null,
+    name: normalizeProviderThreadTitle(session.title),
+    cwd: session.directory,
+  }
+}
+
+function countOpencodeSessionChildren(sessions: OpencodeSession[]): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const session of sessions) {
+    if (!session.parentID) {
+      continue
+    }
+    counts.set(session.parentID, (counts.get(session.parentID) ?? 0) + 1)
+  }
+  return counts
+}
+
+function projectOpencodeProviderThreadTurn(input: { info: OpencodeMessage, parts: OpencodePart[] }): ProviderThreadTurn {
+  const startedAt = readOpencodeMessageCreatedAt(input.info)
+  const completedAt = input.info.role === 'assistant' ? input.info.time.completed ?? null : startedAt
+  return {
+    id: input.info.id,
+    status: input.info.role === 'assistant' && input.info.error ? 'failed' : 'completed',
+    startedAt,
+    completedAt,
+    durationMs: completedAt === null ? null : Math.max(0, completedAt - startedAt),
+    itemsView: 'full',
+    items: [{
+      provider: 'opencode',
+      message: input.info,
+      parts: input.parts,
+    }],
+  }
+}
+
+function projectOpencodeProviderThreadMessages(
+  threadId: string,
+  messages: Array<{ info: OpencodeMessage, parts: OpencodePart[] }>,
+): UIMessage[] {
+  return messages.flatMap((message): UIMessage[] => {
+    const parts = projectOpencodeMessagePartsToUiParts(message.parts)
+    if (parts.length === 0) {
+      return []
+    }
+    return [{
+      id: `provider-thread:${threadId}:message:${message.info.id}`,
+      role: message.info.role,
+      parts,
+      metadata: {
+        provider: 'opencode',
+        providerThreadId: threadId,
+        providerMessageId: message.info.id,
+      },
+    }]
+  })
+}
+
+function projectOpencodeMessagePartsToUiParts(parts: OpencodePart[]): UIMessage['parts'] {
+  return parts.flatMap((part): UIMessage['parts'] => {
+    switch (part.type) {
+      case 'text':
+        return part.text && part.synthetic !== true && part.ignored !== true
+          ? [{ type: 'text', text: part.text }]
+          : []
+      case 'reasoning':
+        return part.text ? [{ type: 'reasoning', text: part.text }] : []
+      case 'file':
+        return [{
+          type: 'file',
+          mediaType: part.mime,
+          ...(part.filename ? { filename: part.filename } : {}),
+          url: part.url,
+        }]
+      case 'tool':
+        return [projectOpencodeToolPartForProviderThread(part)]
+      case 'patch':
+        return [{
+          type: 'text',
+          text: `Patch: ${part.files.join(', ')}`,
+        }]
+      case 'snapshot':
+      case 'step-start':
+      case 'step-finish':
+      case 'agent':
+      case 'retry':
+      case 'compaction':
+      case 'subtask':
+        return []
+      default:
+        return []
+    }
+  })
+}
+
+function projectOpencodeToolPartForProviderThread(
+  part: Extract<OpencodePart, { type: 'tool' }>,
+): UIMessage['parts'][number] {
+  const input = buildOpencodeToolInput(part)
+  switch (part.state.status) {
+    case 'pending':
+      return {
+        type: `tool-${part.tool}`,
+        toolCallId: part.callID,
+        state: 'input-available',
+        input,
+      } as UIMessage['parts'][number]
+    case 'running':
+    case 'completed':
+      return {
+        type: `tool-${part.tool}`,
+        toolCallId: part.callID,
+        state: 'output-available',
+        input,
+        output: buildOpencodeToolOutput(part),
+      } as UIMessage['parts'][number]
+    case 'error':
+      return {
+        type: `tool-${part.tool}`,
+        toolCallId: part.callID,
+        state: 'output-error',
+        input,
+        errorText: part.state.error,
+      } as UIMessage['parts'][number]
+  }
+}
+
+function readOpencodeMessageCreatedAt(message: OpencodeMessage): number {
+  return message.time.created
+}
+
+function compareOpencodeProviderThreads(
+  left: ProviderThread,
+  right: ProviderThread,
+  sortKey: ProviderThreadListInput['sortKey'],
+  sortDirection: ProviderThreadListInput['sortDirection'],
+): number {
+  const leftValue = sortKey === 'created_at' ? left.createdAt : left.updatedAt
+  const rightValue = sortKey === 'created_at' ? right.createdAt : right.updatedAt
+  const direction = sortDirection === 'asc' ? 1 : -1
+  return ((leftValue ?? 0) - (rightValue ?? 0)) * direction
+}
+
+function opencodeProviderThreadMatchesSearch(thread: ProviderThread, searchTerm: string): boolean {
+  return [
+    thread.id,
+    thread.forkedFromId,
+    thread.preview,
+    thread.name,
+    thread.cwd,
+  ].some(value => normalizeProviderThreadText(value)?.includes(searchTerm))
+}
+
+function normalizeProviderThreadText(text: string | null | undefined): string | null {
+  const normalized = text?.replace(/\s+/g, ' ').trim().toLowerCase() ?? ''
+  return normalized.length > 0 ? normalized : null
+}
+
+function normalizeProviderThreadTitle(text: string | null | undefined): string | null {
+  const normalized = text?.replace(/\s+/g, ' ').trim() ?? ''
+  return normalized.length > 0 ? normalized : null
+}
+
+function readProviderThreadLimit(limit: number | null | undefined): number {
+  if (!limit || !Number.isFinite(limit)) {
+    return 50
+  }
+  return Math.max(1, Math.min(100, Math.floor(limit)))
+}
+
+function readProviderThreadOffset(cursor: string | null | undefined): number {
+  if (!cursor) {
+    return 0
+  }
+  const offset = Number.parseInt(cursor, 10)
+  return Number.isFinite(offset) && offset > 0 ? offset : 0
+}
+
+function readAssistantMessageForRollback(
+  messages: Array<{ info: OpencodeMessage, parts: OpencodePart[] }>,
+  numTurns: number,
+): OpencodeAssistantMessage | null {
+  const assistantMessages = messages
+    .filter((message): message is { info: OpencodeAssistantMessage, parts: OpencodePart[] } =>
+      message.info.role === 'assistant')
+    .map(message => message.info)
+    .sort((left, right) => left.time.created - right.time.created)
+  return assistantMessages[assistantMessages.length - numTurns] ?? null
+}
+
+function readOpencodeMessageIds(
+  messages: Array<{ info: OpencodeMessage, parts: OpencodePart[] }>,
+): ReadonlySet<string> {
+  return new Set(messages.map(message => message.info.id))
+}
+
+function readTerminalAssistantAfterBaseline(
+  messages: Array<{ info: OpencodeMessage, parts: OpencodePart[] }>,
+  baselineMessageIds: ReadonlySet<string>,
+): OpencodeAssistantMessage | null {
+  let selected: OpencodeAssistantMessage | null = null
+  for (const message of messages) {
+    if (
+      message.info.role !== 'assistant'
+      || baselineMessageIds.has(message.info.id)
+      || !isTerminalOpencodeAssistant(message.info)
+    ) {
+      continue
+    }
+    if (!selected || message.info.time.created >= selected.time.created) {
+      selected = message.info
+    }
+  }
+  return selected
+}
+
+async function resolveOpencodeQuestionRequestById(input: {
+  resource: OpencodeRuntimeResource
+  workspacePath?: string
+  sessionId: string
+  requestId: string
+}): Promise<QuestionRequest | null> {
+  const requests = await readOpencodeSessionQuestionRequests(
+    input.resource,
+    input.workspacePath,
+    input.sessionId,
+  )
+  return requests.find(request => request.id === input.requestId) ?? null
+}
+
+async function resolveOpencodeQuestionRequest(input: {
+  resource: OpencodeRuntimeResource
+  workspacePath?: string
+  sessionId: string
+  toolCallId: string
+}): Promise<QuestionRequest | null> {
+  const requests = await readOpencodeSessionQuestionRequests(
+    input.resource,
+    input.workspacePath,
+    input.sessionId,
+  )
+  return requests.find(request => request.tool?.callID === input.toolCallId) ?? null
+}
+
+async function readOpencodeSessionQuestionRequests(
+  resource: OpencodeRuntimeResource,
+  workspacePath: string | undefined,
+  sessionId: string,
+): Promise<QuestionRequest[]> {
+  // OpenCode's question tool and /question routes share the workspace-scoped
+  // Question.Service. The /api/session projection is not the interaction owner.
+  const result = await resource.v2Client.question.list({
+    directory: workspacePath,
+  })
+  if (result.error) {
+    throw new ProviderRuntimeError(
+      ProviderErrors.requestFailed('opencode', 'question.list', formatOpencodeError(result.error)),
+    )
+  }
+  return (result.data ?? []).filter(request => request.sessionID === sessionId)
+}
+
+function projectOpencodeQuestionRequestState(input: {
+  request: QuestionRequest
+  threadId: string
+  updatedAt: number
+}): RuntimeUiSlotState {
+  const createdAt = input.updatedAt
+  return {
+    kind: 'userInput',
+    slotId: 'opencode:user-input',
+    threadId: input.threadId,
+    runId: `recovered:${input.request.id}`,
+    requestId: input.request.id,
+    providerMethod: 'question',
+    toolCallId: input.request.tool?.callID ?? `question:${input.request.id}`,
+    questionCount: input.request.questions.length,
+    questions: projectOpencodeQuestionInfos(input.request.questions),
+    createdAt,
+    updatedAt: input.updatedAt,
+  }
+}
+
+function projectOpencodeQuestionToolQuestions(part: OpencodeToolPart): RuntimeUserInputQuestion[] {
+  const input = readOpencodeQuestionToolInput(part)
+  if (!input) {
+    return []
+  }
+  return projectOpencodeQuestionInfos(input.questions)
+}
+
+function projectOpencodeQuestionInfos(
+  questions: Array<QuestionInfo | OpencodeQuestionToolQuestion>,
+): RuntimeUserInputQuestion[] {
+  return questions.map((question, index) => ({
+    id: `question-${index + 1}`,
+    header: question.header,
+    question: question.question,
+    isOther: question.custom ?? false,
+    isSecret: false,
+    multiSelect: question.multiple ?? false,
+    options: question.options.length > 0
+      ? question.options.map(option => ({
+          label: option.label,
+          description: option.description,
+        }))
+      : null,
+  }))
+}
+
+function projectOpencodeContextUsage(input: {
+  runtimeKind: RuntimeKind
+  providerSessionId: string
+  modelId: string | null
+  messages: SessionMessage[]
+}): RuntimeContextUsage {
+  const sectionsByKind = new Map<string, RuntimeContextUsage['sections'][number]>()
+  const messageCounts: Record<string, number> = {}
+  const tokenBreakdown = {
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    cacheWriteTokens: 0,
+    outputTokens: 0,
+    reasoningOutputTokens: 0,
+  }
+
+  for (const message of input.messages) {
+    const kind = message.type
+    messageCounts[kind] = (messageCounts[kind] ?? 0) + 1
+    const tokenCount = readOpencodeContextMessageTokenCount(message)
+    if (message.type === 'assistant' && message.tokens) {
+      tokenBreakdown.inputTokens += message.tokens.input
+      tokenBreakdown.cachedInputTokens += message.tokens.cache.read
+      tokenBreakdown.cacheWriteTokens += message.tokens.cache.write
+      tokenBreakdown.outputTokens += message.tokens.output
+      tokenBreakdown.reasoningOutputTokens += message.tokens.reasoning
+    }
+
+    const section = sectionsByKind.get(kind) ?? {
+      kind,
+      label: labelOpencodeContextSection(kind),
+      tokenCount: 0,
+      color: colorOpencodeContextSection(kind),
+      isDeferred: false,
+      items: [],
+      raw: null,
+    }
+    section.tokenCount += tokenCount
+    section.items.push({
+      kind,
+      label: labelOpencodeContextMessage(message),
+      tokenCount,
+      metadata: readOpencodeContextMessageMetadata(message),
+      raw: message,
+    })
+    sectionsByKind.set(kind, section)
+  }
+
+  const totalTokens
+    = tokenBreakdown.inputTokens
+      + tokenBreakdown.cachedInputTokens
+      + tokenBreakdown.cacheWriteTokens
+      + tokenBreakdown.outputTokens
+      + tokenBreakdown.reasoningOutputTokens
+  const model = input.modelId ?? readLatestOpencodeContextModel(input.messages)
+
+  return {
+    runtimeKind: input.runtimeKind,
+    providerSessionId: input.providerSessionId,
+    source: 'opencode-v2-session-context',
+    model,
+    totalTokens,
+    maxTokens: null,
+    rawMaxTokens: null,
+    percentage: null,
+    sections: Array.from(sectionsByKind.values()),
+    messageBreakdown: {
+      messageCounts,
+      tokenBreakdown,
+    },
+    apiUsage: null,
+    raw: input.messages,
+    updatedAt: Date.now(),
+  }
+}
+
+function readOpencodeContextMessageTokenCount(message: SessionMessage): number {
+  if (message.type !== 'assistant' || !message.tokens) {
+    return 0
+  }
+  return message.tokens.input
+    + message.tokens.output
+    + message.tokens.reasoning
+    + message.tokens.cache.read
+    + message.tokens.cache.write
+}
+
+function labelOpencodeContextSection(kind: string): string {
+  switch (kind) {
+    case 'assistant':
+      return 'Assistant messages'
+    case 'user':
+      return 'User messages'
+    case 'system':
+      return 'System messages'
+    case 'synthetic':
+      return 'Synthetic messages'
+    case 'shell':
+      return 'Shell commands'
+    case 'compaction':
+      return 'Compaction summaries'
+    case 'agent-switched':
+      return 'Agent switches'
+    case 'model-switched':
+      return 'Model switches'
+    default:
+      return kind
+  }
+}
+
+function colorOpencodeContextSection(kind: string): string | null {
+  switch (kind) {
+    case 'assistant':
+      return '#2563eb'
+    case 'user':
+      return '#16a34a'
+    case 'system':
+    case 'synthetic':
+      return '#9333ea'
+    case 'shell':
+      return '#ea580c'
+    case 'compaction':
+      return '#0891b2'
+    default:
+      return null
+  }
+}
+
+function labelOpencodeContextMessage(message: SessionMessage): string {
+  switch (message.type) {
+    case 'assistant':
+      return `Assistant ${message.model.providerID}/${message.model.id}`
+    case 'user':
+      return trimContextLabel(message.text) || 'User message'
+    case 'system':
+    case 'synthetic':
+      return trimContextLabel(message.text) || labelOpencodeContextSection(message.type)
+    case 'shell':
+      return message.command
+    case 'compaction':
+      return `${message.reason} compaction`
+    case 'agent-switched':
+      return `Agent ${message.agent}`
+    case 'model-switched':
+      return `Model ${message.model.providerID}/${message.model.id}`
+  }
+}
+
+function readOpencodeContextMessageMetadata(message: SessionMessage): Record<string, unknown> {
+  const base = {
+    id: message.id,
+    createdAt: message.time.created,
+  }
+  switch (message.type) {
+    case 'assistant':
+      return {
+        ...base,
+        agent: message.agent,
+        model: `${message.model.providerID}/${message.model.id}`,
+        finish: message.finish ?? null,
+        contentCount: message.content.length,
+        fileCount: message.snapshot?.files?.length ?? 0,
+      }
+    case 'user':
+      return {
+        ...base,
+        fileCount: message.files?.length ?? 0,
+        agentCount: message.agents?.length ?? 0,
+      }
+    case 'shell':
+      return {
+        ...base,
+        callId: message.callID,
+        completedAt: message.time.completed ?? null,
+      }
+    case 'compaction':
+      return {
+        ...base,
+        reason: message.reason,
+      }
+    case 'agent-switched':
+      return {
+        ...base,
+        agent: message.agent,
+      }
+    case 'model-switched':
+      return {
+        ...base,
+        model: `${message.model.providerID}/${message.model.id}`,
+      }
+    default:
+      return base
+  }
+}
+
+function readLatestOpencodeContextModel(messages: SessionMessage[]): string | null {
+  for (const message of [...messages].reverse()) {
+    if (message.type === 'assistant' || message.type === 'model-switched') {
+      return `${message.model.providerID}/${message.model.id}`
+    }
+  }
+  return null
+}
+
+function trimContextLabel(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').slice(0, 80)
+}
+
+interface OpencodeQuestionToolInput {
+  questions: OpencodeQuestionToolQuestion[]
+}
+
+interface OpencodeQuestionToolQuestion {
+  question: string
+  header: string
+  multiple: boolean
+  custom: boolean
+  options: Array<{
+    label: string
+    description: string
+  }>
+}
+
+function readOpencodeQuestionToolInput(part: OpencodeToolPart): OpencodeQuestionToolInput | null {
+  if (part.tool !== 'question' || !Array.isArray(part.state.input.questions)) {
+    return null
+  }
+  const questions = part.state.input.questions.flatMap(readOpencodeQuestionToolQuestion)
+  return questions.length > 0 ? { questions } : null
+}
+
+function readOpencodeQuestionToolQuestion(value: unknown): OpencodeQuestionToolQuestion[] {
+  if (!isRecord(value) || typeof value.question !== 'string' || value.question.trim().length === 0) {
+    return []
+  }
+  const options = Array.isArray(value.options)
+    ? value.options.flatMap(readOpencodeQuestionToolOption)
+    : []
+  return [{
+    question: value.question,
+    header: typeof value.header === 'string' ? value.header : '',
+    multiple: value.multiple === true || value.multiSelect === true,
+    custom: value.custom === true || value.isOther === true,
+    options,
+  }]
+}
+
+function readOpencodeQuestionToolOption(value: unknown): Array<{ label: string, description: string }> {
+  if (!isRecord(value) || typeof value.label !== 'string') {
+    return []
+  }
+  return [{
+    label: value.label,
+    description: typeof value.description === 'string' ? value.description : '',
+  }]
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function projectOpencodeShellResult(parts: OpencodePart[]): {
+  stdout: string
+  stderr: string
+  durationMs: number | null
+} {
+  const stdout: string[] = []
+  const stderr: string[] = []
+  let durationMs: number | null = null
+
+  for (const part of parts) {
+    if (part.type === 'text' && part.text) {
+      stdout.push(part.text)
+      continue
+    }
+    if (part.type !== 'tool') {
+      continue
+    }
+    switch (part.state.status) {
+      case 'completed':
+        stdout.push(part.state.output)
+        durationMs = readToolDurationMs(part.state.time.start, part.state.time.end, durationMs)
+        break
+      case 'error':
+        stderr.push(part.state.error)
+        durationMs = readToolDurationMs(part.state.time.start, part.state.time.end, durationMs)
+        break
+      case 'pending':
+      case 'running':
+        break
+    }
+  }
+
+  return {
+    stdout: stdout.join('\n').trim(),
+    stderr: stderr.join('\n').trim(),
+    durationMs,
+  }
+}
+
+function readToolDurationMs(startedAt: number, completedAt: number, current: number | null): number {
+  const duration = Math.max(0, completedAt - startedAt)
+  return current === null ? duration : Math.max(current, duration)
+}
+
+function formatOpencodeError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message
+  }
+  return JSON.stringify(error)
+}
+
+export function formatOpencodeAssistantError(error: NonNullable<OpencodeAssistantMessage['error']>): string {
+  switch (error.name) {
+    case 'ProviderAuthError':
+      return `Provider authentication failed for ${error.data.providerID}: ${error.data.message}`
+    case 'UnknownError':
+      return error.data.message
+    case 'MessageOutputLengthError':
+      return `Message output length exceeded: ${JSON.stringify(error.data)}`
+    case 'MessageAbortedError':
+      return error.data.message
+    case 'APIError':
+      return formatOpencodeApiError(error.data)
+  }
+}
+
+function formatOpencodeApiError(error: Extract<
+  NonNullable<OpencodeAssistantMessage['error']>,
+  { name: 'APIError' }
+>['data']): string {
+  return error.statusCode === undefined
+    ? error.message
+    : `${error.statusCode}: ${error.message}`
+}
