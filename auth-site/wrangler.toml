@@ -1,0 +1,15 @@
+# ==============================================================================
+# Cloudflare Pages Configuration: Site 2 (User Auth & Sync Bridge)
+# Project Name: ecosystem-auth
+# ==============================================================================
+
+name = "ecosystem-auth"
+pages_build_output_dir = "."
+compatibility_date = "2024-09-23"
+
+[vars]
+SITE_ROLE = "AUTH_GATEWAY"
+ENVIRONMENT = "production"
+LANDING_URL = "https://nexus.io"
+STATUS_RADAR_URL = "https://status.nexus.io"
+ADMIN_HQ_URL = "https://admin.nexus.io"
