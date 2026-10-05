@@ -1,0 +1,11 @@
+{
+  "device_id": "nexus-desktop-primary",
+  "device_type": "DESKTOP",
+  "device_name": "Nexus Primary Workstation",
+  "d1_api_url": "https://nexus-bridge-7l1.pages.dev/api",
+  "auth_token": "",
+  "poll_interval_seconds": 2.0,
+  "heartbeat_interval_seconds": 30.0,
+  "capture_screenshot_on_complete": true,
+  "nexus_electron_port": 17173
+}
