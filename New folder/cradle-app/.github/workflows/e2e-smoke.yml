@@ -1,0 +1,306 @@
+name: E2E PR Suite
+
+# Runs against the PR head when:
+# The checkout below intentionally follows the PR head SHA after main is merged.
+# - critical paths change (default @P0 smoke), OR
+# - the `e2e` label is present (force @P0 smoke), OR
+# - the `e2e-full` label is present (force @P0 + @P1 full suite)
+# The `e2e-full` label also keeps the full suite enabled on later pushes.
+# The Codex lane provisions app-server; Claude/local scenarios avoid that runtime cost.
+
+on:
+  pull_request:
+    types: [labeled, unlabeled, synchronize, opened, reopened]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: e2e-pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Detect critical paths
+    runs-on: ubuntu-latest
+    outputs:
+      critical: ${{ steps.filter.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: .github/ci-paths.yml
+
+  gate:
+    name: Check E2E gate
+    runs-on: ubuntu-latest
+    needs: changes
+    if: >
+      always() &&
+      needs.changes.result == 'success' && (
+        needs.changes.outputs.critical == 'true' ||
+        contains(github.event.pull_request.labels.*.name, 'e2e') ||
+        contains(github.event.pull_request.labels.*.name, 'e2e-full')
+      )
+    steps:
+      - run: echo "E2E gate open — @P0 smoke by default, @P0 or @P1 full suite when the e2e-full label is present"
+
+  e2e-smoke:
+    name: E2E ${{ matrix.lane }} (${{ contains(github.event.pull_request.labels.*.name, 'e2e-full') && 'full' || 'P0' }})
+    runs-on: ubuntu-latest
+    needs: gate
+    if: ${{ needs.gate.result == 'success' }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: claude-local
+            runtimeExpression: '@runtime-claude or @runtime-none'
+            parallel: '2'
+            provisionCodex: 'false'
+          - lane: codex
+            runtimeExpression: '@runtime-codex'
+            parallel: '1'
+            provisionCodex: 'true'
+
+    steps:
+      - name: Checkout Cradle source
+        uses: actions/checkout@v4
+        with:
+          repository: wibus-wee/cradle-app
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          # Test the PR head, not main — otherwise labeled PRs never exercise their own commits.
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: ./.github/actions/setup
+        with:
+          node-version: 22
+
+      - name: Setup E2E runtime
+        uses: ./.github/actions/e2e-setup
+        with:
+          provision-codex: ${{ matrix.provisionCodex }}
+
+      - name: Run selected E2E scenarios
+        id: e2e
+        continue-on-error: true
+        uses: ./.github/actions/e2e-run
+        with:
+          tags: ${{ format('({0}) and ({1})', contains(github.event.pull_request.labels.*.name, 'e2e-full') && '@P0 or @P1' || '@P0', matrix.runtimeExpression) }}
+          verbose: '1'
+          parallel: ${{ matrix.parallel }}
+          fail-on-zero-scenarios: 'true'
+
+      - name: Summarize E2E result
+        if: always()
+        env:
+          E2E_OUTCOME: ${{ steps.e2e.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TAGS_FILTER: ${{ format('({0}) and ({1})', contains(github.event.pull_request.labels.*.name, 'e2e-full') && '@P0 or @P1' || '@P0', matrix.runtimeExpression) }}
+        run: node e2e/scripts/summarize-run.cjs
+
+      - name: Upload E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-${{ matrix.lane }}-${{ contains(github.event.pull_request.labels.*.name, 'e2e-full') && 'full' || 'smoke' }}-artifacts-${{ github.run_id }}
+          path: |
+            e2e/artifacts/ARTIFACTS.md
+            e2e/artifacts/failure-index.json
+            e2e/artifacts/cucumber-summary.txt
+            e2e/artifacts/cucumber-output.log
+            e2e/artifacts/cucumber-messages.ndjson
+            e2e/artifacts/cucumber-junit.xml
+            e2e/artifacts/e2e-summary.json
+            e2e/artifacts/e2e-summary.md
+            e2e/artifacts/e2e-performance.json
+            e2e/artifacts/e2e-performance.md
+            e2e/artifacts/scenarios/**/failure.png
+            e2e/artifacts/scenarios/**/failure.webm
+            e2e/artifacts/scenarios/**/trace.zip
+            e2e/artifacts/scenarios/**/console.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Post PR comment on failure
+        if: steps.e2e.outcome == 'failure'
+        uses: actions/github-script@v7
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SUITE_NAME: ${{ format('{0} {1}', matrix.lane, contains(github.event.pull_request.labels.*.name, 'e2e-full') && 'Full E2E' || 'E2E Smoke') }}
+          ARTIFACT_NAME: e2e-${{ matrix.lane }}-${{ contains(github.event.pull_request.labels.*.name, 'e2e-full') && 'full' || 'smoke' }}-artifacts-${{ github.run_id }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { readJson, formatFailureArtifactsSection } = require('./e2e/scripts/format-failure-issue.cjs')
+            const runUrl = process.env.RUN_URL
+            const runId = process.env.RUN_ID
+            const suiteName = process.env.SUITE_NAME
+            const artifactName = process.env.ARTIFACT_NAME
+            const summary = readJson('e2e/artifacts/e2e-summary.json', {
+              markdown: '_(no E2E summary was generated)_',
+              resultLine: 'no parsed scenario data',
+              nonPassedScenarios: [],
+            })
+            const failureIndex = readJson('e2e/artifacts/failure-index.json', [])
+
+            const body = `## ❌ ${suiteName} Failed
+
+            ${summary.markdown}
+
+            **Result:** \`${summary.resultLine}\`
+
+            ### Evidence (download artifact \`${artifactName}\`)
+
+            See root \`ARTIFACTS.md\` in the zip. Per failure:
+
+            ${formatFailureArtifactsSection(failureIndex)}
+
+            | Kind | Path glob |
+            |------|-----------|
+            | Video 1:1 | \`scenarios/*/failure.webm\` |
+            | Screenshot | \`scenarios/*/failure.png\` |
+            | Playwright trace | \`scenarios/*/trace.zip\` → \`npx playwright show-trace\` |
+            | Console + simulator | \`scenarios/*/console.log\` |
+
+            [View run](${runUrl}) · [Download artifacts](${runUrl}/artifacts)
+            `.split('\n').map(l => l.trimStart()).join('\n')
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            })
+
+      - name: Propagate failure
+        if: steps.e2e.outcome == 'failure'
+        run: exit 1
+
+  fabric-two-node:
+    name: Fabric two-node E2E
+    runs-on: ubuntu-latest
+    needs: gate
+    if: ${{ needs.gate.result == 'success' }}
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout Cradle source
+        uses: actions/checkout@v4
+        with:
+          repository: wibus-wee/cradle-app
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: ./.github/actions/setup
+        with:
+          node-version: 22
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/relayd/go.mod
+          cache-dependency-path: apps/relayd/go.sum
+
+      - name: Build plugin SDK and workspace plugins
+        run: pnpm --filter @cradle/plugin-sdk build && pnpm --filter "./plugins/*" build
+
+      - name: Install Chromium
+        timeout-minutes: 15
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Provision Codex app-server for Fabric E2E
+        env:
+          GITHUB_TOKEN: ${{ secrets.PRIVATE_REPO_PAT }}
+        run: pnpm --filter @cradle/desktop sync:codex-runtime
+
+      - name: Run the real two-node Fabric journey
+        env:
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: pnpm e2e:fabric
+
+      - name: Upload Fabric E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fabric-two-node-artifacts-${{ github.run_id }}
+          path: |
+            e2e/artifacts/fabric-report/**
+            e2e/artifacts/fabric-results/**
+          if-no-files-found: warn
+          retention-days: 14
+
+  fabric-mobile-ios:
+    name: Fabric Mobile iOS E2E
+    runs-on: macos-26
+    needs: gate
+    if: ${{ needs.gate.result == 'success' }}
+    timeout-minutes: 60
+    # CocoaPods records dependency paths in Podfile.lock. Keep every pnpm
+    # command on the repo-local virtual store so those paths stay portable.
+    env:
+      pnpm_config_enable_global_virtual_store: 'false'
+
+    steps:
+      - name: Checkout Cradle source
+        uses: actions/checkout@v4
+        with:
+          repository: wibus-wee/cradle-app
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: ./.github/actions/setup
+        with:
+          node-version: 22
+
+      - name: Set up Ruby for CocoaPods
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '4.0.6'
+
+      - name: Install CocoaPods
+        run: gem install cocoapods --version 1.17.0 --no-document
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/relayd/go.mod
+          cache-dependency-path: apps/relayd/go.sum
+
+      - name: Set up Java for Maestro
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Build plugin SDK and workspace plugins
+        run: pnpm --filter @cradle/plugin-sdk build && pnpm --filter "./plugins/*" build
+
+      - name: Install Chromium
+        timeout-minutes: 15
+        run: pnpm exec playwright install chromium
+
+      - name: Provision Codex app-server for Fabric E2E
+        env:
+          GITHUB_TOKEN: ${{ secrets.PRIVATE_REPO_PAT }}
+        run: pnpm --filter @cradle/desktop sync:codex-runtime
+
+      - name: Run the native Mobile Fabric journey
+        env:
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: pnpm e2e:fabric:mobile:ios
+
+      - name: Upload Mobile Fabric E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fabric-mobile-ios-artifacts-${{ github.run_id }}
+          path: |
+            e2e/artifacts/fabric-report/**
+            e2e/artifacts/fabric-results/**
+            e2e/artifacts/mobile-fabric/**
+          if-no-files-found: warn
+          retention-days: 14
