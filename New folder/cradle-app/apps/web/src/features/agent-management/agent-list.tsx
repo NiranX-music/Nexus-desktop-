@@ -1,0 +1,957 @@
+import {
+  CheckboxLine as SquareCheckIcon,
+  CloseLine as XIcon,
+  DeleteLine as Trash2Icon,
+  DownloadLine as DownloadIcon,
+  PlusLine as PlusIcon,
+  RobotLine as BotIcon,
+  SearchLine as SearchIcon,
+  SelectorHorizontalLine as SlidersHorizontalIcon,
+  SquareLine as SquareIcon,
+} from '@mingcute/react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+
+import { Button } from '~/components/ui/button'
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from '~/components/ui/empty'
+import { Input } from '~/components/ui/input'
+import { ScrollArea } from '~/components/ui/scroll-area'
+import { runtimeSupportsAnyProviderKind } from '~/features/agent-runtime/runtime-compatibility'
+import type { ModelDescriptor, ProviderTarget } from '~/features/agent-runtime/types'
+import { useProviderTargetModelMap } from '~/features/agent-runtime/use-agent-models'
+import type { Agent, PreviewLocalConfigImportResult } from '~/features/agent-runtime/use-agents'
+import { useAgents } from '~/features/agent-runtime/use-agents'
+import type { ProviderTargetOption } from '~/features/agent-runtime/use-provider-targets'
+import { useProviderTargets } from '~/features/agent-runtime/use-provider-targets'
+import type { RuntimeCatalogItem } from '~/features/agent-runtime/use-runtime-catalog'
+import {
+  runtimeCatalogItemUsesModelSelection,
+  useRuntimeCatalog,
+} from '~/features/agent-runtime/use-runtime-catalog'
+import {
+  filterThinkingOptionsForModel,
+  selectSupportedThinkingValue,
+} from '~/features/composer-toolbar/constants'
+import type { ThinkingOption } from '~/features/composer-toolbar/provider-model-menu'
+import { ProviderModelPicker } from '~/features/composer-toolbar/provider-model-picker'
+import type { AgentCreateIntent } from '~/store/settings-overlay'
+import { useSettingsOverlayStore } from '~/store/settings-overlay'
+
+import { SettingsMasterDetail } from '../settings/settings-container'
+import type {
+  AgentBatchThinkingEffort,
+  AgentProviderBatchSelection,
+} from './agent-batch-configuration'
+import { buildAgentProviderBatchPatches } from './agent-batch-configuration'
+import { AgentDetailPage } from './agent-detail'
+import { AgentImportDialogView } from './agent-import-dialog-view'
+import { AgentSidebarRowView } from './agent-sidebar-row-view'
+import {
+  applyVisibleRangeSelection,
+  mergeVisibleSelection,
+  pruneSelectedIds,
+  removeVisibleSelection,
+  selectedIdFromSet,
+  selectedRecords,
+  visibleRecordsAreSelected,
+} from './settings-multi-selection'
+import { useSettingsSelectionShortcuts } from './settings-selection-shortcuts'
+
+const AGENT_THINKING_EFFORTS: Array<{ value: AgentBatchThinkingEffort }> = [
+  { value: 'none' },
+  { value: 'minimal' },
+  { value: 'low' },
+  { value: 'medium' },
+  { value: 'high' },
+  { value: 'xhigh' },
+  { value: 'max' },
+  { value: 'ultra' },
+]
+
+type AgentManagementKey = keyof typeof import('~/locales/default').default.agentManagement
+
+const thinkingLabelKeys = {
+  none: 'detail.thinking.none.label',
+  minimal: 'detail.thinking.minimal.label',
+  low: 'detail.thinking.low.label',
+  medium: 'detail.thinking.medium.label',
+  high: 'detail.thinking.high.label',
+  xhigh: 'detail.thinking.xhigh.label',
+  max: 'detail.thinking.max.label',
+  ultra: 'detail.thinking.ultra.label',
+} satisfies Record<AgentBatchThinkingEffort, AgentManagementKey>
+
+const thinkingDescriptionKeys = {
+  none: 'detail.thinking.none.description',
+  minimal: 'detail.thinking.minimal.description',
+  low: 'detail.thinking.low.description',
+  medium: 'detail.thinking.medium.description',
+  high: 'detail.thinking.high.description',
+  xhigh: 'detail.thinking.xhigh.description',
+  max: 'detail.thinking.max.description',
+  ultra: 'detail.thinking.ultra.description',
+} satisfies Record<AgentBatchThinkingEffort, AgentManagementKey>
+
+function commonString(values: Array<string | null>): string | null {
+  if (values.length === 0) {
+    return null
+  }
+  const first = values[0] ?? null
+  return values.every(value => value === first) ? first : null
+}
+
+function providerTargetFromOption(option: ProviderTargetOption): ProviderTarget {
+  return { kind: option.kind, id: option.id }
+}
+
+function agentUsesProviderTarget(agent: Agent, runtimeCatalog: RuntimeCatalogItem[]): boolean {
+  const runtime = runtimeCatalog.find(item => item.runtimeKind === agent.runtimeKind)
+  return runtime ? runtimeCatalogItemUsesModelSelection(runtime) : true
+}
+
+function providerTargetCompatibleWithAgents(
+  target: ProviderTargetOption,
+  agents: Agent[],
+  runtimeCatalog: RuntimeCatalogItem[],
+): boolean {
+  return agents.every(
+    agent =>
+      !agentUsesProviderTarget(agent, runtimeCatalog)
+      || runtimeSupportsAnyProviderKind(agent.runtimeKind, target.effectiveProviderKinds, runtimeCatalog),
+  )
+}
+
+function defaultBatchProviderTarget(
+  agents: Agent[],
+  providerTargets: ProviderTargetOption[],
+  runtimeCatalog: RuntimeCatalogItem[],
+): ProviderTarget | null {
+  const providerAgents = agents.filter(agent => agentUsesProviderTarget(agent, runtimeCatalog))
+  const enabledTargets = providerTargets.filter(
+    target =>
+      target.enabled && providerTargetCompatibleWithAgents(target, providerAgents, runtimeCatalog),
+  )
+  const commonTargetId = commonString(providerAgents.map(agent => agent.providerTargetId))
+  const commonTarget = commonTargetId
+    ? (enabledTargets.find(target => target.id === commonTargetId) ?? null)
+    : null
+  if (commonTarget) {
+    return providerTargetFromOption(commonTarget)
+  }
+  const fallbackTarget = enabledTargets[0] ?? null
+  return fallbackTarget ? providerTargetFromOption(fallbackTarget) : null
+}
+
+function defaultBatchModelId(
+  agents: Agent[],
+  providerTarget: ProviderTarget | null,
+  runtimeCatalog: RuntimeCatalogItem[],
+): string | null {
+  if (!providerTarget) {
+    return null
+  }
+  const matchingAgents = agents.filter(
+    agent =>
+      agentUsesProviderTarget(agent, runtimeCatalog) && agent.providerTargetId === providerTarget.id,
+  )
+  return commonString(matchingAgents.map(agent => agent.modelId))
+}
+
+function readAgentBatchThinkingEffort(value: unknown): AgentBatchThinkingEffort {
+  switch (value) {
+    case 'none':
+    case 'minimal':
+    case 'low':
+    case 'medium':
+    case 'high':
+    case 'xhigh':
+    case 'max':
+    case 'ultra':
+      return value
+    default:
+      return 'high'
+  }
+}
+
+function defaultBatchThinkingEffort(
+  agents: Agent[],
+  runtimeCatalog: RuntimeCatalogItem[],
+): AgentBatchThinkingEffort {
+  const providerAgents = agents.filter(agent => agentUsesProviderTarget(agent, runtimeCatalog))
+  if (providerAgents.length === 0) {
+    return 'high'
+  }
+  const first = readAgentBatchThinkingEffort(providerAgents[0]?.thinkingEffort)
+  return providerAgents.every(
+    agent => readAgentBatchThinkingEffort(agent.thinkingEffort) === first,
+  )
+    ? first
+    : 'high'
+}
+
+function AgentBatchProviderPanel({
+  selectedAgents,
+  providerTargets,
+  runtimeCatalog,
+  busy,
+  onApply,
+  onClear,
+}: {
+  selectedAgents: Agent[]
+  providerTargets: ProviderTargetOption[]
+  runtimeCatalog: RuntimeCatalogItem[]
+  busy: boolean
+  onApply: (selection: AgentProviderBatchSelection) => void
+  onClear: () => void
+}) {
+  const { t } = useTranslation('agentManagement')
+  const providerAgents = selectedAgents.filter(agent =>
+    agentUsesProviderTarget(agent, runtimeCatalog))
+  const skippedRuntimeOwnedCount = selectedAgents.length - providerAgents.length
+  const selectableProviderTargets = providerTargets.filter(
+    target =>
+      target.enabled && providerTargetCompatibleWithAgents(target, providerAgents, runtimeCatalog),
+  )
+  const thinkingOptions = useMemo<Array<ThinkingOption<AgentBatchThinkingEffort>>>(
+    () =>
+      AGENT_THINKING_EFFORTS.map((option) => {
+        const value = option.value
+        return {
+          value,
+          label: t(thinkingLabelKeys[value]),
+          description: t(thinkingDescriptionKeys[value]),
+        }
+      }),
+    [t],
+  )
+  const defaultSelection = (() => {
+    const providerTarget = defaultBatchProviderTarget(
+      selectedAgents,
+      providerTargets,
+      runtimeCatalog,
+    )
+    if (!providerTarget) {
+      return null
+    }
+    return {
+      providerTarget,
+      modelId: defaultBatchModelId(selectedAgents, providerTarget, runtimeCatalog),
+      thinkingEffort: defaultBatchThinkingEffort(selectedAgents, runtimeCatalog),
+    }
+  })()
+  const [selectionOverride, setSelectionOverride] = useState<AgentProviderBatchSelection | null>(
+    null,
+  )
+  const selection = selectionOverride ?? defaultSelection
+  const initialProviderTargetIds = useMemo(
+    () => [selection?.providerTarget.id ?? null],
+    [selection?.providerTarget.id],
+  )
+  const { modelsByProviderTargetId, loadingProviderTargetIds, requestProviderTargetModels }
+    = useProviderTargetModelMap(selectableProviderTargets, initialProviderTargetIds)
+  const selectedProviderTargetId = selection?.providerTarget.id ?? null
+  const selectedModels = useMemo(
+    () =>
+      selectedProviderTargetId ? (modelsByProviderTargetId[selectedProviderTargetId] ?? []) : [],
+    [modelsByProviderTargetId, selectedProviderTargetId],
+  )
+  const selectedModel = selectedModels.find(model => model.id === selection?.modelId) ?? null
+  const isLoadingSelectedModels = selectedProviderTargetId
+    ? loadingProviderTargetIds.has(selectedProviderTargetId)
+    : false
+
+  const resolveThinkingForModel = useCallback(
+    (model: ModelDescriptor | null, current: AgentBatchThinkingEffort): AgentBatchThinkingEffort =>
+      selectSupportedThinkingValue(model, thinkingOptions, current, 'high'),
+    [thinkingOptions],
+  )
+
+  const applyProviderTargetSelection = (nextProviderTargetId: string) => {
+    requestProviderTargetModels(nextProviderTargetId)
+    const nextTarget = selectableProviderTargets.find(
+      target => target.id === nextProviderTargetId,
+    )
+    const nextModel = (modelsByProviderTargetId[nextProviderTargetId] ?? [])[0] ?? null
+    setSelectionOverride({
+      providerTarget: nextTarget
+        ? providerTargetFromOption(nextTarget)
+        : { id: nextProviderTargetId },
+      modelId: nextModel?.id ?? null,
+      thinkingEffort: nextModel
+        ? resolveThinkingForModel(nextModel, selection?.thinkingEffort ?? 'high')
+        : (selection?.thinkingEffort ?? 'high'),
+    })
+  }
+
+  const applyModelSelection = (nextModelId: string | null, nextProviderTargetId: string) => {
+    const nextTarget = selectableProviderTargets.find(
+      target => target.id === nextProviderTargetId,
+    )
+    const nextModel = nextModelId
+      ? ((modelsByProviderTargetId[nextProviderTargetId] ?? []).find(
+          model => model.id === nextModelId,
+        ) ?? null)
+      : null
+    setSelectionOverride({
+      providerTarget: nextTarget
+        ? providerTargetFromOption(nextTarget)
+        : { id: nextProviderTargetId },
+      modelId: nextModelId,
+      thinkingEffort: resolveThinkingForModel(nextModel, selection?.thinkingEffort ?? 'high'),
+    })
+  }
+
+  useEffect(() => {
+    if (!selection || selection.modelId !== null || selectedModels.length === 0) {
+      return
+    }
+    const nextModel = selectedModels[0]!
+    setSelectionOverride({
+      ...selection,
+      modelId: nextModel.id,
+      thinkingEffort: resolveThinkingForModel(nextModel, selection.thinkingEffort),
+    })
+  }, [resolveThinkingForModel, selectedModels, selection])
+
+  return (
+    <div className="flex flex-1 items-center justify-center">
+      <div className="flex w-full max-w-xl flex-col items-center gap-5 text-center">
+        <div className="flex size-9 items-center justify-center rounded-lg bg-muted text-foreground">
+          <SlidersHorizontalIcon className="size-4" />
+        </div>
+        <div className="space-y-2">
+          <h4 className="font-heading text-sm font-medium tracking-tight text-foreground">
+            {t('batch.provider.selected', { count: selectedAgents.length })}
+          </h4>
+          <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+            {t('batch.provider.description')}
+            {skippedRuntimeOwnedCount > 0 && (
+              <>
+{' '}
+{t('batch.provider.skippedRuntimeOwned', { count: skippedRuntimeOwnedCount })}
+              </>
+            )}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <ProviderModelPicker
+            providerTargets={selectableProviderTargets}
+            selectedProviderTargetId={selectedProviderTargetId}
+            selectedModelId={selection?.modelId ?? null}
+            selectedModel={selectedModel}
+            modelsByProviderTargetId={modelsByProviderTargetId}
+            loadingProviderTargetIds={loadingProviderTargetIds}
+            thinkingValue={selection?.thinkingEffort ?? 'high'}
+            thinkingOptions={thinkingOptions}
+            isLoadingSelectedModels={isLoadingSelectedModels}
+            emptyProviderTargetsLabel={t('batch.provider.emptyProviderTargets')}
+            emptySelectionLabel={t('batch.provider.emptySelection')}
+            menuSide="bottom"
+            menuAlign="center"
+            triggerTestId="agent-batch-provider-model-selector"
+            disabled={providerAgents.length === 0}
+            getThinkingOptionsForModel={model =>
+              filterThinkingOptionsForModel(model, thinkingOptions)}
+            onRequestProviderTargetModels={requestProviderTargetModels}
+            onSelectProviderTarget={applyProviderTargetSelection}
+            onSelectModel={applyModelSelection}
+            onSelectThinking={(thinkingEffort) => {
+              if (!selection) {
+                return
+              }
+              setSelectionOverride({ ...selection, thinkingEffort })
+            }}
+          />
+          <Button
+            size="sm"
+            onClick={() => {
+              if (selection && selection.modelId !== null) {
+                onApply(selection)
+              }
+            }}
+            disabled={
+              busy || !selection || selection.modelId === null || providerAgents.length === 0
+            }
+          >
+            {t('batch.provider.apply')}
+          </Button>
+          <Button size="sm" variant="outline" onClick={onClear} disabled={busy}>
+            <XIcon />
+            {t('batch.provider.clearSelection')}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export function AgentList() {
+  const {
+    agents,
+    isLoading,
+    isSuccess: agentsReady,
+    importLocalConfig,
+    previewLocalConfigImport,
+    updateAgent,
+    removeAgent,
+  } = useAgents()
+  const { providerOptions, isSuccess: providerTargetsReady } = useProviderTargets()
+  const { runtimes: runtimeCatalog } = useRuntimeCatalog()
+
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+  const selectionAnchorIdRef = useRef<string | null>(null)
+  const [isCreatingAgent, setIsCreatingAgent] = useState(false)
+  const [filter, setFilter] = useState('')
+  const [importMessage, setImportMessage] = useState<string | null>(null)
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
+  const [importPreview, setImportPreview] = useState<PreviewLocalConfigImportResult | null>(null)
+  const [selectedImportCandidateIds, setSelectedImportCandidateIds] = useState<Set<string>>(
+    () => new Set(),
+  )
+  const [importError, setImportError] = useState<string | null>(null)
+  const [batchBusy, setBatchBusy] = useState(false)
+  const agentFocusTargetId = useSettingsOverlayStore(state => state.agentFocusTarget?.id ?? null)
+  const clearAgentFocusTarget = useSettingsOverlayStore(state => state.clearAgentFocusTarget)
+  const agentCreateIntent = useSettingsOverlayStore(state => state.agentCreateIntent)
+  const clearAgentCreateIntent = useSettingsOverlayStore(state => state.clearAgentCreateIntent)
+  const [createPrefill, setCreatePrefill] = useState<AgentCreateIntent | null>(null)
+  const settingsAgentsReady = agentsReady && providerTargetsReady
+
+  const visibleAgents = (() => {
+    if (!filter.trim()) {
+      return agents
+    }
+    const q = filter.trim().toLowerCase()
+    return agents.filter(
+      a => a.name.toLowerCase().includes(q) || (a.description ?? '').toLowerCase().includes(q),
+    )
+  })()
+
+  const selectedAgentId = selectedIdFromSet(selectedIds)
+  const selectedAgent = selectedAgentId ? agents.find(a => a.id === selectedAgentId) : undefined
+  const selectedAgents = selectedRecords(agents, selectedIds)
+  const allVisibleSelected = visibleRecordsAreSelected(visibleAgents, selectedIds)
+
+  useEffect(() => {
+    const available = new Set(agents.map(agent => agent.id))
+    setSelectedIds(prev => pruneSelectedIds(prev, available))
+    if (selectionAnchorIdRef.current && !available.has(selectionAnchorIdRef.current)) {
+      selectionAnchorIdRef.current = null
+    }
+  }, [agents])
+
+  useEffect(() => {
+    if (!agentFocusTargetId) {
+      return
+    }
+
+    const focusedAgent = agents.find(agent => agent.id === agentFocusTargetId)
+    if (focusedAgent) {
+      setSelectedIds(new Set([focusedAgent.id]))
+      selectionAnchorIdRef.current = focusedAgent.id
+      setIsCreatingAgent(false)
+      setCreatePrefill(null)
+      setFilter('')
+      clearAgentFocusTarget()
+      return
+    }
+
+    if (agentsReady) {
+      clearAgentFocusTarget()
+    }
+  }, [agentFocusTargetId, agents, agentsReady, clearAgentFocusTarget])
+
+  useEffect(() => {
+    if (!agentCreateIntent) {
+      return
+    }
+    setCreatePrefill(agentCreateIntent)
+    setSelectedIds(new Set())
+    selectionAnchorIdRef.current = null
+    clearAgentCreateIntent()
+    setIsCreatingAgent(true)
+  }, [agentCreateIntent, clearAgentCreateIntent])
+
+  const openCreateDraft = () => {
+    setCreatePrefill(null)
+    setSelectedIds(new Set())
+    selectionAnchorIdRef.current = null
+    setIsCreatingAgent(true)
+  }
+
+  const cancelCreate = () => {
+    setIsCreatingAgent(false)
+    setCreatePrefill(null)
+  }
+
+  const handleCreated = (newAgentId: string) => {
+    cancelCreate()
+    setSelectedIds(new Set([newAgentId]))
+    selectionAnchorIdRef.current = newAgentId
+  }
+
+  const handleDeleted = () => {
+    setSelectedIds(new Set())
+    selectionAnchorIdRef.current = null
+  }
+
+  const openImportDialog = async () => {
+    setImportMessage(null)
+    setImportError(null)
+    setImportDialogOpen(true)
+    setImportPreview(null)
+    setSelectedImportCandidateIds(new Set())
+    try {
+      const preview = await previewLocalConfigImport.mutateAsync({ body: {} })
+      setImportPreview(preview)
+      setSelectedImportCandidateIds(
+        new Set(
+          preview.candidates
+            .filter(candidate => candidate.importable)
+            .map(candidate => candidate.id),
+        ),
+      )
+    }
+ catch (error) {
+      setImportError(error instanceof Error ? error.message : 'Import preview failed')
+    }
+  }
+
+  const toggleImportCandidate = (candidateId: string, checked: boolean) => {
+    setSelectedImportCandidateIds((current) => {
+      const next = new Set(current)
+      if (checked) {
+        next.add(candidateId)
+      }
+ else {
+        next.delete(candidateId)
+      }
+      return next
+    })
+  }
+
+  const confirmImportLocalConfig = async () => {
+    setImportError(null)
+    try {
+      const result = await importLocalConfig.mutateAsync({
+        body: {
+          candidateIds: Array.from(selectedImportCandidateIds),
+        },
+      })
+      const selectedImport
+        = result.agents.find(imported => imported.status === 'created' && imported.agent)
+          ?? result.agents.find(imported => imported.status === 'existing' && imported.agent)
+      if (selectedImport?.agent) {
+        cancelCreate()
+        setSelectedIds(new Set([selectedImport.agent.id]))
+        selectionAnchorIdRef.current = selectedImport.agent.id
+      }
+
+      const parts = [
+        result.created > 0 ? `${result.created} imported` : null,
+        result.existing > 0 ? `${result.existing} already configured` : null,
+        result.skipped > 0 ? `${result.skipped} skipped` : null,
+      ].filter(Boolean)
+      setImportMessage(parts.join(' · ') || 'No changes')
+      setImportDialogOpen(false)
+    }
+ catch (error) {
+      setImportError(error instanceof Error ? error.message : 'Import failed')
+    }
+  }
+
+  const toggleVisibleSelected = () => {
+    setSelectedIds(prev =>
+      allVisibleSelected
+        ? removeVisibleSelection(prev, visibleAgents)
+        : mergeVisibleSelection(prev, visibleAgents))
+  }
+
+  const selectVisibleAgents = () => {
+    cancelCreate()
+    setSelectedIds(prev => mergeVisibleSelection(prev, visibleAgents))
+    selectionAnchorIdRef.current = visibleAgents.at(-1)?.id ?? null
+  }
+
+  const clearSelection = () => {
+    cancelCreate()
+    setSelectedIds(new Set())
+    selectionAnchorIdRef.current = null
+  }
+
+  const selectAgent = (agentId: string, selected: boolean, shiftKey: boolean) => {
+    cancelCreate()
+    setSelectedIds((prev) => {
+      if (shiftKey) {
+        return applyVisibleRangeSelection(
+          prev,
+          visibleAgents,
+          selectionAnchorIdRef.current,
+          agentId,
+          selected,
+        )
+      }
+
+      const next = new Set(prev)
+      if (selected) {
+        next.add(agentId)
+      }
+ else {
+        next.delete(agentId)
+      }
+      return next
+    })
+    selectionAnchorIdRef.current = agentId
+  }
+
+  const openAgent = (agentId: string, shiftKey: boolean) => {
+    if (shiftKey) {
+      selectAgent(agentId, true, true)
+      return
+    }
+
+    setSelectedIds(new Set([agentId]))
+    selectionAnchorIdRef.current = agentId
+    cancelCreate()
+  }
+
+  const handleBatchToggle = async (enabled: boolean) => {
+    if (selectedAgents.length === 0) {
+      return
+    }
+    setBatchBusy(true)
+    try {
+      await Promise.all(
+        selectedAgents.map(async (agent) => {
+          await updateAgent.mutateAsync({
+            path: { id: agent.id },
+            body: {
+              name: agent.name,
+              description: agent.description,
+              avatarStyle: agent.avatarStyle,
+              avatarSeed: agent.avatarSeed,
+              providerTargetId: agent.providerTargetId,
+              modelId: agent.modelId,
+              thinkingEffort: agent.thinkingEffort,
+              runtimeKind: agent.runtimeKind,
+              configJson: agent.configJson,
+              enabled,
+            },
+          })
+        }),
+      )
+      setSelectedIds(new Set())
+      selectionAnchorIdRef.current = null
+    }
+ finally {
+      setBatchBusy(false)
+    }
+  }
+
+  const handleBatchDelete = async () => {
+    if (selectedAgents.length === 0) {
+      return
+    }
+    setBatchBusy(true)
+    try {
+      await Promise.all(
+        selectedAgents.map(agent => removeAgent.mutateAsync({ path: { id: agent.id } })),
+      )
+      setSelectedIds(new Set())
+      selectionAnchorIdRef.current = null
+    }
+ finally {
+      setBatchBusy(false)
+    }
+  }
+
+  const handleBatchConfigureProvider = async (selection: AgentProviderBatchSelection) => {
+    const { patches } = buildAgentProviderBatchPatches(selectedAgents, selection, runtimeCatalog)
+    if (patches.length === 0) {
+      return
+    }
+
+    setBatchBusy(true)
+    try {
+      await Promise.all(
+        patches.map(({ id, patch }) =>
+          updateAgent.mutateAsync({
+            path: { id },
+            body: patch,
+          })),
+      )
+      setSelectedIds(new Set())
+      selectionAnchorIdRef.current = null
+    }
+ finally {
+      setBatchBusy(false)
+    }
+  }
+
+  const selectionShortcutScopeRef = useSettingsSelectionShortcuts({
+    hasVisibleRecords: visibleAgents.length > 0,
+    hasSelection: selectedIds.size > 0,
+    hasDraft: isCreatingAgent,
+    canDeleteSelection: !batchBusy && selectedAgents.length > 0,
+    onSelectVisible: selectVisibleAgents,
+    onClearSelection: () => {
+      if (isCreatingAgent) {
+        cancelCreate()
+        return
+      }
+      clearSelection()
+    },
+    onDeleteSelection: () => {
+      void handleBatchDelete()
+    },
+  })
+
+  const headerActions = (
+    <div className="flex shrink-0 items-center gap-2">
+      {importMessage && (
+        <span className="max-w-52 truncate text-[11.5px] text-muted-foreground">
+          {importMessage}
+        </span>
+      )}
+      <Button
+        data-testid="import-agent-btn"
+        size="sm"
+        variant="outline"
+        onClick={() => void openImportDialog()}
+        disabled={previewLocalConfigImport.isPending || importLocalConfig.isPending}
+      >
+        <DownloadIcon />
+        {previewLocalConfigImport.isPending ? 'Scanning' : 'Import'}
+      </Button>
+      <Button
+        data-testid="new-agent-btn"
+        size="sm"
+        onClick={openCreateDraft}
+        disabled={isCreatingAgent}
+      >
+        <PlusIcon />
+        Add agent
+      </Button>
+    </div>
+  )
+
+  const toolbar
+    = selectedIds.size > 0
+? (
+      <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-card px-3 py-2">
+        <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
+          <button
+            type="button"
+            onClick={toggleVisibleSelected}
+            className="inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 hover:bg-foreground/[0.035]"
+          >
+            {allVisibleSelected
+? (
+              <SquareCheckIcon className="size-3.5" />
+            )
+: (
+              <SquareIcon className="size-3.5" />
+            )}
+            <span>
+{selectedIds.size}
+{' '}
+selected
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={clearSelection}
+            className="text-muted-foreground/70 hover:text-foreground"
+          >
+            Clear
+          </button>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => void handleBatchToggle(true)}
+            disabled={batchBusy || selectedAgents.length === 0}
+          >
+            Enable
+          </Button>
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => void handleBatchToggle(false)}
+            disabled={batchBusy || selectedAgents.length === 0}
+          >
+            Disable
+          </Button>
+          <Button
+            size="xs"
+            variant="destructive"
+            onClick={() => void handleBatchDelete()}
+            disabled={batchBusy || selectedAgents.length === 0}
+          >
+            <Trash2Icon className="size-3" />
+            Delete
+          </Button>
+        </div>
+      </div>
+    )
+: null
+
+  const listPane = (
+    <div ref={selectionShortcutScopeRef} className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-3">
+      <div className="relative">
+        <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 !text-muted-foreground/60" />
+        <Input
+          value={filter}
+          onChange={e => setFilter(e.target.value)}
+          placeholder="Search agents"
+          className="h-8 pl-8 pr-2 text-[12.5px]"
+        />
+      </div>
+
+      <ScrollArea className="-mx-1 min-h-0 flex-1">
+        <div className="flex flex-col gap-0.5 px-1">
+          {visibleAgents.length > 0 && (
+            <div className="mb-1 flex items-center justify-between gap-2 px-2 py-0.5 text-[10.5px] text-muted-foreground/60">
+              <span>
+{visibleAgents.length}
+{' '}
+visible
+              </span>
+              <button
+                type="button"
+                onClick={toggleVisibleSelected}
+                className="text-muted-foreground/70 hover:text-foreground"
+              >
+                {allVisibleSelected ? 'Unselect visible' : 'Select visible'}
+              </button>
+            </div>
+          )}
+
+          {!isLoading
+            && visibleAgents.map(agent => (
+              <AgentSidebarRowView
+                key={agent.id}
+                agent={agent}
+                providerTargets={providerOptions}
+                runtimeCatalog={runtimeCatalog}
+                active={selectedAgentId === agent.id}
+                selected={selectedIds.has(agent.id)}
+                onClick={shiftKey => openAgent(agent.id, shiftKey)}
+                onToggleSelected={(checked, shiftKey) => selectAgent(agent.id, checked, shiftKey)}
+              />
+            ))}
+
+          {!isLoading && visibleAgents.length === 0 && (
+            <div className="px-2 py-6 text-center" data-testid="agent-empty-state">
+              <p className="text-[11.5px] text-muted-foreground/70">
+                {filter ? 'No matches' : 'No agents yet'}
+              </p>
+            </div>
+          )}
+        </div>
+      </ScrollArea>
+
+      {agents.length > 0 && (
+        <div className="px-1 pb-1 pt-1 text-[10.5px] tabular-nums text-muted-foreground/60">
+          {agents.length}
+{' '}
+agent
+{agents.length === 1 ? '' : 's'}
+{' '}
+·
+{agents.filter(a => a.enabled).length}
+{' '}
+active
+        </div>
+      )}
+    </div>
+  )
+
+  const detailPane = (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col py-5 pl-6 pr-5">
+      {isCreatingAgent
+? (
+        <div className="flex-1">
+          <AgentDetailPage
+            onBack={cancelCreate}
+            onCreated={handleCreated}
+            createPrefill={createPrefill ?? undefined}
+          />
+        </div>
+      )
+: selectedAgents.length > 1
+? (
+        <AgentBatchProviderPanel
+          key={selectedAgents.map(agent => agent.id).join('|')}
+          selectedAgents={selectedAgents}
+          providerTargets={providerOptions}
+          runtimeCatalog={runtimeCatalog}
+          busy={batchBusy}
+          onApply={selection => void handleBatchConfigureProvider(selection)}
+          onClear={clearSelection}
+        />
+      )
+: selectedAgent
+? (
+        <div key={selectedAgent.id} className="flex-1">
+          <AgentDetailPage agent={selectedAgent} onDeleted={handleDeleted} />
+        </div>
+      )
+: (
+        <div className="flex flex-1 items-center justify-center">
+          <Empty className="border-none">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <BotIcon />
+              </EmptyMedia>
+              <EmptyTitle>No agent selected</EmptyTitle>
+              <EmptyDescription>
+                Pick an agent on the left to view its configuration, or add a new one to get
+                started.
+              </EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <Button size="sm" variant="outline" onClick={openCreateDraft}>
+                <PlusIcon />
+                Add agent
+              </Button>
+            </EmptyContent>
+          </Empty>
+        </div>
+      )}
+    </div>
+  )
+
+  return (
+    <SettingsMasterDetail
+      data-testid="agent-list"
+      data-settings-agents-ready={settingsAgentsReady ? 'true' : 'false'}
+      title="Agents"
+      description="Create AI agents with unique identities, personas, and provider targets."
+      action={headerActions}
+      toolbar={toolbar}
+      list={listPane}
+      detail={detailPane}
+    >
+      <AgentImportDialogView
+        open={importDialogOpen}
+        preview={importPreview}
+        selectedIds={selectedImportCandidateIds}
+        busy={previewLocalConfigImport.isPending || importLocalConfig.isPending}
+        error={importError}
+        onOpenChange={setImportDialogOpen}
+        onToggleCandidate={toggleImportCandidate}
+        onImport={() => void confirmImportLocalConfig()}
+      />
+    </SettingsMasterDetail>
+  )
+}
