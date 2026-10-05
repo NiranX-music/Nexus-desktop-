@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
+  <title>NEXUS OS — Autonomous Intelligence Network & Cross-Device Matrix</title>
+  
+  <!-- Comprehensive Technical SEO -->
+  <meta name="description" content="NEXUS OS is a next-generation decentralized intelligence runtime and cross-device agent bridge. Download native apps for Linux, Android, Windows, and macOS." />
+  <meta name="keywords" content="Autonomous AI, Linux AI Agent, Distributed Cloud, Glassmorphic UI, Cloudflare Workers, Sub-Agent Matrix, Nexus OS" />
+  <meta name="author" content="Nexdune / Nexus Architecture" />
+  <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1" />
+  <link rel="canonical" href="https://nexus.io/" />
+  <meta name="theme-color" content="#03050c" />
+
+  <!-- Open Graph Protocol (Facebook, LinkedIn, Discord) -->
+  <meta property="og:locale" content="en_US" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="NEXUS OS — Autonomous Intelligence Network" />
+  <meta property="og:description" content="Decentralized intelligence infrastructure with real-time telemetries, cross-device sync, and autonomous sub-agent orchestration." />
+  <meta property="og:url" content="https://nexus.io/" />
+  <meta property="og:site_name" content="NEXUS OS" />
+  <meta property="og:image" content="https://nexus.io/assets/og-cover.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+
+  <!-- Twitter Cards -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:site" content="@NexusOS" />
+  <meta name="twitter:creator" content="@Nexdune" />
+  <meta name="twitter:title" content="NEXUS OS — Minimalist Flow, Maximalist Power" />
+  <meta name="twitter:description" content="Next-gen distributed runtime for autonomous sub-agents. Connect your native workstation, mobile client, and edge clusters simultaneously." />
+  <meta name="twitter:image" content="https://nexus.io/assets/og-cover.png" />
+
+  <!-- JSON-LD Structured Data Schema for Top-Tier SEO -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "SoftwareApplication",
+        "@id": "https://nexus.io/#software",
+        "name": "Nexus OS",
+        "operatingSystem": "Linux (Ubuntu/Debian/Arch), Android, Windows 11, macOS",
+        "applicationCategory": "DeveloperApplication",
+        "softwareVersion": "4.2.0-enterprise",
+        "downloadUrl": "https://nexus.io/#downloads",
+        "description": "Enterprise autonomous agent orchestration runtime and cross-platform bridge.",
+        "offers": {
+          "@type": "Offer",
+          "price": "0.00",
+          "priceCurrency": "USD"
+        },
+        "aggregateRating": {
+          "@type": "AggregateRating",
+          "ratingValue": "4.96",
+          "reviewCount": "128"
+        }
+      },
+      {
+        "@type": "Organization",
+        "@id": "https://nexus.io/#organization",
+        "name": "Nexus Intelligence Network",
+        "url": "https://nexus.io",
+        "logo": "https://nexus.io/assets/logo.png",
+        "sameAs": [
+          "https://github.com/nexus-matrix",
+          "https://twitter.com/NexusOS"
+        ]
+      },
+      {
+        "@type": "WebSite",
+        "@id": "https://nexus.io/#website",
+        "url": "https://nexus.io",
+        "name": "NEXUS OS",
+        "publisher": {
+          "@id": "https://nexus.io/#organization"
+        },
+        "potentialAction": {
+          "@type": "SearchAction",
+          "target": "https://nexus.io/search?q={search_term_string}",
+          "query-input": "required name=search_term_string"
+        }
+      }
+    ]
+  }
+  </script>
+
+  <!-- Typography & Libraries -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+  <style>
+    :root {
+      --bg: #03050c;
+      --surface: rgba(13, 17, 30, 0.65);
+      --card-bg: rgba(255, 255, 255, 0.035);
+      --card-border: rgba(255, 255, 255, 0.12);
+      --card-border-glow: rgba(99, 102, 241, 0.35);
+      --card-blur: blur(28px);
+      --accent: #6366f1;
+      --accent-cyan: #06b6d4;
+      --accent-emerald: #10b981;
+      --accent-glow: rgba(99, 102, 241, 0.45);
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-sans);
+      overflow-x: hidden;
+      min-height: 100vh;
+      line-height: 1.6;
+      position: relative;
+    }
+
+    /* 3D WebGL Canvas */
+    #webgl-bg {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    /* Glow backdrop lights */
+    .ambient-glow-1 {
+      position: fixed;
+      top: -15%;
+      left: 20%;
+      width: 600px;
+      height: 600px;
+      background: radial-gradient(circle, rgba(99, 102, 241, 0.18) 0%, rgba(3, 5, 12, 0) 70%);
+      filter: blur(80px);
+      z-index: 0;
+      pointer-events: none;
+    }
+    .ambient-glow-2 {
+      position: fixed;
+      bottom: -10%;
+      right: 15%;
+      width: 700px;
+      height: 700px;
+      background: radial-gradient(circle, rgba(6, 182, 212, 0.14) 0%, rgba(3, 5, 12, 0) 70%);
+      filter: blur(100px);
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    /* Content Wrapper */
+    .content-wrapper {
+      position: relative;
+      z-index: 10;
+    }
+
+    /* Navigation Bar */
+    nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1.25rem 6%;
+      backdrop-filter: var(--card-blur);
+      background: rgba(5, 7, 15, 0.7);
+      border-bottom: 1px solid var(--card-border);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      transition: background 0.3s;
+    }
+    .logo-container {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+    }
+    .logo-mark {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #6366f1, #06b6d4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 20px var(--accent-glow);
+    }
+    .logo-mark svg { width: 20px; height: 20px; fill: white; }
+    .logo-text {
+      font-size: 1.35rem;
+      font-weight: 800;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      background: linear-gradient(135deg, #ffffff 40%, #818cf8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      font-family: var(--font-mono);
+    }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 1.8rem;
+    }
+    .nav-links a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.92rem;
+      font-weight: 500;
+      transition: color 0.2s, transform 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .nav-links a:hover {
+      color: #fff;
+      transform: translateY(-1px);
+    }
+    .nav-badge-pill {
+      background: rgba(244, 63, 94, 0.15);
+      border: 1px solid rgba(244, 63, 94, 0.4);
+      color: #fb7185 !important;
+      padding: 6px 14px;
+      border-radius: 9999px;
+      font-weight: 600 !important;
+      font-family: var(--font-mono);
+      font-size: 0.8rem !important;
+    }
+    .nav-badge-pill:hover {
+      background: rgba(244, 63, 94, 0.25);
+      box-shadow: 0 0 15px rgba(244, 63, 94, 0.3);
+    }
+
+    /* Hero Section */
+    .hero {
+      min-height: 85vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 4rem 1.5rem 2rem;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 18px;
+      border-radius: 9999px;
+      background: rgba(99, 102, 241, 0.12);
+      border: 1px solid rgba(99, 102, 241, 0.4);
+      color: #c7d2fe;
+      font-size: 0.8rem;
+      font-family: var(--font-mono);
+      margin-bottom: 2rem;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      backdrop-filter: var(--card-blur);
+    }
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+      box-shadow: 0 0 10px #10b981;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(1.2); }
+    }
+
+    .hero h1 {
+      font-size: clamp(2.6rem, 6.5vw, 5.2rem);
+      font-weight: 800;
+      line-height: 1.08;
+      margin-bottom: 1.75rem;
+      letter-spacing: -0.02em;
+    }
+    .hero h1 span.gradient-text {
+      background: linear-gradient(135deg, #818cf8 20%, #38bdf8 60%, #34d399 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .hero p {
+      max-width: 720px;
+      color: var(--text-muted);
+      font-size: clamp(1.05rem, 2vw, 1.25rem);
+      line-height: 1.65;
+      margin-bottom: 2.75rem;
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 1.25rem;
+      flex-wrap: wrap;
+      justify-content: center;
+      margin-bottom: 3.5rem;
+    }
+    .btn {
+      padding: 14px 30px;
+      border-radius: 12px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.95rem;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #6366f1, #4f46e5);
+      color: #fff;
+      box-shadow: 0 0 30px var(--accent-glow);
+      border: 1px solid #818cf8;
+    }
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 0 50px rgba(99, 102, 241, 0.65);
+      border-color: #a5b4fc;
+    }
+    .btn-glass {
+      background: rgba(255, 255, 255, 0.05);
+      backdrop-filter: var(--card-blur);
+      border: 1px solid var(--card-border);
+      color: #fff;
+    }
+    .btn-glass:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.3);
+      transform: translateY(-2px);
+    }
+
+    /* Cyber Matrix Stats Bar */
+    .cyber-stats-bar {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 1.5rem;
+      width: 100%;
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 1.5rem;
+      background: var(--card-bg);
+      backdrop-filter: var(--card-blur);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+    }
+    .stat-item {
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 1.8rem;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      color: #fff;
+      margin-bottom: 4px;
+    }
+    .stat-label {
+      font-size: 0.78rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      font-family: var(--font-mono);
+    }
+
+    /* Section Styling */
+    .section-container {
+      max-width: 1180px;
+      margin: 6rem auto;
+      padding: 0 1.5rem;
+    }
+    .section-header {
+      text-align: center;
+      margin-bottom: 3.5rem;
+    }
+    .section-header h2 {
+      font-size: clamp(2rem, 3.5vw, 2.75rem);
+      font-weight: 800;
+      margin-bottom: 0.75rem;
+      letter-spacing: -0.01em;
+    }
+    .section-header p {
+      color: var(--text-muted);
+      font-size: 1.05rem;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    /* Downloads Grid */
+    .downloads-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 1.75rem;
+    }
+    .dl-card {
+      background: var(--card-bg);
+      backdrop-filter: var(--card-blur);
+      border: 1px solid var(--card-border);
+      border-radius: 20px;
+      padding: 2.2rem 1.8rem;
+      text-align: center;
+      transition: all 0.35s ease;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .dl-card:hover {
+      transform: translateY(-8px);
+      border-color: var(--card-border-glow);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5), 0 0 30px rgba(99, 102, 241, 0.2);
+    }
+    .dl-icon-wrapper {
+      width: 68px;
+      height: 68px;
+      margin: 0 auto 1.5rem;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--card-border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2.2rem;
+      transition: transform 0.3s;
+    }
+    .dl-card:hover .dl-icon-wrapper {
+      transform: scale(1.1) rotate(4deg);
+    }
+    .dl-card h3 {
+      font-size: 1.3rem;
+      margin-bottom: 0.5rem;
+      font-weight: 700;
+    }
+    .dl-card p {
+      font-size: 0.88rem;
+      color: var(--text-muted);
+      margin-bottom: 1.75rem;
+      flex-grow: 1;
+    }
+    .dl-btn {
+      display: inline-block;
+      width: 100%;
+      padding: 12px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.07);
+      color: #fff;
+      text-decoration: none;
+      border: 1px solid var(--card-border);
+      font-size: 0.92rem;
+      font-weight: 600;
+      transition: all 0.25s ease;
+    }
+    .dl-btn:hover {
+      background: #fff;
+      color: #03050c;
+      box-shadow: 0 0 20px rgba(255, 255, 255, 0.4);
+    }
+    .dl-meta {
+      margin-top: 10px;
+      font-size: 0.72rem;
+      color: var(--text-dim);
+      font-family: var(--font-mono);
+    }
+
+    /* CLI Quick Install Banner */
+    .cli-install-box {
+      margin-top: 3rem;
+      background: rgba(15, 23, 42, 0.6);
+      backdrop-filter: var(--card-blur);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 1.5rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+    }
+    .cli-label {
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      color: var(--accent-cyan);
+    }
+    .cli-command {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: #000;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 10px 18px;
+      border-radius: 10px;
+      font-family: var(--font-mono);
+      font-size: 0.9rem;
+      color: #a5f3fc;
+      overflow-x: auto;
+    }
+    .copy-btn {
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      color: #fff;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 0.78rem;
+      font-family: var(--font-mono);
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .copy-btn:hover { background: var(--accent); }
+
+    /* Architecture / Sub-Agent Section */
+    .agent-matrix-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 1.5rem;
+    }
+    .agent-card {
+      background: var(--card-bg);
+      backdrop-filter: var(--card-blur);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 1.8rem;
+      transition: 0.3s;
+    }
+    .agent-card:hover {
+      border-color: rgba(99, 102, 241, 0.4);
+      transform: translateY(-4px);
+    }
+    .agent-tag {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 6px;
+      display: inline-block;
+      margin-bottom: 12px;
+    }
+    .tag-alpha { background: rgba(99, 102, 241, 0.2); color: #a5b4fc; }
+    .tag-beta  { background: rgba(6, 182, 212, 0.2); color: #67e8f9; }
+    .tag-gamma { background: rgba(16, 185, 129, 0.2); color: #6ee7b7; }
+    .tag-delta { background: rgba(244, 63, 94, 0.2); color: #fda4af; }
+    .tag-epsilon { background: rgba(234, 179, 8, 0.2); color: #fde047; }
+    .agent-card h4 { font-size: 1.15rem; margin-bottom: 8px; }
+    .agent-card p { font-size: 0.88rem; color: var(--text-muted); }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--card-border);
+      padding: 4rem 6% 2rem;
+      background: rgba(3, 5, 12, 0.8);
+      backdrop-filter: var(--card-blur);
+    }
+    .footer-grid {
+      display: grid;
+      grid-template-columns: 2fr repeat(3, 1fr);
+      gap: 3rem;
+      margin-bottom: 3rem;
+    }
+    .footer-brand p {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      margin-top: 12px;
+      max-width: 320px;
+    }
+    .footer-col h5 {
+      font-size: 0.95rem;
+      margin-bottom: 1.25rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      font-family: var(--font-mono);
+    }
+    .footer-col ul { list-style: none; }
+    .footer-col ul li { margin-bottom: 0.75rem; }
+    .footer-col ul li a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.88rem;
+      transition: color 0.2s;
+    }
+    .footer-col ul li a:hover { color: #fff; }
+    .footer-bottom {
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      padding-top: 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    @media (max-width: 768px) {
+      nav { padding: 1rem 4%; }
+      .nav-links { gap: 1rem; }
+      .footer-grid { grid-template-columns: 1fr; gap: 2rem; }
+      .cli-install-box { flex-direction: column; align-items: stretch; }
+    }
+  </style>
+</head>
+<body>
+  <!-- 3D Three.js Interactive Background -->
+  <canvas id="webgl-bg"></canvas>
+  <div class="ambient-glow-1"></div>
+  <div class="ambient-glow-2"></div>
+
+  <div class="content-wrapper">
+    <!-- Navigation Bar -->
+    <nav>
+      <a href="/" class="logo-container">
+        <div class="logo-mark">
+          <svg viewBox="0 0 24 24"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5"></polygon></svg>
+        </div>
+        <span class="logo-text">NEXUS // OS</span>
+      </a>
+      <div class="nav-links">
+        <a href="https://auth.nexus.io" id="nav-auth-link">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+          Console Login
+        </a>
+        <a href="https://status.nexus.io" id="nav-status-link">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          System Radar
+        </a>
+        <a href="#downloads">Binaries</a>
+        <a href="#matrix">Agent Matrix</a>
+        <a href="features.html" id="nav-features-link">Capabilities</a>
+        <a href="https://admin.nexus.io" id="nav-admin-link" class="nav-badge-pill">
+          🔒 Tier-4 Admin
+        </a>
+      </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+      <div class="status-badge">
+        <span class="pulse-dot"></span>
+        NEXUS CORE V4.2.0 • GLOBAL EDGE SYNCHRONIZED
+      </div>
+      <h1>
+        Minimalist Flow.<br />
+        <span class="gradient-text">Maximalist Intelligence.</span>
+      </h1>
+      <p>
+        Next-generation decentralized intelligence runtime and cross-device agent bridge.
+        Run native autonomous agents locally on Linux, mobile Android, and desktop while orchestrating distributed edge pipelines at sub-millisecond latencies.
+      </p>
+      <div class="btn-group">
+        <a href="https://auth.nexus.io" class="btn btn-primary" id="hero-auth-btn">
+          <span>Launch Cloud Web Console</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </a>
+        <a href="#downloads" class="btn btn-glass">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span>Get Native Binaries</span>
+        </a>
+        <a href="https://status.nexus.io" class="btn btn-glass" id="hero-status-btn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+          <span>Live Radar</span>
+        </a>
+      </div>
+
+      <!-- Cyber Stats Strip -->
+      <div class="cyber-stats-bar">
+        <div class="stat-item">
+          <div class="stat-value" id="statNodes">5 Active</div>
+          <div class="stat-label">Autonomous Nodes</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="statLatency">-- ms</div>
+          <div class="stat-label">Live PoP Latency</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="statUptime">99.98%</div>
+          <div class="stat-label">Edge SLA Uptime</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="statTasks">--</div>
+          <div class="stat-label">D1 Tasks Processed</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- App Downloads Section -->
+    <section id="downloads" class="section-container">
+      <div class="section-header">
+        <h2>Client Platforms & Binaries</h2>
+        <p>Deploy native Nexus intelligence runtimes across your workstation, cloud VM, and mobile endpoints.</p>
+      </div>
+
+      <div class="downloads-grid">
+        <!-- Linux Native -->
+        <div class="dl-card">
+          <div>
+            <div class="dl-icon-wrapper">🐧</div>
+            <h3>Linux Native</h3>
+            <p>High-performance native Linux desktop daemon and GUI for Ubuntu, Debian, Arch, and Fedora (x86_64 / arm64).</p>
+          </div>
+          <div>
+            <a href="binaries/nexus-desktop.AppImage" class="dl-btn" download>Download .AppImage</a>
+            <div style="margin-top: 8px;">
+              <a href="binaries/nexus-desktop.deb" style="color: var(--accent-cyan); font-size: 0.8rem; text-decoration: none;" download>Download .deb package →</a>
+            </div>
+            <div class="dl-meta">v4.2.0 • 524 KB Standalone • Linux 64-bit</div>
+          </div>
+        </div>
+
+        <!-- Android Mobile -->
+        <div class="dl-card">
+          <div>
+            <div class="dl-icon-wrapper">📱</div>
+            <h3>Android Mobile</h3>
+            <p>Autonomous mobile client with cross-device sync, background notification listener, and biometric passkey.</p>
+          </div>
+          <div>
+            <a href="binaries/nexus-mobile.apk" class="dl-btn" download>Download Universal .APK</a>
+            <div style="margin-top: 8px;">
+              <a href="https://auth.nexus.io" style="color: var(--accent-cyan); font-size: 0.8rem; text-decoration: none;">Install PWA via Web →</a>
+            </div>
+            <div class="dl-meta">1.0 MB Universal APK • Android 8.0+</div>
+          </div>
+        </div>
+
+        <!-- Desktop App -->
+        <div class="dl-card">
+          <div>
+            <div class="dl-icon-wrapper">💻</div>
+            <h3>Desktop App</h3>
+            <p>Native hardware-accelerated wrapper for Windows 11 & macOS Universal with local LLM device acceleration.</p>
+          </div>
+          <div>
+            <a href="binaries/nexus-setup.exe" class="dl-btn" download>Download Windows Setup</a>
+            <div style="margin-top: 8px;">
+              <a href="binaries/nexus-desktop.AppImage" style="color: var(--accent-cyan); font-size: 0.8rem; text-decoration: none;">Linux AppImage & deb available →</a>
+            </div>
+            <div class="dl-meta">189 MB Official NSIS Setup • Windows 10/11 x64</div>
+          </div>
+        </div>
+
+        <!-- Headless CLI -->
+        <div class="dl-card">
+          <div>
+            <div class="dl-icon-wrapper">⚡</div>
+            <h3>Headless Daemon</h3>
+            <p>Lightweight headless CLI binary for server environments, Docker containers, and CI/CD pipelines.</p>
+          </div>
+          <div>
+            <a href="binaries/nexus-cli-linux-amd64.tar.gz" class="dl-btn" download>Download tar.gz Binary</a>
+            <div style="margin-top: 8px;">
+              <a href="binaries/install.sh" style="color: var(--accent-cyan); font-size: 0.8rem; text-decoration: none;" download>Direct Shell Script →</a>
+            </div>
+            <div class="dl-meta">12 KB Bundle • Linux amd64 Standalone</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Curl One-Liner Box -->
+      <div class="cli-install-box">
+        <div>
+          <div class="cli-label">⚡ INSTANT LINUX & MACOS TERMINAL INSTALLATION</div>
+          <div style="color: var(--text-muted); font-size: 0.82rem; margin-top: 4px;">Run this command in your terminal to bootstrap the Nexus OS daemon in 5 seconds:</div>
+        </div>
+        <div class="cli-command">
+          <span id="cliInstallCmdText">curl -fsSL https://nexus-bridge-7l1.pages.dev/binaries/install.sh | bash</span>
+          <button class="copy-btn" onclick="copyInstallCmd(this)">COPY</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Sub-Agent Division Matrix Section -->
+    <section id="matrix" class="section-container">
+      <div class="section-header">
+        <h2>Sub-Agent Task Division Matrix</h2>
+        <p>Specialized autonomous agents operating in consensus across micro-frontends and edge compute.</p>
+      </div>
+
+      <div class="agent-matrix-grid">
+        <!-- Agent Alpha -->
+        <div class="agent-card">
+          <span class="agent-tag tag-alpha">AGENT ALPHA • FRONTEND ARCHITECT</span>
+          <h4>3D Glassmorphic App Portal</h4>
+          <p>Orchestrates Three.js spatial scenes, responsive minimalist-maximalist layouts, structured JSON-LD schemas, and cross-platform download hubs.</p>
+        </div>
+
+        <!-- Agent Beta -->
+        <div class="agent-card">
+          <span class="agent-tag tag-beta">AGENT BETA • IDENTITY & AUTH</span>
+          <h4>Unified Auth & Session Sync Bridge</h4>
+          <p>Issues cryptographically signed JWTs, manages WebAuthn biometric passkeys, and triggers deep-link session synchronization to native clients.</p>
+        </div>
+
+        <!-- Agent Gamma -->
+        <div class="agent-card">
+          <span class="agent-tag tag-gamma">AGENT GAMMA • OBSERVABILITY</span>
+          <h4>Live Operations Radar & Telemetry</h4>
+          <p>Real-time mock SSE/WebSocket telemetry streams, sub-millisecond heartbeat monitors, and interactive edge routing health checks.</p>
+        </div>
+
+        <!-- Agent Delta -->
+        <div class="agent-card">
+          <span class="agent-tag tag-delta">AGENT DELTA • SECURITY CORE</span>
+          <h4>Tier-4 Admin Command HQ</h4>
+          <p>Guards infrastructure behind the Static Master Key and Triple-Mail Consensus Sequence (Owner, Tech Lead, SecOps 6-digit TOTP verification).</p>
+        </div>
+
+        <!-- Agent Epsilon -->
+        <div class="agent-card">
+          <span class="agent-tag tag-epsilon">AGENT EPSILON • RUNTIME & PACKAGING</span>
+          <h4>Desktop, Mobile & Linux Bridges</h4>
+          <p>Compiles Tauri wrappers, produces universal .AppImage and .deb Linux packages, manages systemd daemon hooks, and registers <code>nexus://</code> deep-links.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <div class="logo-container">
+            <div class="logo-mark">
+              <svg viewBox="0 0 24 24"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5"></polygon></svg>
+            </div>
+            <span class="logo-text">NEXUS // OS</span>
+          </div>
+          <p>Enterprise autonomous intelligence network, cross-device execution bridge, and multi-tier cryptographic admin center.</p>
+        </div>
+        <div class="footer-col">
+          <h5>Ecosystem</h5>
+          <ul>
+            <li><a href="https://auth.nexus.io">Auth Gateway</a></li>
+            <li><a href="https://status.nexus.io">Operations Radar</a></li>
+            <li><a href="#downloads">Binaries & Apps</a></li>
+            <li><a href="https://admin.nexus.io">Admin HQ [Tier 4]</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h5>Platforms</h5>
+          <ul>
+            <li><a href="binaries/nexus-desktop.AppImage" download>Linux AppImage</a></li>
+            <li><a href="binaries/nexus-desktop.deb" download>Debian / Ubuntu</a></li>
+            <li><a href="binaries/nexus-mobile.apk" download>Android APK</a></li>
+            <li><a href="binaries/nexus-setup.exe" download>Windows Desktop</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h5>Security</h5>
+          <ul>
+            <li><a href="https://admin.nexus.io">Triple-Mail Consensus</a></li>
+            <li><a href="https://status.nexus.io">Zero Trust Auditing</a></li>
+            <li><a href="#">Cryptographic Keys</a></li>
+            <li><a href="#">SLA 99.98%</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <div>© 2026 NEXUS OS. Architecture designed by Nexdune. All rights reserved.</div>
+        <div>Engineered for Cloudflare Pages & Global Edge Runtime.</div>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Interactive 3D Three.js Particle Constellation Script -->
+  <script>
+    (function initThreeScene() {
+      const canvas = document.getElementById('webgl-bg');
+      if (!canvas || !window.THREE) return;
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 1000);
+      const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+      // Particle Sphere
+      const particleCount = 1400;
+      const geometry = new THREE.BufferGeometry();
+      const positions = new Float32Array(particleCount * 3);
+      const colors = new Float32Array(particleCount * 3);
+
+      const color1 = new THREE.Color(0x6366f1); // Indigo
+      const color2 = new THREE.Color(0x06b6d4); // Cyan
+      const color3 = new THREE.Color(0x8b5cf6); // Violet
+
+      for (let i = 0; i < particleCount * 3; i += 3) {
+        // Spherical distribution with radius variance
+        const u = Math.random();
+        const v = Math.random();
+        const theta = u * 2.0 * Math.PI;
+        const phi = Math.acos(2.0 * v - 1.0);
+        const r = Math.cbrt(Math.random()) * 8 + 3.5;
+
+        const sinPhi = Math.sin(phi);
+        positions[i] = r * sinPhi * Math.cos(theta);
+        positions[i + 1] = r * sinPhi * Math.sin(theta);
+        positions[i + 2] = r * Math.cos(phi);
+
+        // Mix colors
+        const mixed = color1.clone().lerp(color2, Math.random());
+        colors[i] = mixed.r;
+        colors[i + 1] = mixed.g;
+        colors[i + 2] = mixed.b;
+      }
+
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+      const material = new THREE.PointsMaterial({
+        size: 0.045,
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.85,
+        blending: THREE.AdditiveBlending
+      });
+
+      const particleSystem = new THREE.Points(geometry, material);
+      scene.add(particleSystem);
+
+      // Wireframe Geometric Icosahedron Centerpiece
+      const icoGeo = new THREE.IcosahedronGeometry(3.2, 1);
+      const icoMat = new THREE.MeshBasicMaterial({
+        color: 0x6366f1,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.18
+      });
+      const icosahedron = new THREE.Mesh(icoGeo, icoMat);
+      scene.add(icosahedron);
+
+      camera.position.z = 10;
+
+      // Mouse Parallax
+      let mouseX = 0;
+      let mouseY = 0;
+      let targetX = 0;
+      let targetY = 0;
+
+      window.addEventListener('mousemove', (e) => {
+        mouseX = (e.clientX - window.innerWidth / 2) * 0.0008;
+        mouseY = (e.clientY - window.innerHeight / 2) * 0.0008;
+      });
+
+      // Animation Loop
+      function animate() {
+        requestAnimationFrame(animate);
+
+        targetX += (mouseX - targetX) * 0.05;
+        targetY += (mouseY - targetY) * 0.05;
+
+        particleSystem.rotation.y += 0.001;
+        particleSystem.rotation.x += 0.0005;
+
+        icosahedron.rotation.y -= 0.0015;
+        icosahedron.rotation.x += 0.001;
+
+        camera.position.x = targetX * 4;
+        camera.position.y = -targetY * 4;
+        camera.lookAt(scene.position);
+
+        renderer.render(scene, camera);
+      }
+      animate();
+
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+    })();
+
+    // Dynamic Install Command Resolution
+    function getDynamicInstallCmd() {
+      if (window.location.protocol === 'file:') {
+        return "bash binaries/install.sh";
+      }
+      const origin = window.location.origin;
+      return `curl -fsSL ${origin}/binaries/install.sh | bash`;
+    }
+
+    (function initInstallCmd() {
+      const el = document.getElementById('cliInstallCmdText');
+      if (el) el.innerText = getDynamicInstallCmd();
+    })();
+
+    // Copy terminal installation command
+    function copyInstallCmd(btn) {
+      const cmd = getDynamicInstallCmd();
+      navigator.clipboard.writeText(cmd).then(() => {
+        const originalText = btn.innerText;
+        btn.innerText = "COPIED!";
+        btn.style.background = "#10b981";
+        setTimeout(() => {
+          btn.innerText = originalText;
+          btn.style.background = "";
+        }, 2000);
+      }).catch(() => {
+        alert("Command: " + cmd);
+      });
+    }
+
+    // Dynamic API Base Resolution
+    const API_BASE = (window.location.hostname === 'nexus-bridge-7l1.pages.dev' || window.location.pathname.startsWith('/api'))
+      ? '/api'
+      : 'https://nexus-bridge-7l1.pages.dev/api';
+
+    // Live Edge Telemetry Stats Poller
+    async function fetchLivePlatformStats() {
+      const pingStart = performance.now();
+      try {
+        const resp = await fetch(`${API_BASE}/telemetry/stats?_t=${Date.now()}`);
+        const roundtripMs = Math.round(performance.now() - pingStart);
+        const latEl = document.getElementById('statLatency');
+        if (latEl) latEl.innerText = `${roundtripMs}ms`;
+
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data && data.stats) {
+            const s = data.stats;
+            const nodesEl = document.getElementById('statNodes');
+            if (nodesEl) {
+              const activeCount = (s.devices ? s.devices.online : 0) + 5; // 5 subagents + online hardware nodes
+              nodesEl.innerText = `${activeCount} Active`;
+            }
+            const uptimeEl = document.getElementById('statUptime');
+            if (uptimeEl && s.system) {
+              uptimeEl.innerText = `${s.system.uptime_percentage}%`;
+            }
+            const tasksEl = document.getElementById('statTasks');
+            if (tasksEl && s.tasks) {
+              tasksEl.innerText = `${s.tasks.total || 0}`;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Live telemetry fetch error:", err);
+      }
+    }
+
+    fetchLivePlatformStats();
+    setInterval(fetchLivePlatformStats, 4000);
+
+    // Dynamic Micro-Frontend URL resolution for local or custom domain preview
+    (function resolveMicroFrontendUrls() {
+      const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.protocol === 'file:';
+      if (isLocal) {
+        const links = [
+          { id: 'nav-auth-link', path: '../auth-site/index.html' },
+          { id: 'hero-auth-btn', path: '../auth-site/index.html' },
+          { id: 'nav-status-link', path: '../status-site/index.html' },
+          { id: 'hero-status-btn', path: '../status-site/index.html' },
+          { id: 'nav-admin-link', path: '../admin-site/index.html' }
+        ];
+        links.forEach(l => {
+          const el = document.getElementById(l.id);
+          if (el) el.href = l.path;
+        });
+      } else if (window.location.hostname.includes('pages.dev')) {
+        // Automatically link between Cloudflare Pages instances or unified path routing
+        const isMonoPages = window.location.hostname === 'nexus-bridge-7l1.pages.dev';
+        const links = isMonoPages ? [
+          { id: 'nav-auth-link', path: '/auth/' },
+          { id: 'hero-auth-btn', path: '/auth/' },
+          { id: 'nav-status-link', path: '/status/' },
+          { id: 'hero-status-btn', path: '/status/' },
+          { id: 'nav-admin-link', path: '/admin/' }
+        ] : [
+          { id: 'nav-auth-link', path: 'https://ecosystem-auth.pages.dev' },
+          { id: 'hero-auth-btn', path: 'https://ecosystem-auth.pages.dev' },
+          { id: 'nav-status-link', path: 'https://ecosystem-status.pages.dev' },
+          { id: 'hero-status-btn', path: 'https://ecosystem-status.pages.dev' },
+          { id: 'nav-admin-link', path: 'https://ecosystem-admin.pages.dev' }
+        ];
+        links.forEach(l => {
+          const el = document.getElementById(l.id);
+          if (el) el.href = l.path;
+        });
+      }
+    })();
+  </script>
+</body>
+</html>
