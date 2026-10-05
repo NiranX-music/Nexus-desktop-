@@ -1,0 +1,342 @@
+import type { CanUseTool, HookCallback, Options, PermissionResult, PostModelSwitchHookInput, PreModelSwitchHookInput } from '@anthropic-ai/claude-agent-sdk'
+
+import type { GetCapabilitiesInput, ProviderContext, RuntimeSettings, StreamTurnInput } from '../../chat-runtime/runtime-provider-types'
+import { requireRuntimeProviderTargetProfile } from '../../chat-runtime/runtime-provider-types'
+import { requestProviderToolApproval } from '../kit/permission-bridge'
+import { CLAUDE_AGENT_RUNTIME_KIND } from './metadata'
+import { CLAUDE_EXIT_PLAN_MODE_CAPTURED_MESSAGE, isClaudeAgentExitPlanModeToolName } from './plan-mode'
+import {
+  buildClaudeAgentAskUserQuestionOutput,
+  CLAUDE_AGENT_ASK_USER_QUESTION_METHOD,
+  projectClaudeAgentUserInputQuestions,
+  readClaudeAgentAskUserQuestionInput,
+} from './user-question'
+
+type ClaudeAgentCanUseToolOptions = Parameters<CanUseTool>[2]
+
+export interface ClaudeAgentToolApprovalRequest {
+  toolCallId: string
+  toolName: string
+  toolInput: Record<string, unknown>
+  agentId: string | null
+}
+
+export interface ClaudeAgentPermissionBridgeState {
+  runtimeInput: StreamTurnInput | GetCapabilitiesInput
+  permissionMode: Options['permissionMode']
+  runtimeSettings: RuntimeSettings | null | undefined
+}
+
+export function createClaudeAgentPermissionBridgeState(input: ClaudeAgentPermissionBridgeState): ClaudeAgentPermissionBridgeState {
+  return { ...input }
+}
+
+export function updateClaudeAgentPermissionBridgeState(
+  state: ClaudeAgentPermissionBridgeState,
+  input: ClaudeAgentPermissionBridgeState,
+): void {
+  state.runtimeInput = input.runtimeInput
+  state.permissionMode = input.permissionMode
+  state.runtimeSettings = input.runtimeSettings
+}
+
+export function createClaudeAgentPreToolUseHook(input: {
+  state: ClaudeAgentPermissionBridgeState
+}): HookCallback {
+  return async (hookInput) => {
+    if (hookInput.hook_event_name !== 'PreToolUse') {
+      return { continue: true }
+    }
+
+    if (isClaudeAgentExitPlanModeToolName(hookInput.tool_name)) {
+      return {
+        continue: true,
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: CLAUDE_EXIT_PLAN_MODE_CAPTURED_MESSAGE,
+        },
+      }
+    }
+
+    if (
+      hookInput.tool_name === 'AskUserQuestion'
+      && input.state.permissionMode === 'bypassPermissions'
+    ) {
+      return {
+        continue: true,
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason:
+            'AskUserQuestion is unavailable in bypassPermissions mode; ask the user in plain text instead.',
+        },
+      }
+    }
+
+    return { continue: true }
+  }
+}
+
+export function createClaudeAgentPreModelSwitchHook(input: {
+  deps: ProviderContext
+  state: ClaudeAgentPermissionBridgeState
+}): HookCallback {
+  return async (hookInput) => {
+    if (hookInput.hook_event_name !== 'PreModelSwitch') {
+      return { continue: true }
+    }
+    if (!hookInput.prompt_cache_warm || hookInput.estimated_cache_write_usd <= 0) {
+      return modelSwitchDecision('allow')
+    }
+
+    const runtimeInput = input.state.runtimeInput
+    if (!('runId' in runtimeInput) || !input.deps.requestToolApproval) {
+      return modelSwitchDecision(
+        'ask',
+        describeClaudeAgentModelSwitchCost(hookInput),
+      )
+    }
+
+    const requestId = [
+      'claude-model-switch',
+      runtimeInput.runId,
+      hookInput.from_model,
+      hookInput.to_model,
+    ].join(':')
+    const resolution = await requestProviderToolApproval({
+      deps: input.deps,
+      sessionId: runtimeInput.runtimeSession.chatSessionId,
+      runId: runtimeInput.runId,
+      providerRequestId: requestId,
+      providerKind: requireRuntimeProviderTargetProfile(runtimeInput.profile, CLAUDE_AGENT_RUNTIME_KIND).providerKind ?? 'universal',
+      runtimeKind: CLAUDE_AGENT_RUNTIME_KIND,
+      providerMethod: 'PreModelSwitch',
+      toolCallId: requestId,
+      metadata: {
+        toolName: 'ModelSwitch',
+        modelSwitch: projectClaudeAgentModelSwitchMetadata(hookInput),
+      },
+    })
+
+    return modelSwitchDecision(
+      resolution.approved ? 'allow' : 'deny',
+      resolution.reason ?? describeClaudeAgentModelSwitchCost(hookInput),
+    )
+  }
+}
+
+export function createClaudeAgentPostModelSwitchHook(input: {
+  onModelSwitch: (modelSwitch: PostModelSwitchHookInput) => void
+}): HookCallback {
+  return async (hookInput) => {
+    if (hookInput.hook_event_name === 'PostModelSwitch') {
+      input.onModelSwitch(hookInput)
+    }
+    return { continue: true }
+  }
+}
+
+function modelSwitchDecision(
+  permissionDecision: 'allow' | 'deny' | 'ask',
+  permissionDecisionReason?: string,
+) {
+  return {
+    continue: true,
+    hookSpecificOutput: {
+      hookEventName: 'PreModelSwitch' as const,
+      permissionDecision,
+      ...(permissionDecisionReason ? { permissionDecisionReason } : {}),
+    },
+  }
+}
+
+function describeClaudeAgentModelSwitchCost(input: PreModelSwitchHookInput): string {
+  return `Switching from ${input.from_model} to ${input.to_model} will replace a warm ${input.cache_ttl} prompt cache and is estimated to cost $${input.estimated_cache_write_usd.toFixed(4)} to cache ${input.context_tokens} context tokens (${input.pricing} pricing).`
+}
+
+function projectClaudeAgentModelSwitchMetadata(input: PreModelSwitchHookInput) {
+  return {
+    fromModelId: input.from_model,
+    toModelId: input.to_model,
+    requestedModelId: input.requested_model,
+    source: input.source,
+    contextTokens: input.context_tokens,
+    promptCacheWarm: input.prompt_cache_warm,
+    cacheTtl: input.cache_ttl,
+    estimatedCacheWriteUsd: input.estimated_cache_write_usd,
+    pricing: input.pricing,
+  }
+}
+
+export function createClaudeAgentCanUseTool(input: {
+  deps: ProviderContext
+  state: ClaudeAgentPermissionBridgeState
+  emitToolApprovalRequest?: (request: ClaudeAgentToolApprovalRequest) => void
+}): CanUseTool {
+  return async (toolName, toolInput, options) => {
+    if (toolName === 'AskUserQuestion' && input.deps.requestUserInput) {
+      return handleAskUserQuestionViaCanUseTool({
+        deps: input.deps,
+        runtimeInput: input.state.runtimeInput,
+        toolInput,
+        options,
+      })
+    }
+
+    if (isClaudeAgentExitPlanModeToolName(toolName)) {
+      return denyClaudeAgentExitPlanMode()
+    }
+
+    return handleClaudeAgentToolPermissionRequest({
+      deps: input.deps,
+      runtimeInput: input.state.runtimeInput,
+      permissionMode: input.state.permissionMode,
+      runtimeSettings: input.state.runtimeSettings,
+      toolName,
+      toolInput,
+      options,
+      emitToolApprovalRequest: input.emitToolApprovalRequest,
+    })
+  }
+}
+
+function allowClaudeAgentTool(toolInput: Record<string, unknown>): PermissionResult {
+  return {
+    behavior: 'allow',
+    updatedInput: toolInput,
+  }
+}
+
+function denyClaudeAgentExitPlanMode(): PermissionResult {
+  return {
+    behavior: 'deny',
+    message: CLAUDE_EXIT_PLAN_MODE_CAPTURED_MESSAGE,
+  }
+}
+
+async function handleAskUserQuestionViaCanUseTool(input: {
+  deps: ProviderContext
+  runtimeInput: StreamTurnInput | GetCapabilitiesInput
+  toolInput: Record<string, unknown>
+  options: ClaudeAgentCanUseToolOptions
+}): Promise<PermissionResult> {
+  const questionInput = readClaudeAgentAskUserQuestionInput(input.toolInput)
+  if (!questionInput) {
+    return {
+      behavior: 'deny',
+      message: 'Invalid AskUserQuestion input.',
+    }
+  }
+
+  const sessionId = input.runtimeInput.runtimeSession.chatSessionId
+  const runId = 'runId' in input.runtimeInput ? input.runtimeInput.runId : ''
+  const resolution = await input.deps.requestUserInput!({
+    sessionId,
+    runId,
+    providerRequestId: input.options.toolUseID,
+    providerKind: requireRuntimeProviderTargetProfile(input.runtimeInput.profile, CLAUDE_AGENT_RUNTIME_KIND).providerKind ?? 'universal',
+    runtimeKind: CLAUDE_AGENT_RUNTIME_KIND,
+    providerMethod: CLAUDE_AGENT_ASK_USER_QUESTION_METHOD,
+    toolCallId: input.options.toolUseID,
+    questions: projectClaudeAgentUserInputQuestions(questionInput),
+    metadata: {
+      params: questionInput,
+    },
+  })
+
+  const output = buildClaudeAgentAskUserQuestionOutput({
+    request: questionInput,
+    answers: resolution.answers,
+  })
+
+  return {
+    behavior: 'allow',
+    updatedInput: {
+      questions: output.questions,
+      answers: output.answers,
+      ...(output.annotations ? { annotations: output.annotations } : {}),
+    },
+  }
+}
+
+const CLAUDE_AGENT_PLAN_MODE_DENIAL_MESSAGE
+  = 'Cradle is in plan mode. Submit or revise the plan before running implementation tools.'
+
+async function handleClaudeAgentToolPermissionRequest(input: {
+  deps: ProviderContext
+  runtimeInput: StreamTurnInput | GetCapabilitiesInput
+  permissionMode: Options['permissionMode']
+  runtimeSettings: RuntimeSettings | null | undefined
+  toolName: string
+  toolInput: Record<string, unknown>
+  options: ClaudeAgentCanUseToolOptions
+  emitToolApprovalRequest?: (request: ClaudeAgentToolApprovalRequest) => void
+}): Promise<PermissionResult> {
+  if (input.permissionMode === 'plan') {
+    return {
+      behavior: 'deny',
+      message: CLAUDE_AGENT_PLAN_MODE_DENIAL_MESSAGE,
+    }
+  }
+  if (input.permissionMode === 'bypassPermissions') {
+    return allowClaudeAgentTool(input.toolInput)
+  }
+
+  if (!input.deps.requestToolApproval || !('runId' in input.runtimeInput)) {
+    return {
+      behavior: 'deny',
+      message: 'Chat Runtime does not expose pending tool approval handling for this Claude Agent request.',
+    }
+  }
+
+  const resolution = await requestProviderToolApproval({
+    deps: input.deps,
+    sessionId: input.runtimeInput.runtimeSession.chatSessionId,
+    runId: input.runtimeInput.runId,
+    providerRequestId: input.options.toolUseID,
+    providerKind: requireRuntimeProviderTargetProfile(input.runtimeInput.profile, CLAUDE_AGENT_RUNTIME_KIND).providerKind ?? 'universal',
+    runtimeKind: CLAUDE_AGENT_RUNTIME_KIND,
+    providerMethod: 'canUseTool',
+    toolCallId: input.options.toolUseID,
+    metadata: {
+      toolName: input.toolName,
+      params: input.toolInput,
+      permission: {
+        suggestions: input.options.suggestions,
+        blockedPath: input.options.blockedPath,
+        decisionReason: input.options.decisionReason,
+        title: input.options.title,
+        displayName: input.options.displayName,
+        description: input.options.description,
+        agentID: input.options.agentID,
+        requestId: input.options.requestId,
+        matchedAskRule: input.options.matchedAskRule,
+      },
+    },
+    policy: {
+      onBeforeDispatch: () => {
+        input.emitToolApprovalRequest?.({
+          toolCallId: input.options.toolUseID,
+          toolName: input.toolName,
+          toolInput: input.toolInput,
+          agentId: readClaudeAgentPermissionAgentId(input.options),
+        })
+      },
+    },
+  })
+
+  if (resolution.approved) {
+    return allowClaudeAgentTool(input.toolInput)
+  }
+
+  return {
+    behavior: 'deny',
+    message: resolution.reason ?? 'Tool execution denied by user.',
+  }
+}
+
+function readClaudeAgentPermissionAgentId(options: ClaudeAgentCanUseToolOptions): string | null {
+  const agentId = options.agentID
+  return typeof agentId === 'string' && agentId.length > 0 ? agentId : null
+}
