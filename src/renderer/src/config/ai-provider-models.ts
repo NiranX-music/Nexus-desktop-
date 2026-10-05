@@ -23,7 +23,7 @@ export const DEFAULT_FIREWORKS_MODELS: AiGatewayModel[] = [
 ]
 
 export const DEFAULT_GEMINI_CHAT_MODELS: AiGatewayModel[] = GEMINI_MODEL_OPTIONS.filter(
-  (model) => !model.live && model.category !== 'Other models'
+  (model) => !model.live && model.category !== 'Embeddings'
 ).map((model) => ({ provider: 'gemini', id: model.id, label: model.label }))
 
 export const DEFAULT_AI_GATEWAY_MODELS: Record<AiGatewayProvider, AiGatewayModel[]> = {
@@ -33,7 +33,7 @@ export const DEFAULT_AI_GATEWAY_MODELS: Record<AiGatewayProvider, AiGatewayModel
 }
 
 export const DEFAULT_AI_GATEWAY_MODEL: Record<AiGatewayProvider, string> = {
-  gemini: 'models/gemini-2.5-flash',
+  gemini: 'models/gemini-3.8-flash',
   groq: 'llama-3.3-70b-versatile',
   fireworks: 'accounts/fireworks/models/kimi-k2p6'
 }

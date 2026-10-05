@@ -34,8 +34,15 @@ const getFireworksKey = () =>
   getEnvKey('NEXUS_FIREWORKS_API_KEY') || getEnvKey('FIREWORKS_API_KEY')
 
 const normalizeGeminiModel = (model = '') => {
-  const clean = model.trim() || 'models/gemini-2.5-flash'
-  return clean.replace(/^models\//, '')
+  let clean = model.trim() || 'models/gemini-3.8-flash'
+  clean = clean.replace(/^models\//, '')
+  if (clean === 'gemini-2.5-flash' || clean === 'gemini-2.0-flash' || clean === 'gemini-1.5-flash') {
+    return 'gemini-3.8-flash'
+  }
+  if (clean === 'gemini-2.5-flash-lite' || clean === 'gemini-2.0-flash-lite') {
+    return 'gemini-3.5-flash-lite'
+  }
+  return clean
 }
 
 const GEMINI_INLINE_ATTACHMENT_LIMIT_BYTES = 18 * 1024 * 1024

@@ -24,11 +24,19 @@ const readJsonResponse = async (response: Response) => {
 export const generateWithNexusGeminiClient = async ({
   prompt,
   system = '',
-  model = 'gemini-2.5-flash',
+  model = 'gemini-3.8-flash',
   temperature = 0.7,
   topP = 0.95,
   maxOutputTokens = 4096
 }: GeminiClientGeneratePayload) => {
+  let targetModel = String(model || 'gemini-3.8-flash').trim().replace(/^models\//, '')
+  if (targetModel === 'gemini-2.5-flash' || targetModel === 'gemini-2.0-flash' || targetModel === 'gemini-1.5-flash') {
+    targetModel = 'gemini-3.8-flash'
+  }
+  if (targetModel === 'gemini-2.5-flash-lite' || targetModel === 'gemini-2.0-flash-lite') {
+    targetModel = 'gemini-3.5-flash-lite'
+  }
+
   const response = await fetch(`${getNexusWebAppUrl()}/api/gemini/generate`, {
     method: 'POST',
     headers: {
@@ -36,7 +44,7 @@ export const generateWithNexusGeminiClient = async ({
       'x-nexus-client': 'desktop'
     },
     body: JSON.stringify({
-      model,
+      model: targetModel,
       prompt,
       system,
       temperature,

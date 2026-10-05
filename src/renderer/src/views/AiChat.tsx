@@ -127,9 +127,18 @@ export default function AiChatView({
   const [provider, setProvider] = useState<AiGatewayProvider>(
     (localStorage.getItem('nexus_ai_chat_provider') as AiGatewayProvider) || 'gemini'
   )
-  const [model, setModel] = useState(
-    localStorage.getItem('nexus_ai_chat_model') || DEFAULT_AI_GATEWAY_MODEL.gemini
-  )
+  const [model, setModel] = useState(() => {
+    const saved = localStorage.getItem('nexus_ai_chat_model')
+    if (
+      !saved ||
+      saved === 'models/gemini-2.5-flash' ||
+      saved === 'models/gemini-2.0-flash' ||
+      saved === 'models/gemini-1.5-flash'
+    ) {
+      return DEFAULT_AI_GATEWAY_MODEL.gemini
+    }
+    return saved
+  })
   const [modelsByProvider, setModelsByProvider] =
     useState<Record<AiGatewayProvider, AiGatewayModel[]>>(DEFAULT_AI_GATEWAY_MODELS)
   const [messages, setMessages] = useState<ChatMessage[]>([

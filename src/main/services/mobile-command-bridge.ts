@@ -22,13 +22,15 @@ type BridgeOptions = {
 const MAX_BODY_BYTES = 64 * 1024
 const DEFAULT_PORT = 17173
 const FALLBACK_PORT = 5173
-const DEFAULT_CHAT_MODEL = 'gemini-2.5-flash'
+const DEFAULT_CHAT_MODEL = 'gemini-3.8-flash'
 const PAIRING_TTL_MS = 1000 * 60 * 15
 const CHAT_MODEL_FALLBACKS = [
-  'gemini-2.5-flash-lite',
-  'gemini-2.0-flash',
-  'gemini-2.0-flash-lite',
-  'gemini-1.5-flash'
+  'gemini-3.7-flash',
+  'gemini-3.6-flash',
+  'gemini-3.5-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+  'gemini-3.1-pro-preview'
 ]
 
 const allowedTypes = new Set([
@@ -331,7 +333,13 @@ function buildMobileTelemetry(app: App, port: number) {
 }
 
 function normalizeGeminiModel(model?: string) {
-  const cleaned = String(model || DEFAULT_CHAT_MODEL).trim().replace(/^models\//, '')
+  let cleaned = String(model || DEFAULT_CHAT_MODEL).trim().replace(/^models\//, '')
+  if (cleaned === 'gemini-2.5-flash' || cleaned === 'gemini-2.0-flash' || cleaned === 'gemini-1.5-flash') {
+    return 'gemini-3.8-flash'
+  }
+  if (cleaned === 'gemini-2.5-flash-lite' || cleaned === 'gemini-2.0-flash-lite') {
+    return 'gemini-3.5-flash-lite'
+  }
   return cleaned || DEFAULT_CHAT_MODEL
 }
 

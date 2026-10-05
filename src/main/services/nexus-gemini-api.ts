@@ -1,5 +1,5 @@
 const DEFAULT_NEXUS_API_BASE_URL = 'https://nexusaix.vercel.app'
-const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash'
+const DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash'
 
 interface GeminiGeneratePayload {
   model?: string
@@ -82,6 +82,14 @@ export const generateWithNexusGemini = async ({
   const url = endpointFor(baseUrl, 'generate')
   const cleanPrompt = String(prompt || '').trim()
 
+  let targetModel = String(model || DEFAULT_GEMINI_MODEL).trim().replace(/^models\//, '')
+  if (targetModel === 'gemini-2.5-flash' || targetModel === 'gemini-2.0-flash' || targetModel === 'gemini-1.5-flash') {
+    targetModel = 'gemini-3.8-flash'
+  }
+  if (targetModel === 'gemini-2.5-flash-lite' || targetModel === 'gemini-2.0-flash-lite') {
+    targetModel = 'gemini-3.5-flash-lite'
+  }
+
   if (!cleanPrompt && (!Array.isArray(contents) || contents.length === 0)) {
     throw new Error('No Gemini prompt or contents were provided.')
   }
@@ -93,7 +101,7 @@ export const generateWithNexusGemini = async ({
       'x-nexus-client': 'desktop'
     },
     body: JSON.stringify({
-      model,
+      model: targetModel,
       prompt: cleanPrompt,
       contents,
       system,

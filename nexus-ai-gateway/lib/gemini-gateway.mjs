@@ -1,4 +1,4 @@
-const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash'
+const DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash'
 const GEMINI_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta'
 const GEMINI_KEY_ENV_NAMES = ['NEXUS_GEMINI_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_AI_API_KEY']
 const PLACEHOLDER_KEY_RE =
@@ -145,7 +145,13 @@ export async function createGeminiGenerateResult(rawBody = {}, headers = {}) {
     }
   }
 
-  const model = String(rawBody.model || getEnvValue('NEXUS_GEMINI_MODEL') || DEFAULT_GEMINI_MODEL).trim()
+  let model = String(rawBody.model || getEnvValue('NEXUS_GEMINI_MODEL') || DEFAULT_GEMINI_MODEL).trim().replace(/^models\//, '')
+  if (model === 'gemini-2.5-flash' || model === 'gemini-2.0-flash' || model === 'gemini-1.5-flash') {
+    model = 'gemini-3.8-flash'
+  }
+  if (model === 'gemini-2.5-flash-lite' || model === 'gemini-2.0-flash-lite') {
+    model = 'gemini-3.5-flash-lite'
+  }
   const contents = normalizeContents(rawBody)
   const system = String(rawBody.system || '').trim()
 

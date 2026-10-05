@@ -190,7 +190,7 @@ class AgentFleetManager {
       this.agents.get('recon_scout')!.progress = 70
 
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.8-flash',
         contents: `You are Recon Scout, a specialized intelligence unit of Nexus Neural OS. Perform an in-depth intelligence recon on: "${query}". Provide a concise, highly structured technical briefing.`
       })
 
@@ -227,7 +227,7 @@ class AgentFleetManager {
     this.agents.get('code_architect')!.progress = 75
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.8-flash',
       contents: `You are Code Architect of Nexus Neural OS. Synthesize the optimal implementation for: "${prompt}". Output cleanly formatted code with architectural design notes.`
     })
 

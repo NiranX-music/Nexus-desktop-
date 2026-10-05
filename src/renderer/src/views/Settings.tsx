@@ -673,8 +673,14 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                         {AI_GATEWAY_PROVIDERS.map((provider) => {
                           const storageKey = `nexus_default_${provider}_model`
+                          const savedModel = localStorage.getItem(storageKey)
                           const selected =
-                            localStorage.getItem(storageKey) || DEFAULT_AI_GATEWAY_MODEL[provider]
+                            (provider === 'gemini' &&
+                            (savedModel === 'models/gemini-2.5-flash' ||
+                              savedModel === 'models/gemini-2.0-flash' ||
+                              savedModel === 'models/gemini-1.5-flash')
+                              ? DEFAULT_AI_GATEWAY_MODEL[provider]
+                              : savedModel) || DEFAULT_AI_GATEWAY_MODEL[provider]
                           return (
                             <label key={provider} className="flex flex-col gap-2">
                               <span className="text-[9px] text-zinc-500 font-mono uppercase tracking-widest">
