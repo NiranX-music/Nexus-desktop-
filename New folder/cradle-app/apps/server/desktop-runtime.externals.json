@@ -1,0 +1,15 @@
+{
+  "packages": [
+    "@anthropic-ai/claude-agent-sdk",
+    "@arcships/light-ocr",
+    "@ff-labs/fff-node",
+    "@node-rs/jieba",
+    "better-sqlite3",
+    "node-pty",
+    "sharp"
+  ],
+  "prunePackages": [
+    "@anthropic-ai/claude-agent-sdk-*",
+    "@arcships/light-ocr-model-*"
+  ]
+}
