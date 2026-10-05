@@ -129,7 +129,7 @@ export default function TrialShell(props: TrialRuntimeProps) {
           </header>
 
           <section className="min-h-0 flex-1 overflow-hidden rounded-[28px] border border-emerald-400/16 bg-[linear-gradient(180deg,rgba(6,10,11,0.97),rgba(3,5,7,0.94))] shadow-[0_30px_90px_rgba(0,0,0,0.25)]">
-            <div className="h-full overflow-y-auto p-4 lg:p-5">
+            <div className="h-full overflow-y-auto scrollbar-small p-4 lg:p-5">
               {activeTab === 'overview' && <TrialDashboard {...props} />}
               {activeTab === 'chat' && <TrialAiChat />}
               {activeTab === 'whiteboard' && <WhiteboardView />}
