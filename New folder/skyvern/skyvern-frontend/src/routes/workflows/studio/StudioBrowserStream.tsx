@@ -1,0 +1,120 @@
+import { useCallback, useEffect } from "react";
+
+import { useRecordingStore } from "@/store/useRecordingStore";
+import { useStudioBrowserStore } from "@/store/useStudioBrowserStore";
+
+import { StreamPresenter } from "./StreamPresenter";
+import { type StudioPaneId } from "./panes";
+import { useBrowserPaneView } from "./useBrowserPaneView";
+import { useExecutingBlockRun } from "./useExecutingBlockRun";
+import { useStudioPanes } from "./useStudioPanes";
+
+/**
+ * The studio's single live-browser stream, portaled into a host node re-parented
+ * between the open panes so the socket persists instead of re-booting.
+ */
+export function StudioBrowserStream({
+  visiblePanes,
+}: {
+  visiblePanes?: readonly StudioPaneId[];
+}) {
+  const { panes } = useStudioPanes();
+  const renderedPanes = visiblePanes ?? panes;
+  const browserPaneOpen = renderedPanes.includes("browser");
+  const isRecording = useRecordingStore((s) => s.isRecording);
+  const resetRecording = useRecordingStore((s) => s.reset);
+  const reloadNonce = useStudioBrowserStore((s) => s.reloadNonce);
+  const setStreamUrl = useStudioBrowserStore((s) => s.setStreamUrl);
+  const setDebugStreamState = useStudioBrowserStore(
+    (s) => s.setDebugStreamState,
+  );
+  const markActivity = useStudioBrowserStore((s) => s.markActivity);
+  const clearActivity = useStudioBrowserStore((s) => s.clearActivity);
+  const reset = useStudioBrowserStore((s) => s.reset);
+  const { view, liveSurface, debugBrowserSessionId } = useBrowserPaneView();
+  const browserSessionId = debugBrowserSessionId;
+  const executingBlockRun = useExecutingBlockRun();
+  // Co-drive: take-control stays available while a block run executes; the pill
+  // just flags the shared browser. Recording is exempt — the recorder is driving.
+  const coDriving = executingBlockRun && !isRecording;
+  // Only offer control while this stream is the pane's visible surface. A replay
+  // view or a per-run stream parks this node; withdrawing the offer makes
+  // BrowserStream release any held grab (it can't be exercised unseen).
+  const debugStreamShown =
+    browserPaneOpen && view === "live" && liveSurface === "debug";
+
+  useEffect(() => {
+    reset();
+    return () => reset();
+  }, [browserSessionId, reset]);
+
+  // Recording is session-scoped: clear it when the studio's browser session ends
+  // or changes. The stream component can remount while the session persists and
+  // doesn't reset recording state itself, so this owns that.
+  useEffect(() => {
+    return () => resetRecording();
+  }, [browserSessionId, resetRecording]);
+
+  useEffect(() => {
+    if (browserPaneOpen) {
+      clearActivity();
+    }
+  }, [clearActivity, browserPaneOpen]);
+
+  const handleUrlChange = useCallback(
+    (url: string) => {
+      setStreamUrl(url);
+    },
+    [setStreamUrl],
+  );
+
+  const handleActivity = useCallback(() => {
+    if (browserPaneOpen) {
+      clearActivity();
+      return;
+    }
+    markActivity();
+  }, [clearActivity, markActivity, browserPaneOpen]);
+
+  if (!browserSessionId) {
+    return null;
+  }
+
+  return (
+    <div className="relative h-full w-full">
+      <StreamPresenter
+        key={`${browserSessionId}:${reloadNonce}`}
+        browserSessionId={browserSessionId}
+        interactive={false}
+        showControlButtons={debugStreamShown}
+        // The CDP transport streams the page viewport only, so unlike the VNC
+        // panel there is no browser address bar to type into and a session
+        // resting on about:blank has no way out (SKY-13705).
+        enableUrlInput={true}
+        isRecording={isRecording}
+        // While recording, the Copilot pane hosts the live-drafts panel, whose
+        // header already shows the timer + step count — an on-stream REC pill
+        // would duplicate it. Closing that pane brings the pill back on either
+        // transport (VNC renders it in BrowserStream, CDP in StreamPresenter).
+        hideRecordingIndicator={renderedPanes.includes("copilot")}
+        onUrlChange={handleUrlChange}
+        onStreamStateChange={setDebugStreamState}
+        onActivity={handleActivity}
+      />
+      {coDriving && debugStreamShown ? (
+        <div
+          role="status"
+          className="pointer-events-none absolute left-1/2 top-3 z-10 flex max-w-[90%] -translate-x-1/2 items-center gap-2 rounded-md bg-black/70 px-3 py-1.5 text-xs text-white backdrop-blur duration-200 motion-safe:animate-in motion-safe:fade-in"
+        >
+          <span
+            aria-hidden
+            className="size-1.5 shrink-0 rounded-full bg-success motion-safe:animate-pulse"
+          />
+          <span className="truncate">
+            Agent is running — you're sharing the browser
+          </span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
