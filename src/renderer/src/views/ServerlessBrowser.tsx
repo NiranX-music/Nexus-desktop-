@@ -143,7 +143,7 @@ export default function ServerlessBrowserView() {
         </div>
       </div>
 
-      <div className="col-span-12 xl:col-span-3 flex flex-col gap-4 min-h-0">
+      <div className="col-span-12 xl:col-span-3 flex flex-col gap-4 min-h-0 overflow-y-auto pr-1 scrollbar-small">
         <div className={`${glassPanel} p-4 border-cyan-500/10`}>
           <div className="flex items-center justify-between border-b border-white/10 pb-3 mb-4">
             <span className="text-[10px] font-black tracking-widest text-zinc-400">
@@ -211,7 +211,7 @@ export default function ServerlessBrowserView() {
           <textarea
             value={accountNote}
             onChange={(event) => saveAccountNote(event.target.value)}
-            className="h-full w-full resize-none rounded-xl border border-white/10 bg-black/60 p-3 text-xs leading-relaxed text-zinc-200 outline-none focus:border-emerald-400/50"
+            className="h-full w-full resize-none rounded-xl border border-white/10 bg-black/60 p-3 text-xs leading-relaxed text-zinc-200 outline-none focus:border-emerald-400/50 scrollbar-small"
             placeholder="Ask Nexus to add accounts, sign in, search, play, pause, or control this browser..."
           />
         </div>
