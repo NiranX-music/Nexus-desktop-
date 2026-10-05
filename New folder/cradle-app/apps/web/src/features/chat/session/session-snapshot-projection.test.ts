@@ -1,0 +1,190 @@
+import type { UIMessage } from 'ai'
+import { describe, expect, it } from 'vitest'
+
+import type { ChatRunState } from '~/store/chat'
+
+import {
+  deriveSessionPassiveStreamProjection,
+  deriveSessionSnapshotProjection,
+  deriveStableSessionSnapshotProjection,
+} from './session-snapshot-projection'
+import type { ChatSessionMessageRow } from './use-chat-session-types'
+
+const idleRunState: ChatRunState = { phase: 'idle', error: false }
+
+function message(input: {
+  id: string
+  role: 'user' | 'assistant'
+  text?: string
+  parts?: UIMessage['parts']
+}): UIMessage {
+  return {
+    id: input.id,
+    role: input.role,
+    parts: input.parts ?? [{ type: 'text', text: input.text ?? '' }],
+  }
+}
+
+function row(input: {
+  id: string
+  role: 'user' | 'assistant'
+  status?: ChatSessionMessageRow['status']
+  text?: string
+  parts?: UIMessage['parts']
+  errorText?: string
+  parentToolCallId?: string | null
+}): ChatSessionMessageRow {
+  return {
+    messageId: input.id,
+    role: input.role,
+    status: input.status ?? 'complete',
+    errorText: input.errorText,
+    preview: input.text ?? '',
+    previewTruncated: false,
+    parentMessageId: null,
+    parentToolCallId: input.parentToolCallId ?? null,
+    taskId: null,
+    depth: 0,
+    message: {
+      id: input.id,
+      role: input.role,
+      parts: input.parts ?? (input.text !== undefined ? [{ type: 'text', text: input.text }] : []),
+    },
+  }
+}
+
+describe('session snapshot projection', () => {
+  it('projects stable rows and reports the latest failed main assistant message', () => {
+    const projection = deriveStableSessionSnapshotProjection([
+      row({ id: 'user-1', role: 'user', text: 'Question' }),
+      row({
+        id: 'assistant-1',
+        role: 'assistant',
+        status: 'failed',
+        text: 'Partial answer',
+        errorText: 'Provider failed',
+      }),
+    ])
+
+    expect(projection.messages.map(item => item.id)).toEqual(['user-1', 'assistant-1'])
+    expect(projection.passiveRunState).toEqual({
+      messageIds: [],
+      cancelling: false,
+      status: 'error',
+    })
+    expect(projection.failedMessage).toEqual({
+      messageId: 'assistant-1',
+      errorText: 'Provider failed',
+    })
+  })
+
+  it('projects an empty streaming snapshot as a normal placeholder row', () => {
+    const projection = deriveSessionSnapshotProjection({
+      rows: [
+        row({ id: 'user-1', role: 'user', text: 'Question' }),
+        row({ id: 'assistant-empty', role: 'assistant', status: 'streaming' }),
+      ],
+      runState: idleRunState,
+      existingMessages: [],
+      runtimeStatusKnown: true,
+      runtimeIdle: true,
+      runtimeActiveRunMessageId: null,
+    })
+
+    expect(projection).toMatchObject({
+      messages: [
+        expect.objectContaining({ id: 'user-1' }),
+        expect.objectContaining({ id: 'assistant-empty', parts: [] }),
+      ],
+      requestSnapshotRefresh: false,
+      passiveRunState: {
+        messageIds: [],
+        allowMissingMessage: false,
+        cancelling: false,
+        status: 'idle',
+      },
+    })
+  })
+
+  it('treats an authoritative empty snapshot as clearing provisional rows', () => {
+    const projection = deriveSessionSnapshotProjection({
+      rows: [],
+      runState: idleRunState,
+      existingMessages: [],
+      runtimeStatusKnown: true,
+      runtimeIdle: true,
+      runtimeActiveRunMessageId: null,
+    })
+
+    expect(projection).toMatchObject({
+      messages: [],
+      passiveRunState: {
+        messageIds: [],
+        allowMissingMessage: false,
+        cancelling: false,
+        status: 'idle',
+      },
+    })
+  })
+
+  it('uses the active run message id as the passive streaming identity even before it appears in the snapshot', () => {
+    const projection = deriveSessionSnapshotProjection({
+      rows: [
+        row({ id: 'user-1', role: 'user', text: 'Question' }),
+        row({ id: 'assistant-old', role: 'assistant', text: 'Previous answer' }),
+      ],
+      runState: idleRunState,
+      existingMessages: [],
+      runtimeStatusKnown: true,
+      runtimeIdle: false,
+      runtimeActiveRunMessageId: 'assistant-live',
+    })
+
+    expect(projection?.messages?.map(item => item.id)).toEqual(['user-1', 'assistant-old'])
+    expect(projection?.passiveRunState).toEqual({
+      messageIds: ['assistant-live'],
+      allowMissingMessage: true,
+      cancelling: false,
+      status: 'streaming',
+    })
+  })
+
+  it('preserves a live streamed message when a paged snapshot has not projected it yet', () => {
+    const live = message({ id: 'assistant-live', role: 'assistant', text: 'Streaming' })
+    const projection = deriveSessionSnapshotProjection({
+      rows: [row({ id: 'assistant-old', role: 'assistant', text: 'Previous answer' })],
+      runState: idleRunState,
+      existingMessages: [live],
+      runtimeStatusKnown: true,
+      runtimeIdle: false,
+      runtimeActiveRunMessageId: 'assistant-live',
+    })
+
+    expect(projection?.messages.map(item => item.id)).toEqual(['assistant-old', 'assistant-live'])
+  })
+
+  it('does not project snapshots over a locally driven run', () => {
+    const projection = deriveSessionSnapshotProjection({
+      rows: [
+        row({ id: 'assistant-passive', role: 'assistant', status: 'streaming', text: 'Passive' }),
+      ],
+      runState: { phase: 'streaming', source: 'local', messageId: 'assistant-local' },
+      existingMessages: [],
+      runtimeStatusKnown: true,
+      runtimeIdle: false,
+      runtimeActiveRunMessageId: 'assistant-passive',
+    })
+
+    expect(projection).toBeNull()
+  })
+
+  it('derives passive stream inputs only from local driver state', () => {
+    const projection = deriveSessionPassiveStreamProjection({
+      runState: idleRunState,
+    })
+
+    expect(projection).toEqual({
+      locallyDriven: false,
+    })
+  })
+})
