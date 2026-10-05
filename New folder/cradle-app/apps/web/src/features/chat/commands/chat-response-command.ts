@@ -1,0 +1,603 @@
+import type { RuntimeReviewTarget } from '@cradle/chat-runtime-contracts'
+import type { FileUIPart, UIMessage } from 'ai'
+import { z } from 'zod'
+
+import {
+  deleteChatSessionsBySessionIdQueueByQueueItemId,
+  deleteChatSideConversationsBySideConversationId,
+  getChatSessionsBySessionIdQueue,
+  patchChatSessionsBySessionIdQueueByQueueItemId,
+  patchChatSessionsBySessionIdRuntimeTurnSettings,
+  postChatSessionsBySessionIdBangCommand,
+  postChatSessionsBySessionIdBangTranscript,
+  postChatSessionsBySessionIdCancel,
+  postChatSessionsBySessionIdMessagesByMessageIdPlanImplementationApproval,
+  postChatSessionsBySessionIdQueue,
+  postChatSessionsBySessionIdQueueReorder,
+  postChatSessionsBySessionIdQuickQuestion,
+  postChatSessionsBySessionIdSideChat,
+  postChatSessionsBySessionIdSteer,
+  postChatSessionsBySessionIdToolApprovalByRequestId,
+  postChatSessionsBySessionIdUserInputByRequestId,
+  putChatSessionsBySessionIdRuntimeMode,
+} from '~/api-gen/sdk.gen'
+import { getServerUrl } from '~/lib/electron'
+import { cradleFetch } from '~/lib/server-credential'
+
+import type { ChatContextPart } from '../context/chat-context-parts'
+
+export type ChatThinkingEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
+export type ChatContinuationMode = 'queue' | 'steer'
+
+export interface ChatResponseRequestBody {
+  text: string
+  files?: FileUIPart[]
+  contextParts?: ChatContextPart[]
+  messages?: UIMessage[]
+  providerTargetId?: string
+  modelId?: string | null
+  thinkingEffort?: ChatThinkingEffort
+  runtimeSettings?: RuntimeSettingsPatch
+  reviewTarget?: RuntimeReviewTarget
+}
+
+export interface ChatQuickQuestionRequestBody {
+  question: string
+}
+
+export type ChatQueueMode = 'queue'
+export type ChatQueueItemStatus = 'pending' | 'running' | 'cancelled' | 'completed' | 'failed'
+export type RuntimeSettingsValue = string | number | boolean
+export type RuntimeSettings = Record<string, RuntimeSettingsValue>
+export type RuntimeSettingsPatchValue = RuntimeSettingsValue | null
+export type RuntimeSettingsPatch = Record<string, RuntimeSettingsPatchValue | undefined>
+export type RuntimeSettingsPayload = Record<string, RuntimeSettingsPatchValue>
+
+export interface RuntimeTurnSettingsPatch {
+  model?: string | null
+  effort?: ChatThinkingEffort | null
+  summary?: 'auto' | 'concise' | 'detailed' | 'none' | null
+  serviceTier?: string | null
+}
+
+export interface ChatQueueItem {
+  id: string
+  sessionId: string
+  mode: ChatQueueMode
+  status: ChatQueueItemStatus
+  text: string
+  files: FileUIPart[]
+  contextParts: ChatContextPart[]
+  providerTargetId: string | null
+  modelId: string | null
+  thinkingEffort: ChatThinkingEffort | null
+  runtimeSettings: RuntimeSettings
+  position: number
+  sourceRunId: string | null
+  startedRunId: string | null
+  errorText: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+export type ChatResponseRequestPayload = Omit<ChatResponseRequestBody, 'runtimeSettings'> & {
+  runtimeSettings?: RuntimeSettingsPayload
+}
+
+export interface ChatQueueListResponse {
+  items: ChatQueueItem[]
+}
+
+export interface ChatSteerTurnSteeredResponse {
+  mode: 'steered'
+  ok: true
+  sessionId: string
+  runId: string
+  sourceMessageId: string
+  message: UIMessage
+}
+
+export interface ChatSteerTurnQueuedResponse {
+  mode: 'queued'
+  ok: true
+  sessionId: string
+  queueItem: ChatQueueItem
+}
+
+/**
+ * The server decides (based on the target runtime's `steer` capability and whether a matching
+ * active run exists) whether the request is live-steered or queued. Callers branch on `mode`
+ * rather than catching a fallback-specific error code.
+ */
+export type ChatSteerTurnResponse = ChatSteerTurnSteeredResponse | ChatSteerTurnQueuedResponse
+
+export interface PlanImplementationApprovalResult {
+  message: UIMessage
+}
+
+export interface SideChatResult {
+  sideConversationId: string
+  parentSessionId: string
+  runtimeKind: string
+  providerTargetId: string | null
+  providerSessionId: string | null
+  title: string
+  expiresAt: number
+}
+
+export interface BangCommandResult {
+  command: string
+  stdout: string
+  stderr: string
+  exitCode: number | null
+  durationMs: number
+  timedOut: boolean
+  truncated: boolean
+  userMessageId: string
+  resultMessageId: string
+  userMessage: UIMessage
+  resultMessage: UIMessage
+}
+
+export type ChatQueueEnqueueBody = ChatResponseRequestBody
+export interface ChatSteerBody {
+  text: string
+  files?: FileUIPart[]
+  contextParts?: ChatContextPart[]
+  providerTargetId?: string
+}
+
+const ChatThinkingEffortSchema = z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
+const ChatRuntimeSettingsSchema = z.record(
+  z.string(),
+  z.union([z.string(), z.number(), z.boolean()]),
+).default({})
+const ChatQueueItemSchema = z.object({
+  id: z.string(),
+  sessionId: z.string(),
+  mode: z.literal('queue'),
+  status: z.enum(['pending', 'running', 'cancelled', 'completed', 'failed']),
+  text: z.string(),
+  files: z.array(z.unknown()).default([]),
+  contextParts: z.array(z.unknown()).default([]),
+  providerTargetId: z.string().nullable(),
+  modelId: z.string().nullable(),
+  thinkingEffort: ChatThinkingEffortSchema.nullable().catch(null),
+  runtimeSettings: ChatRuntimeSettingsSchema,
+  position: z.number(),
+  sourceRunId: z.string().nullable(),
+  startedRunId: z.string().nullable(),
+  errorText: z.string().nullable(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+}).transform(item => ({
+  ...item,
+  files: item.files as FileUIPart[],
+  contextParts: item.contextParts as ChatContextPart[],
+}))
+const ChatQueueListResponseSchema = z.object({
+  items: z.array(ChatQueueItemSchema),
+})
+const ChatSteerTurnSteeredResponseSchema = z.object({
+  mode: z.literal('steered'),
+  ok: z.literal(true),
+  sessionId: z.string(),
+  runId: z.string(),
+  sourceMessageId: z.string(),
+  message: z.unknown(),
+}).transform(item => ({
+  ...item,
+  message: item.message as UIMessage,
+}))
+const ChatSteerTurnQueuedResponseSchema = z.object({
+  mode: z.literal('queued'),
+  ok: z.literal(true),
+  sessionId: z.string(),
+  queueItem: ChatQueueItemSchema,
+})
+const ChatSteerTurnResponseSchema = z.union([
+  ChatSteerTurnSteeredResponseSchema,
+  ChatSteerTurnQueuedResponseSchema,
+])
+const PlanImplementationApprovalResponseSchema = z.object({
+  message: z.unknown(),
+}).transform(item => ({
+  message: item.message as UIMessage,
+}))
+
+function parseChatQueueItem(value: unknown): ChatQueueItem {
+  return ChatQueueItemSchema.parse(value) satisfies ChatQueueItem
+}
+
+function parseChatQueueListResponse(value: unknown): ChatQueueListResponse {
+  return ChatQueueListResponseSchema.parse(value) satisfies ChatQueueListResponse
+}
+
+function parseChatSteerTurnResponse(value: unknown): ChatSteerTurnResponse {
+  return ChatSteerTurnResponseSchema.parse(value) satisfies ChatSteerTurnResponse
+}
+
+function parsePlanImplementationApprovalResponse(value: unknown): PlanImplementationApprovalResult {
+  return PlanImplementationApprovalResponseSchema.parse(value) satisfies PlanImplementationApprovalResult
+}
+
+function stringifySdkError(error: unknown): string {
+  if (typeof error === 'string') {
+    return error
+  }
+  try {
+    return JSON.stringify(error)
+  }
+  catch {
+    return String(error)
+  }
+}
+
+function throwSdkCommandError(prefix: string, response: Response | undefined, error: unknown): never {
+  const bodyText = stringifySdkError(error)
+  throw Object.assign(
+    new Error(`${prefix}: ${response?.status ?? 'unknown'} ${bodyText}`),
+    {
+      bodyText,
+      code: readJsonErrorCodeFromText(bodyText),
+      status: response?.status,
+    },
+  )
+}
+
+function readSdkData<T>(
+  result: { data?: T, error?: unknown, response?: Response },
+  errorPrefix: string,
+): T {
+  if (result.error || result.data === undefined) {
+    throwSdkCommandError(errorPrefix, result.response, result.error)
+  }
+  return result.data
+}
+
+export function readJsonErrorCodeFromText(text: string): string | null {
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start === -1 || end < start) {
+    return null
+  }
+
+  try {
+    const body = JSON.parse(text.slice(start, end + 1)) as { code?: unknown }
+    return typeof body.code === 'string' ? body.code : null
+  }
+  catch {
+    return null
+  }
+}
+
+export function buildChatResponseRequestBody(
+  body: ChatResponseRequestBody,
+): ChatResponseRequestPayload {
+  return {
+    text: body.text,
+    files: body.files,
+    contextParts: body.contextParts,
+    messages: body.messages,
+    providerTargetId: body.providerTargetId ?? undefined,
+    modelId: body.modelId ?? undefined,
+    thinkingEffort: body.thinkingEffort ?? undefined,
+    runtimeSettings: compactRuntimeSettingsPatch(body.runtimeSettings),
+    reviewTarget: body.reviewTarget,
+  }
+}
+
+export function compactRuntimeSettingsPatch(
+  patch: RuntimeSettingsPatch | null | undefined,
+): RuntimeSettingsPayload | undefined {
+  if (!patch) {
+    return undefined
+  }
+  const compacted: RuntimeSettingsPayload = {}
+  for (const [key, value] of Object.entries(patch)) {
+    if (value !== undefined) {
+      compacted[key] = value
+    }
+  }
+  return Object.keys(compacted).length > 0 ? compacted : undefined
+}
+
+export async function startChatResponse(args: {
+  sessionId: string
+  body: ChatResponseRequestBody
+  signal?: AbortSignal
+}): Promise<Response> {
+  return requestChatRuntimeSse({
+    sessionId: args.sessionId,
+    route: 'response',
+    body: buildChatResponseRequestBody(args.body),
+    signal: args.signal,
+  })
+}
+
+export async function startQuickQuestion(args: {
+  sessionId: string
+  body: ChatQuickQuestionRequestBody
+  signal?: AbortSignal
+}) {
+  return postChatSessionsBySessionIdQuickQuestion({
+    path: { sessionId: args.sessionId },
+    body: args.body,
+    signal: args.signal,
+    // A quick question is a single ephemeral turn. Do not reconnect it as a
+    // new provider request after a transport failure.
+    sseMaxRetryAttempts: 1,
+    onSseError: (error) => {
+      if (args.signal?.aborted) {
+        return
+      }
+      throw error instanceof Error ? error : new Error(String(error))
+    },
+  })
+}
+
+type ChatRuntimeSseRoute = 'response' | 'quick-question'
+type ChatRuntimeSseRequestBody = ChatResponseRequestPayload | ChatQuickQuestionRequestBody
+
+async function requestChatRuntimeSse(args: {
+  sessionId: string
+  route: ChatRuntimeSseRoute
+  body: ChatRuntimeSseRequestBody
+  signal?: AbortSignal
+}): Promise<Response> {
+  return cradleFetch(new URL(`/chat/sessions/${args.sessionId}/${args.route}`, getServerUrl()), {
+    method: 'POST',
+    headers: { 'Accept': 'text/event-stream', 'Content-Type': 'application/json' },
+    body: JSON.stringify(args.body),
+    signal: args.signal,
+  })
+}
+
+export async function subscribeChatSessionStream(args: {
+  sessionId: string
+  signal?: AbortSignal
+}): Promise<Response> {
+  const url = new URL(`/chat/sessions/${args.sessionId}/stream`, getServerUrl())
+  return cradleFetch(url, {
+    method: 'GET',
+    headers: { Accept: 'text/event-stream' },
+    signal: args.signal,
+  })
+}
+
+export async function executeBangCommand(args: {
+  sessionId: string
+  command: string
+  signal?: AbortSignal
+}): Promise<BangCommandResult> {
+  const result = await postChatSessionsBySessionIdBangCommand({
+    path: { sessionId: args.sessionId },
+    body: { command: args.command },
+    signal: args.signal,
+  })
+  return readSdkData(result, 'Failed to execute bang command') as BangCommandResult
+}
+
+export async function persistBangTranscript(args: {
+  sessionId: string
+  transcript: string
+  command?: string
+  durationMs?: number
+  exitCode?: number | null
+  signal?: AbortSignal
+}): Promise<BangCommandResult> {
+  const result = await postChatSessionsBySessionIdBangTranscript({
+    path: { sessionId: args.sessionId },
+    body: {
+      transcript: args.transcript,
+      command: args.command,
+      durationMs: args.durationMs,
+      exitCode: args.exitCode,
+    },
+    signal: args.signal,
+  })
+  return readSdkData(result, 'Failed to persist bang transcript') as BangCommandResult
+}
+
+export async function createSideChat(args: {
+  sessionId: string
+  providerTargetId?: string
+  modelId?: string | null
+  signal?: AbortSignal
+}): Promise<SideChatResult> {
+  const result = await postChatSessionsBySessionIdSideChat({
+    path: { sessionId: args.sessionId },
+    body: {
+      providerTargetId: args.providerTargetId,
+      modelId: args.modelId,
+    },
+    signal: args.signal,
+  })
+  return readSdkData(result, 'Failed to create side chat') as SideChatResult
+}
+
+export async function startSideConversationResponse(args: {
+  sideConversationId: string
+  body: Omit<ChatResponseRequestBody, 'providerTargetId' | 'messages'>
+  signal?: AbortSignal
+}): Promise<Response> {
+  return cradleFetch(new URL(
+    `/chat/side-conversations/${args.sideConversationId}/response`,
+    getServerUrl(),
+  ), {
+    method: 'POST',
+    headers: { 'Accept': 'text/event-stream', 'Content-Type': 'application/json' },
+    body: JSON.stringify(buildChatResponseRequestBody({
+      text: args.body.text,
+      files: args.body.files,
+      contextParts: args.body.contextParts,
+      modelId: args.body.modelId,
+      thinkingEffort: args.body.thinkingEffort,
+      runtimeSettings: args.body.runtimeSettings,
+    })),
+    signal: args.signal,
+  })
+}
+
+export async function releaseSideConversation(sideConversationId: string): Promise<void> {
+  await deleteChatSideConversationsBySideConversationId({
+    path: { sideConversationId },
+  }).catch(() => undefined)
+}
+
+export async function listChatSessionQueue(sessionId: string): Promise<ChatQueueListResponse> {
+  const result = await getChatSessionsBySessionIdQueue({
+    path: { sessionId },
+  })
+  return parseChatQueueListResponse(readSdkData(result, 'Failed to list chat queue'))
+}
+
+export async function enqueueChatSessionQueueItem(args: {
+  sessionId: string
+  body: ChatQueueEnqueueBody
+}): Promise<ChatQueueItem> {
+  const result = await postChatSessionsBySessionIdQueue({
+    path: { sessionId: args.sessionId },
+    body: buildChatResponseRequestBody(args.body),
+  })
+  return parseChatQueueItem(readSdkData(result, 'Failed to enqueue chat continuation'))
+}
+
+export async function steerChatSessionTurn(args: {
+  sessionId: string
+  body: ChatSteerBody
+}): Promise<ChatSteerTurnResponse> {
+  const result = await postChatSessionsBySessionIdSteer({
+    path: { sessionId: args.sessionId },
+    body: {
+      text: args.body.text,
+      files: args.body.files,
+      contextParts: args.body.contextParts,
+      providerTargetId: args.body.providerTargetId ?? undefined,
+    },
+  })
+
+  return parseChatSteerTurnResponse(readSdkData(result, 'Failed to steer chat turn'))
+}
+
+export async function cancelChatSessionQueueItem(args: {
+  sessionId: string
+  queueItemId: string
+}): Promise<ChatQueueItem> {
+  const result = await deleteChatSessionsBySessionIdQueueByQueueItemId({
+    path: { sessionId: args.sessionId, queueItemId: args.queueItemId },
+  })
+  return parseChatQueueItem(readSdkData(result, 'Failed to cancel chat queue item'))
+}
+
+export async function updateChatSessionQueueItem(args: {
+  sessionId: string
+  queueItemId: string
+  body: ChatQueueEnqueueBody
+}): Promise<ChatQueueItem> {
+  const result = await patchChatSessionsBySessionIdQueueByQueueItemId({
+    path: { sessionId: args.sessionId, queueItemId: args.queueItemId },
+    body: buildChatResponseRequestBody(args.body),
+  })
+
+  return parseChatQueueItem(readSdkData(result, 'Failed to update chat queue item'))
+}
+
+export async function reorderChatSessionQueue(args: {
+  sessionId: string
+  queueItemIds: string[]
+}): Promise<ChatQueueListResponse> {
+  const result = await postChatSessionsBySessionIdQueueReorder({
+    path: { sessionId: args.sessionId },
+    body: { queueItemIds: args.queueItemIds },
+  })
+  return parseChatQueueListResponse(readSdkData(result, 'Failed to reorder chat queue'))
+}
+
+export async function cancelChatResponse(sessionId: string): Promise<void> {
+  const result = await postChatSessionsBySessionIdCancel({
+    path: { sessionId },
+  })
+  readSdkData(result, 'Failed to cancel chat response')
+}
+
+export async function submitRuntimeUserInput(args: {
+  sessionId: string
+  requestId: string
+  answers: Record<string, string[]>
+  signal?: AbortSignal
+}): Promise<{ requestId: string, answers: Record<string, string[]> }> {
+  const result = await postChatSessionsBySessionIdUserInputByRequestId({
+    path: { sessionId: args.sessionId, requestId: args.requestId },
+    body: { answers: args.answers },
+    signal: args.signal,
+  })
+  return readSdkData(result, 'Failed to submit runtime user input') as { requestId: string, answers: Record<string, string[]> }
+}
+
+export async function updateRuntimeMode(args: {
+  sessionId: string
+  modeId: string
+  signal?: AbortSignal
+}): Promise<void> {
+  const result = await putChatSessionsBySessionIdRuntimeMode({
+    path: { sessionId: args.sessionId },
+    body: { modeId: args.modeId },
+    signal: args.signal,
+  })
+  readSdkData(result, 'Failed to update runtime mode')
+}
+
+export async function updateRuntimeTurnSettings(args: {
+  sessionId: string
+  settings: RuntimeTurnSettingsPatch
+  signal?: AbortSignal
+}): Promise<'applied' | 'targetUnavailable'> {
+  const result = await patchChatSessionsBySessionIdRuntimeTurnSettings({
+    path: { sessionId: args.sessionId },
+    body: args.settings,
+    signal: args.signal,
+  })
+  const data = readSdkData(result, 'Failed to update active runtime turn settings') as {
+    status: 'applied' | 'targetUnavailable'
+  }
+  return data.status
+}
+
+export async function submitRuntimeToolApproval(args: {
+  sessionId: string
+  requestId: string
+  approved: boolean
+  reason?: string
+  selectedOptionId?: string
+  signal?: AbortSignal
+}): Promise<{ requestId: string, approved: boolean, reason?: string }> {
+  const result = await postChatSessionsBySessionIdToolApprovalByRequestId({
+    path: { sessionId: args.sessionId, requestId: args.requestId },
+    body: {
+      approved: args.approved,
+      ...(args.reason ? { reason: args.reason } : {}),
+      ...(args.selectedOptionId ? { selectedOptionId: args.selectedOptionId } : {}),
+    },
+    signal: args.signal,
+  })
+  return readSdkData(result, 'Failed to submit runtime tool approval')
+}
+
+export async function resolvePlanImplementationApproval(args: {
+  sessionId: string
+  messageId: string
+  approvalId: string
+  approved: boolean
+  signal?: AbortSignal
+}): Promise<PlanImplementationApprovalResult> {
+  const result = await postChatSessionsBySessionIdMessagesByMessageIdPlanImplementationApproval({
+    path: { sessionId: args.sessionId, messageId: args.messageId },
+    body: {
+      approvalId: args.approvalId,
+      approved: args.approved,
+    },
+    signal: args.signal,
+  })
+  return parsePlanImplementationApprovalResponse(readSdkData(result, 'Failed to resolve plan implementation approval'))
+}
