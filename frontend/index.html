@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Nexus Remote Agent — Cross-Device Command Bridge</title>
+  
+  <!-- PWA Metadata -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#020617">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Nexus">
+
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Google Fonts Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            brand: {
+              400: '#34d399',
+              500: '#10b981',
+              600: '#059669',
+            },
+            nexus: {
+              bg: '#020617',
+              surface: '#0f172a',
+              card: '#131e33',
+              border: '#1e293b',
+              accent: '#38bdf8',
+            }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-nexus-bg text-slate-100 min-h-screen font-sans selection:bg-brand-500 selection:text-black">
+
+  <!-- TOP HEADER / DEVICE FLEET STRIP -->
+  <header class="sticky top-0 z-40 backdrop-blur-xl bg-nexus-surface/80 border-b border-nexus-border px-4 lg:px-8 py-3 transition-all">
+    <div class="max-w-7xl mx-auto flex items-center justify-between gap-3">
+      
+      <!-- Brand & Title -->
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-500 via-cyan-500 to-indigo-600 p-[1.5px] shadow-lg shadow-emerald-500/20">
+          <div class="w-full h-full bg-nexus-bg rounded-[10px] flex items-center justify-center">
+            <i data-lucide="cpu" class="w-4 h-4 text-emerald-400"></i>
+          </div>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="font-bold text-sm md:text-base tracking-tight bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
+              Nexus Agent
+            </h1>
+            <span class="text-[9px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+              Cross-Device
+            </span>
+          </div>
+          <p class="text-[11px] text-slate-400 hidden sm:block">Web • Desktop • Mobile (Termux)</p>
+        </div>
+      </div>
+
+      <!-- Ecosystem Micro-Frontend Nav Links -->
+      <nav class="hidden md:flex items-center gap-3.5 text-xs font-mono text-slate-400">
+        <a href="/landing/" class="hover:text-emerald-400 transition-colors flex items-center gap-1"><i data-lucide="home" class="w-3.5 h-3.5"></i> Portal</a>
+        <a href="/auth/" class="hover:text-cyan-400 transition-colors flex items-center gap-1"><i data-lucide="key" class="w-3.5 h-3.5"></i> Auth</a>
+        <a href="/status/" class="hover:text-emerald-400 transition-colors flex items-center gap-1"><i data-lucide="activity" class="w-3.5 h-3.5"></i> Radar</a>
+        <a href="/admin/" class="hover:text-rose-400 transition-colors flex items-center gap-1 text-rose-400/90"><i data-lucide="shield" class="w-3.5 h-3.5"></i> Admin HQ</a>
+      </nav>
+
+      <!-- Live Devices Fleet Status -->
+      <div class="flex items-center gap-2 sm:gap-3">
+        <!-- Desktop Badge -->
+        <div id="desktopDeviceBadge" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900 border border-slate-800 text-[11px]">
+          <i data-lucide="monitor" class="w-3.5 h-3.5 text-slate-400"></i>
+          <span id="desktopDot" class="w-2 h-2 rounded-full bg-slate-600"></span>
+          <span id="desktopText" class="text-slate-400 font-medium hidden md:inline">PC: Off</span>
+        </div>
+
+        <!-- Mobile Badge -->
+        <div id="mobileDeviceBadge" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900 border border-slate-800 text-[11px]">
+          <i data-lucide="smartphone" class="w-3.5 h-3.5 text-slate-400"></i>
+          <span id="mobileDot" class="w-2 h-2 rounded-full bg-slate-600"></span>
+          <span id="mobileBatteryText" class="text-slate-400 font-medium hidden md:inline">Phone: Off</span>
+        </div>
+
+        <!-- Settings Trigger -->
+        <button id="openSettingsBtn" class="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-nexus-border text-slate-300 hover:text-white transition-colors" title="Bridge Settings">
+          <i data-lucide="settings" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- MAIN DASHBOARD -->
+  <main class="max-w-7xl mx-auto px-4 lg:px-8 py-5 space-y-5">
+
+    <!-- METRICS & ARCHITECTURE STRIP -->
+    <section class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+      <div class="p-3 rounded-xl bg-nexus-surface/60 border border-nexus-border flex items-center gap-2.5">
+        <div class="p-1.5 rounded-lg bg-orange-500/10 text-orange-400 border border-orange-500/20">
+          <i data-lucide="database" class="w-3.5 h-3.5"></i>
+        </div>
+        <div>
+          <div class="text-[10px] text-slate-400">Edge Database</div>
+          <div class="font-semibold text-white">Cloudflare D1</div>
+        </div>
+      </div>
+
+      <div class="p-3 rounded-xl bg-nexus-surface/60 border border-nexus-border flex items-center gap-2.5">
+        <div class="p-1.5 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20">
+          <i data-lucide="zap" class="w-3.5 h-3.5"></i>
+        </div>
+        <div>
+          <div class="text-[10px] text-slate-400">GPU Compute</div>
+          <div class="font-semibold text-white">Modal T4 (Whisper)</div>
+        </div>
+      </div>
+
+      <div class="p-3 rounded-xl bg-nexus-surface/60 border border-nexus-border flex items-center gap-2.5">
+        <div class="p-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+          <i data-lucide="hard-drive" class="w-3.5 h-3.5"></i>
+        </div>
+        <div>
+          <div class="text-[10px] text-slate-400">Media & Blobs</div>
+          <div class="font-semibold text-white">Cloudflare R2 ($0 Egress)</div>
+        </div>
+      </div>
+
+      <div class="p-3 rounded-xl bg-nexus-surface/60 border border-nexus-border flex items-center gap-2.5">
+        <div class="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+          <i data-lucide="shield-check" class="w-3.5 h-3.5"></i>
+        </div>
+        <div>
+          <div class="text-[10px] text-slate-400">Subscription Cost</div>
+          <div class="font-semibold text-emerald-400">$0.00 (Zero Card)</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- MISSION COMMAND CENTER -->
+    <section class="rounded-2xl bg-gradient-to-b from-nexus-surface/90 to-nexus-card/90 border border-nexus-border p-4 lg:p-6 shadow-2xl backdrop-blur-md relative overflow-hidden">
+      
+      <!-- Subtle ambient glow -->
+      <div class="absolute -top-24 -right-24 w-60 h-60 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div>
+      <div class="absolute -bottom-24 -left-24 w-60 h-60 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none"></div>
+
+      <div class="relative z-10 space-y-4">
+        
+        <!-- Controls Header: Target Device & Command Type -->
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+          
+          <!-- Target Device Selector -->
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Target:</span>
+            <div class="flex items-center p-0.5 rounded-xl bg-slate-900 border border-slate-800 text-xs">
+              <button class="target-chip active px-3 py-1 rounded-lg font-medium transition-all" data-target="DESKTOP">
+                <i data-lucide="monitor" class="w-3 h-3 inline mr-1"></i> Desktop
+              </button>
+              <button class="target-chip px-3 py-1 rounded-lg font-medium text-slate-400 hover:text-white transition-all" data-target="MOBILE">
+                <i data-lucide="smartphone" class="w-3 h-3 inline mr-1"></i> Mobile
+              </button>
+              <button class="target-chip px-3 py-1 rounded-lg font-medium text-slate-400 hover:text-white transition-all" data-target="ALL">
+                <i data-lucide="network" class="w-3 h-3 inline mr-1"></i> All
+              </button>
+            </div>
+          </div>
+
+          <!-- Command Mode Tabs -->
+          <div class="flex items-center p-0.5 rounded-xl bg-slate-900 border border-slate-800 text-xs">
+            <button class="cmd-tab-btn active px-3 py-1 rounded-lg font-medium transition-all" data-type="VOICE_PROMPT">
+              Voice / AI
+            </button>
+            <button class="cmd-tab-btn px-3 py-1 rounded-lg font-medium text-slate-400 hover:text-white transition-all" data-type="TERMINAL_EXEC">
+              Shell
+            </button>
+            <button class="cmd-tab-btn px-3 py-1 rounded-lg font-medium text-slate-400 hover:text-white transition-all" data-type="DESKTOP_GUI">
+              GUI / Hotkey
+            </button>
+            <button class="cmd-tab-btn px-3 py-1 rounded-lg font-medium text-slate-400 hover:text-white transition-all" data-type="MOBILE_ACTION">
+              Termux
+            </button>
+          </div>
+
+        </div>
+
+        <!-- Quick Action Chips -->
+        <div class="flex flex-wrap items-center gap-1.5 text-xs">
+          <span class="text-slate-500 font-medium mr-1 text-[11px]">Presets:</span>
+          <button class="quick-chip px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700/60" data-target="DESKTOP" data-type="TERMINAL_EXEC" data-cmd="git status">
+            PC: git status
+          </button>
+          <button class="quick-chip px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700/60" data-target="DESKTOP" data-type="DESKTOP_GUI" data-cmd="Capture screenshot">
+            PC: 📸 Screenshot
+          </button>
+          <button class="quick-chip px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700/60" data-target="MOBILE" data-type="MOBILE_ACTION" data-cmd="Vibrate phone and notify task completed">
+            Phone: Vibrate & Alert
+          </button>
+          <button class="quick-chip px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700/60" data-target="MOBILE" data-type="MOBILE_ACTION" data-cmd="Check battery status">
+            Phone: 🔋 Battery
+          </button>
+        </div>
+
+        <!-- Input Box & Web Audio Recorder -->
+        <div class="relative rounded-xl border border-slate-700/80 bg-slate-950/70 focus-within:border-emerald-500/80 focus-within:ring-1 focus-within:ring-emerald-500/50 transition-all p-3 space-y-3">
+          
+          <textarea 
+            id="commandInput" 
+            rows="3" 
+            placeholder="Enter instructions (e.g. 'Open VS Code and check git status', 'Vibrate phone and notify', or hold mic)..."
+            class="w-full bg-transparent border-0 outline-none text-slate-100 placeholder-slate-500 text-xs sm:text-sm font-mono resize-none focus:ring-0 leading-relaxed"
+          ></textarea>
+
+          <!-- Audio Waveform Visualizer & Recording Status -->
+          <div id="recordingWaveContainer" class="hidden items-center justify-between bg-slate-900/90 rounded-lg p-2.5 border border-emerald-500/40">
+            <div class="flex items-center gap-3">
+              <span class="relative flex h-3 w-3">
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                <span class="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
+              </span>
+              <span id="recordingTimer" class="font-mono text-xs font-semibold text-red-400">00:00</span>
+              <span id="recordingStatusText" class="text-xs text-slate-300">Recording voice via Web Audio API...</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <canvas id="audioVisualizer" width="120" height="24" class="rounded bg-slate-950/50"></canvas>
+              <button id="cancelRecordBtn" class="px-2 py-1 text-xs text-slate-400 hover:text-white">Cancel</button>
+            </div>
+          </div>
+
+          <!-- Bottom Action Row -->
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+            
+            <div class="flex items-center gap-3">
+              <!-- Voice Microphone Button -->
+              <button 
+                id="micBtn" 
+                class="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-emerald-400 transition-all group"
+                title="Click or hold to record audio"
+              >
+                <i data-lucide="mic" id="micIcon" class="w-4 h-4 text-emerald-400 group-hover:scale-110 transition-transform"></i>
+                <span id="micBtnLabel" class="text-xs font-medium">Record Voice</span>
+              </button>
+
+              <!-- Modal GPU AI Decomposer Toggle -->
+              <label class="flex items-center gap-2 cursor-pointer select-none text-xs text-slate-400 hover:text-slate-200">
+                <input type="checkbox" id="dispatchModalToggle" checked class="rounded border-slate-700 bg-slate-900 text-emerald-500 focus:ring-0 w-3.5 h-3.5">
+                <span>Modal GPU Planner (T4)</span>
+              </label>
+            </div>
+
+            <!-- Submit Task Button -->
+            <button 
+              id="sendTaskBtn" 
+              class="flex items-center justify-center gap-2 px-5 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-semibold text-xs tracking-wide shadow-lg shadow-emerald-500/20 active:scale-95 transition-all disabled:opacity-50"
+            >
+              <i data-lucide="send" class="w-3.5 h-3.5"></i>
+              <span>Dispatch Task</span>
+            </button>
+
+          </div>
+
+        </div>
+
+      </div>
+    </section>
+
+    <!-- LIVE TASK STREAM -->
+    <section class="space-y-3">
+      
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <i data-lucide="activity" class="w-4 h-4 text-cyan-400"></i>
+          <h2 class="font-semibold text-xs sm:text-sm text-slate-200 uppercase tracking-wider">Live Task Stream</h2>
+          <span id="tasksCounter" class="text-xs font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">0</span>
+        </div>
+
+        <button id="manualRefreshBtn" class="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white" title="Refresh">
+          <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+        </button>
+      </div>
+
+      <!-- Task Cards Container -->
+      <div id="tasksListContainer" class="space-y-3">
+        <div class="p-8 text-center text-slate-500 rounded-xl bg-slate-900/40 border border-slate-800">
+          <i data-lucide="inbox" class="w-8 h-8 mx-auto mb-2 opacity-50"></i>
+          <p class="text-xs sm:text-sm">Connecting to Cloudflare D1 task queue...</p>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- SETTINGS MODAL -->
+  <div id="settingsModal" class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm hidden items-center justify-center p-4">
+    <div class="w-full max-w-xl max-h-[90vh] flex flex-col rounded-2xl bg-nexus-surface border border-nexus-border p-5 sm:p-6 shadow-2xl">
+      
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3 shrink-0">
+        <div class="flex items-center gap-2">
+          <i data-lucide="sliders" class="w-5 h-5 text-emerald-400"></i>
+          <h3 class="font-bold text-sm sm:text-base text-white">Bridge Configuration</h3>
+        </div>
+        <button id="closeSettingsBtn" class="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <div class="overflow-y-auto space-y-4 text-xs pr-1.5 my-3 flex-1">
+        
+        <!-- Standard Bridge Settings -->
+        <div class="space-y-3">
+          <h4 class="font-semibold text-slate-200 text-xs uppercase tracking-wider flex items-center gap-1.5">
+            <i data-lucide="radio" class="w-3.5 h-3.5 text-cyan-400"></i> Edge & Cloud Connection
+          </h4>
+
+          <div>
+            <label class="block font-medium text-slate-300 mb-1">Cloudflare Edge API URL</label>
+            <input type="text" id="cfgApiUrl" placeholder="/api" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 font-mono text-xs focus:border-emerald-500 focus:outline-none">
+          </div>
+
+          <div>
+            <label class="block font-medium text-slate-300 mb-1">Modal Labs GPU Brain Endpoint (Optional Fallback)</label>
+            <input type="text" id="cfgModalUrl" placeholder="https://<username>--nexus-ai-core-fastapi-app.modal.run" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 font-mono text-xs focus:border-purple-500 focus:outline-none">
+          </div>
+
+          <div>
+            <label class="block font-medium text-slate-300 mb-1">Secret Auth Token (Optional Bearer Key)</label>
+            <input type="password" id="cfgAuthSecret" placeholder="NEXUS_SECRET_KEY" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 font-mono text-xs focus:border-emerald-500 focus:outline-none">
+          </div>
+
+          <div>
+            <label class="block font-medium text-slate-300 mb-1">Task Polling Frequency (ms)</label>
+            <input type="number" id="cfgPollInterval" value="2500" min="1000" step="500" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 font-mono text-xs focus:border-emerald-500 focus:outline-none">
+          </div>
+        </div>
+
+        <!-- Developer Mode Section -->
+        <div class="border-t border-slate-800/80 pt-4 space-y-3">
+          
+          <div class="flex items-center justify-between p-3 rounded-xl bg-slate-900/80 border border-slate-800">
+            <div class="space-y-0.5">
+              <div class="flex items-center gap-2">
+                <span class="font-bold text-slate-100 text-xs">Developer Mode</span>
+                <span id="devModeStatusBadge" class="text-[9px] px-1.5 py-0.2 rounded-full font-mono bg-slate-800 text-slate-400 border border-slate-700">
+                  STANDARD
+                </span>
+              </div>
+              <p class="text-[11px] text-slate-400">Bring-Your-Own-Key or local engines (Ollama, Edge0, Gemini, Groq)</p>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input type="checkbox" id="devModeToggle" class="sr-only peer">
+              <div class="w-10 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+            </label>
+          </div>
+
+          <!-- Collapsible Developer Mode Body -->
+          <div id="devModeContent" class="hidden space-y-3 p-3.5 rounded-xl bg-slate-950/60 border border-slate-800/90">
+            
+            <div class="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-300 flex items-start gap-2">
+              <i data-lucide="shield" class="w-4 h-4 shrink-0 text-emerald-400 mt-0.5"></i>
+              <span>Your keys and custom endpoints are saved strictly in your browser (<code>localStorage</code>). They are never transmitted or stored in Cloudflare D1.</span>
+            </div>
+
+            <!-- Provider Selection -->
+            <div>
+              <label class="block font-semibold text-slate-300 mb-1">AI Provider</label>
+              <select id="devProviderSelect" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-xs focus:border-emerald-500 focus:outline-none">
+                <option value="edge">Cloudflare Workers AI (Zero-Card Free Tier, Default)</option>
+                <option value="gemini">Google Gemini (Interactions API)</option>
+                <option value="groq">Groq Cloud (Ultra-Fast Llama-3.3 + Whisper)</option>
+                <option value="openai">OpenAI / OpenRouter</option>
+                <option value="custom">Local Endpoint (Ollama, Edge0 MoE, LM Studio)</option>
+              </select>
+            </div>
+
+            <!-- Custom API Key -->
+            <div id="devApiKeyRow">
+              <label class="block font-medium text-slate-300 mb-1">Provider API Key</label>
+              <div class="relative">
+                <input type="password" id="devApiKey" placeholder="sk-..." class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 font-mono text-xs focus:border-emerald-500 focus:outline-none pr-9">
+                <button type="button" id="toggleApiKeyVisibility" class="absolute right-2.5 top-2 text-slate-400 hover:text-white">
+                  <i data-lucide="eye" id="toggleApiKeyIcon" class="w-3.5 h-3.5"></i>
+                </button>
+              </div>
+            </div>
+
+            <!-- Base URL (for custom/local or custom proxies) -->
+            <div id="devBaseUrlRow" class="hidden">
+              <label class="block font-medium text-slate-300 mb-1">Base URL (OpenAI-Compatible Endpoint)</label>
+              <input type="text" id="devBaseUrl" placeholder="http://localhost:11434/v1" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 font-mono text-xs focus:border-emerald-500 focus:outline-none">
+              <p class="text-[10px] text-slate-500 mt-1">E.g., <code>http://localhost:11434/v1</code> for Ollama, or <code>http://localhost:8080/v1</code> for local Edge0</p>
+            </div>
+
+            <!-- Model Names -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div>
+                <label class="block font-medium text-slate-300 mb-1">Chat / Planning Model</label>
+                <input type="text" id="devModelName" placeholder="Default for provider" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-200 font-mono text-xs focus:border-emerald-500 focus:outline-none">
+              </div>
+              <div>
+                <label class="block font-medium text-slate-300 mb-1">STT Whisper Model</label>
+                <input type="text" id="devSttModelName" placeholder="Default for provider" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-200 font-mono text-xs focus:border-emerald-500 focus:outline-none">
+              </div>
+            </div>
+
+            <!-- Execution Engines Allowed for Planning -->
+            <div class="pt-2 border-t border-slate-800">
+              <label class="block font-semibold text-slate-300 mb-1.5">Enabled Local Execution Engines</label>
+              <div class="grid grid-cols-2 gap-2 text-[11px]">
+                <label class="flex items-center gap-2 p-2 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer select-none">
+                  <input type="checkbox" id="devEngineShell" checked class="rounded border-slate-700 bg-slate-950 text-emerald-500 focus:ring-0">
+                  <span>Shell / Open Interpreter</span>
+                </label>
+                <label class="flex items-center gap-2 p-2 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer select-none">
+                  <input type="checkbox" id="devEngineUI" class="rounded border-slate-700 bg-slate-950 text-emerald-500 focus:ring-0">
+                  <span>Win32 UI / Microsoft UFO</span>
+                </label>
+                <label class="flex items-center gap-2 p-2 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer select-none">
+                  <input type="checkbox" id="devEngineBrowser" class="rounded border-slate-700 bg-slate-950 text-emerald-500 focus:ring-0">
+                  <span>Browser-Use (Web)</span>
+                </label>
+                <label class="flex items-center gap-2 p-2 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer select-none">
+                  <input type="checkbox" id="devEngineAndroid" class="rounded border-slate-700 bg-slate-950 text-emerald-500 focus:ring-0">
+                  <span>Android ADB / WSA</span>
+                </label>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+
+      <div class="flex items-center justify-end gap-3 pt-3 border-t border-slate-800 shrink-0">
+        <button id="resetSettingsBtn" class="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium">Reset</button>
+        <button id="saveSettingsBtn" class="px-5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-semibold">Save Settings</button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- TOAST CONTAINER -->
+  <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
