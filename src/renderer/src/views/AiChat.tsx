@@ -391,7 +391,7 @@ export default function AiChatView({
   return (
     <div className="h-full w-full overflow-hidden p-4 text-zinc-100">
       <div className="grid h-full min-h-0 grid-cols-12 gap-3">
-        <aside className="col-span-12 flex min-h-0 flex-col gap-4 overflow-hidden rounded-2xl border border-emerald-500/15 bg-black/55 p-4 lg:col-span-3">
+        <aside className="col-span-12 flex min-h-0 flex-col gap-4 overflow-y-auto pr-2 scrollbar-small rounded-2xl border border-emerald-500/15 bg-black/55 p-4 lg:col-span-3">
           <div className="flex items-center gap-3 border-b border-white/10 pb-4">
             <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3 text-emerald-300">
               <RiRobot2Line size={24} />
