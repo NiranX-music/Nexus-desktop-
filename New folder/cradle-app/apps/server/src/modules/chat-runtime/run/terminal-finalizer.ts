@@ -1,0 +1,267 @@
+import type { UIMessageChunk } from 'ai'
+
+import { evaluateIsolationBoundary } from '../../worktree/service'
+import {
+  commitPreparedSessionEventsWithProjection,
+  readRunStopReason,
+  readRunTerminalEventType,
+} from '../es/commands'
+import { toDurableMessagePayload } from '../message-durable-payload'
+import type { ActiveRun, TerminalChatMessageStatus } from '../run-registry'
+import { attachBinding } from '../runtime-session-context'
+import { deleteRunStreamCheckpoint } from '../stream/checkpoint-store'
+import { isChatStreamTraceEnabled, recordChatStreamTrace } from '../stream-trace'
+import {
+  annotateRunResultMessage,
+  normalizeMessageSnapshot,
+} from '../ui-message'
+import {
+  flushFinalMessageProjection,
+  flushProjectedToolInputs,
+  projectFinalMessageChunk,
+} from './final-message-projection'
+import type { ChatRuntimeProfile } from './profile'
+import type { RunWriteFence } from './run-write-fence'
+import { readRunWriteFence } from './run-write-fence'
+import type { ChatMessageStatus } from './stream-chunks'
+import { readTerminalStatus } from './stream-chunks'
+
+export interface TerminalRunFinalizerDeps {
+  stream: {
+    publishRunStartChunk: (activeRun: ActiveRun) => void
+    flushPendingRunDelta: (activeRun: ActiveRun) => void
+    publishUIMessageChunk: (activeRun: ActiveRun, chunk: UIMessageChunk, terminal: boolean) => void
+  }
+  error: (message: string, payload: Record<string, unknown>) => void
+}
+
+export interface PersistedTerminalChunk {
+  durableTerminal: boolean
+  notificationChunk: UIMessageChunk
+}
+
+export function createTerminalRunFinalizer(deps: TerminalRunFinalizerDeps) {
+  async function persistTerminalChunk(
+    activeRun: ActiveRun,
+    chunk: UIMessageChunk,
+    profile?: ChatRuntimeProfile,
+  ): Promise<PersistedTerminalChunk> {
+    deps.stream.publishRunStartChunk(activeRun)
+    deps.stream.flushPendingRunDelta(activeRun)
+    const status = readTerminalStatus(chunk)
+    const errorText = chunk.type === 'error' ? chunk.errorText : null
+    return finalizeActiveRun(activeRun, status, errorText, chunk, profile)
+  }
+
+  async function finalizeActiveRun(
+    activeRun: ActiveRun,
+    status: ChatMessageStatus,
+    errorText: string | null,
+    terminalChunk: UIMessageChunk,
+    profile?: ChatRuntimeProfile,
+  ): Promise<PersistedTerminalChunk> {
+    if (status === 'streaming') {
+      return { durableTerminal: false, notificationChunk: terminalChunk }
+    }
+    if (activeRun.terminalStatus) {
+      return {
+        durableTerminal: true,
+        notificationChunk: terminalChunkForStatus(activeRun.terminalStatus),
+      }
+    }
+
+    const fence = readRunWriteFence(activeRun.runId)
+    if (fence.status !== 'streaming') {
+      if (fence.status !== 'missing') {
+        activeRun.terminalStatus = fence.status
+        activeRun.terminalAtMs = fence.finishedAt === null ? undefined : fence.finishedAt * 1000
+      }
+      return {
+        durableTerminal: fence.status !== 'missing',
+        notificationChunk: terminalChunkForFence(fence),
+      }
+    }
+
+    if (profile) {
+      profile.finalizeStartedAtMs = performance.now()
+    }
+    projectFinalMessageChunk(activeRun, terminalChunk)
+    flushFinalMessageProjection(activeRun)
+    await flushProjectedToolInputs(activeRun)
+
+    const bindingId = recordTerminalRunBindingId(activeRun)
+    const snapshotResult = await persistTerminalMessageSnapshot(
+      activeRun,
+      status,
+      errorText,
+      bindingId,
+    )
+    activeRun.terminalAtMs = snapshotResult.terminalAtMs
+    activeRun.terminalStatus = status
+    if (profile) {
+      profile.finalMessageJsonBytes = snapshotResult?.messageJsonBytes ?? null
+    }
+    if (profile) {
+      profile.finalizeFinishedAtMs = performance.now()
+      profile.memoryFinished = profile.enabled ? process.memoryUsage() : null
+    }
+    if (isChatStreamTraceEnabled()) {
+      recordChatStreamTrace({
+        chatSessionId: activeRun.sessionId,
+        runId: activeRun.runId,
+        messageId: activeRun.messageId,
+        runtimeKind: activeRun.runtimeSession.runtimeKind,
+        providerSessionId: activeRun.runtimeSession.providerSessionId,
+        phase:
+          status === 'complete'
+            ? 'run_completed'
+            : status === 'aborted'
+              ? 'run_aborted'
+              : 'run_failed',
+        payload: {
+          status,
+          errorText,
+          message: activeRun.finalMessage,
+        },
+      })
+    }
+    void evaluateIsolationBoundary(activeRun.sessionId).catch((error) => {
+      deps.error('failed to evaluate isolation boundary after run terminal', {
+        sessionId: activeRun.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    })
+    return { durableTerminal: true, notificationChunk: terminalChunk }
+  }
+
+  async function persistTerminalMessageSnapshot(
+    activeRun: ActiveRun,
+    status: TerminalChatMessageStatus,
+    errorText: string | null,
+    bindingId?: string | null,
+  ): Promise<{ messageJsonBytes: number, terminalAtMs: number }> {
+    const terminalAtMs = Date.now()
+    const now = Math.floor(terminalAtMs / 1000)
+    const runStartedAtMs = activeRun.runStartedAtMs ?? activeRun.startedAtSeconds * 1000
+    const totalMs = Math.max(0, terminalAtMs - runStartedAtMs)
+    const annotated = annotateRunResultMessage(
+      normalizeMessageSnapshot(activeRun.finalMessage),
+      {
+        runId: activeRun.runId,
+        durationMs: totalMs,
+        timings: {
+          acceptMs: activeRun.admissionRequestedAtMs === undefined
+            ? null
+            : Math.max(0, runStartedAtMs - activeRun.admissionRequestedAtMs),
+          ttfbMs: activeRun.firstResponseAtMs === undefined
+            ? null
+            : Math.max(0, activeRun.firstResponseAtMs - runStartedAtMs),
+          ttftMs: activeRun.firstTokenAtMs === undefined
+            ? null
+            : Math.max(0, activeRun.firstTokenAtMs - runStartedAtMs),
+          workedMs:
+            activeRun.firstTokenAtMs === undefined
+            || activeRun.finalResponseStartedAtMs === undefined
+              ? null
+              : Math.max(0, activeRun.finalResponseStartedAtMs - activeRun.firstTokenAtMs),
+          totalMs,
+        },
+      },
+    )
+    return await commitPreparedSessionEventsWithProjection(
+      activeRun.sessionId,
+      (tx) => {
+        const durable = toDurableMessagePayload({
+          sessionId: activeRun.sessionId,
+          message: annotated,
+          d: tx,
+        })
+        return {
+          result: {
+            messageJsonBytes: Buffer.byteLength(durable.messageJson),
+            terminalAtMs,
+          },
+          events: [
+            {
+              type: 'AssistantMessageCompleted',
+              payload: {
+                message: {
+                  id: activeRun.messageId,
+                  sessionId: activeRun.sessionId,
+                  content: durable.content,
+                  messageJson: durable.messageJson,
+                  status,
+                  errorText,
+                  updatedAt: now,
+                },
+              },
+            },
+            {
+              type: readRunTerminalEventType(status),
+              payload: {
+                runId: activeRun.runId,
+                sessionId: activeRun.sessionId,
+                queueItemId: activeRun.queueItemId ?? null,
+                ...(bindingId !== undefined ? { bindingId } : {}),
+                status,
+                stopReason: readRunStopReason(status),
+                errorText,
+                finishedAt: now,
+              },
+            },
+          ],
+        }
+      },
+      (tx) => {
+        deleteRunStreamCheckpoint(activeRun.runId, tx)
+      },
+    )
+  }
+
+  return {
+    persistTerminalChunk,
+    publishTerminalNotification: (activeRun: ActiveRun, chunk: UIMessageChunk): void => {
+      deps.stream.publishUIMessageChunk(activeRun, chunk, true)
+    },
+  }
+}
+
+export function terminalChunkForFence(fence: RunWriteFence): UIMessageChunk {
+  switch (fence.status) {
+    case 'streaming':
+      return { type: 'finish', finishReason: 'stop' }
+    case 'missing':
+      return { type: 'error', errorText: 'Chat run is no longer available' }
+    case 'failed':
+      return { type: 'error', errorText: fence.errorText ?? 'Chat run failed' }
+    default:
+      return terminalChunkForStatus(fence.status)
+  }
+}
+
+/** Canonical terminal chunk for a settled run status, independent of any locally-computed chunk. */
+export function terminalChunkForStatus(status: TerminalChatMessageStatus): UIMessageChunk {
+  switch (status) {
+    case 'complete':
+      return { type: 'finish', finishReason: 'stop' }
+    case 'aborted':
+      return { type: 'abort', reason: 'user' }
+    case 'failed':
+      return { type: 'error', errorText: 'Chat run failed' }
+  }
+}
+
+function recordTerminalRunBindingId(activeRun: ActiveRun): string | undefined {
+  try {
+    return attachBinding({
+      sessionId: activeRun.sessionId,
+      providerTargetId: activeRun.providerTargetId,
+      runtimeKind: activeRun.runtimeSession.runtimeKind,
+      runtimeSession: activeRun.runtimeSession,
+      requestedModelId: activeRun.modelId,
+    })?.id
+  }
+ catch {
+    return undefined
+  }
+}
