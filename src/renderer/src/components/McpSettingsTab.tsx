@@ -411,7 +411,7 @@ export default function McpSettingsTab() {
                         No tools exposed or server not yet connected.
                       </p>
                     ) : (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-60 overflow-y-auto pr-1 scrollbar-small">
                         {serverTools.map((t) => (
                           <div
                             key={t.name}
