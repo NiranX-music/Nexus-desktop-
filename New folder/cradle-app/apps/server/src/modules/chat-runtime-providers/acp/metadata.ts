@@ -1,0 +1,54 @@
+import type {
+  ChatRuntimeCapabilities,
+  ChatRuntimeMetadata,
+} from '../../chat-runtime/runtime-provider-types'
+import type { RuntimeKind } from '../../provider-contracts/types'
+
+export const ACP_RUNTIME_KIND = 'acp-chat' as const satisfies RuntimeKind
+
+export const ACP_RUNTIME_METADATA = {
+  label: 'ACP Chat',
+  description: 'Agent Client Protocol runtime',
+  providerKinds: [],
+  providerBinding: 'none',
+  composer: {
+    inputMode: 'rich',
+    modelSelection: 'none',
+    thinking: 'unsupported',
+  },
+  iconKey: 'custom',
+  surfaces: ['chat', 'jarvis'],
+  sortOrder: 40,
+  stability: 'experimental',
+  // No hand-declared `steerTurn` degradation here: ACP has no native steer hook, but the
+  // registry auto-derives a `steer` degradation from `capabilities.steer` (see
+  // chat-runtime-provider-registry.ts), so this would otherwise duplicate/contradict that.
+  degradations: [
+    {
+      capability: 'runtime',
+      status: 'experimental',
+      reason: 'ACP agent implementations vary and unstable protocol capabilities are exposed only when advertised by the connected agent.',
+    },
+    {
+      capability: 'lastTurnRollback',
+      status: 'unsupported',
+      reason: 'ACP session rollback is not mapped into the Chat Runtime contract.',
+    },
+    {
+      capability: 'runtimeSettings',
+      status: 'unsupported',
+      reason: 'ACP config changes are provider-specific and not normalized as runtime settings.',
+    },
+  ],
+} satisfies ChatRuntimeMetadata
+
+export const ACP_RUNTIME_CAPABILITIES = {
+  steer: 'queue-fallback',
+  supportsShellExecution: false,
+  supportsLastTurnRollback: false,
+  supportsRuntimeSettings: false,
+  supportsUiSlotStates: true,
+  supportsDynamicCapabilities: true,
+  supportsTitleGeneration: true,
+  sessionModelSwitch: 'in-session',
+} satisfies ChatRuntimeCapabilities
