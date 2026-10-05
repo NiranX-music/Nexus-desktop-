@@ -1,0 +1,1446 @@
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+import { agents, providerTargets, sessions, workspaces } from '@cradle/db'
+import { eq } from 'drizzle-orm'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import { createServerApp } from '../src/app'
+import { db, shutdownInfra } from '../src/infra'
+import * as AgentInteraction from '../src/modules/agent-interaction-runtime/service'
+import * as Issue from '../src/modules/issue/service'
+import { issueAgentRunTrackingTestHooks } from '../src/modules/issue-agent/service'
+import * as Work from '../src/modules/work/service'
+
+interface AgentSessionView {
+  id: string
+  issueId: string
+  providerTargetId: string
+  agentId: string | null
+  chatSessionId: string | null
+  status: 'created' | 'active' | 'completed' | 'stopped' | 'failed'
+  isCurrentDelegation: boolean
+}
+
+interface DelegationState {
+  issueId: string
+  delegated: boolean
+  providerTargetId: string | null
+  agentId: string | null
+  agentSessionId: string | null
+  chatSessionId: string | null
+}
+
+interface AgentActivityView {
+  id: string
+  type: string
+  content: string
+  signal: string | null
+  signalMetadata: string | null
+}
+
+type ElysiaApp = Awaited<ReturnType<typeof createServerApp>>
+
+function makeTempDir(prefix: string): string {
+  return mkdtempSync(join(tmpdir(), prefix))
+}
+
+function localWorkspaceLocatorJson(path: string): string {
+  return JSON.stringify({ nodeId: 'local', path })
+}
+
+function initializeGitRepository(repositoryPath: string): void {
+  execFileSync('git', ['init'], { cwd: repositoryPath })
+  execFileSync('git', ['config', 'user.email', 'issue-agent-test@example.com'], {
+    cwd: repositoryPath,
+  })
+  execFileSync('git', ['config', 'user.name', 'Issue Agent Test'], { cwd: repositoryPath })
+  execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: repositoryPath })
+  writeFileSync(join(repositoryPath, 'README.md'), '# Issue Agent Test\n')
+  execFileSync('git', ['add', 'README.md'], { cwd: repositoryPath })
+  execFileSync('git', ['commit', '-m', 'Initial commit'], { cwd: repositoryPath })
+}
+
+async function createProfile(app: ElysiaApp) {
+  const credentialRes = await app.handle(
+    new Request('http://localhost/secrets', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'openai-compatible',
+        label: 'Issue Agent Key',
+        secret: 'sk-issue-agent-test',
+      }),
+    }),
+  )
+  const credential = (await credentialRes.json()) as { id: string }
+
+  const profileRes = await app.handle(
+    new Request('http://localhost/profiles/profile-issue-agent', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Mock LLM',
+        providerKind: 'openai-compatible',
+        enabled: true,
+        config: { baseUrl: 'https://example.com/v1', model: 'gpt-4o-mini' },
+        credentialRef: credential.id,
+      }),
+    }),
+  )
+  expect(profileRes.status).toBe(200)
+}
+
+async function createAgent(app: ElysiaApp) {
+  const agentRes = await app.handle(
+    new Request('http://localhost/agents', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Issue Agent',
+        avatarStyle: 'bottts-neutral',
+        avatarSeed: 'issue-agent',
+        providerTargetId: 'profile-issue-agent',
+        runtimeKind: 'standard',
+      }),
+    }),
+  )
+  expect(agentRes.status).toBe(200)
+  return (await agentRes.json()) as { id: string, name: string, providerTargetId: string }
+}
+
+async function createIssue(app: ElysiaApp, workspaceId: string) {
+  const boardRes = await app.handle(
+    new Request('http://localhost/kanban/boards', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workspaceId, name: 'Agent Board' }),
+    }),
+  )
+  expect(boardRes.status).toBe(200)
+
+  const statusesRes = await app.handle(
+    new Request(`http://localhost/issues/statuses?workspaceId=${encodeURIComponent(workspaceId)}`),
+  )
+  const statuses = (await statusesRes.json()) as Array<{ id: string, name: string }>
+  const todoStatusId = statuses.find(status => status.name === 'To Do')?.id
+  expect(todoStatusId).toBeTruthy()
+
+  const issueRes = await app.handle(
+    new Request('http://localhost/issues', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId,
+        title: 'Delegated issue',
+        description: 'Please investigate this server task.',
+        statusId: todoStatusId!,
+        priority: 'high',
+        labels: ['backend'],
+      }),
+    }),
+  )
+  expect(issueRes.status).toBe(200)
+  return (await issueRes.json()) as { id: string, title: string }
+}
+
+async function waitForSessionStatus(
+  app: ElysiaApp,
+  issueId: string,
+  expectedStatus: AgentSessionView['status'],
+): Promise<AgentSessionView[]> {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const response = await app.handle(
+      new Request(`http://localhost/issues/${encodeURIComponent(issueId)}/agent-sessions`),
+    )
+    if (response.status === 200) {
+      const sessions = (await response.json()) as AgentSessionView[]
+      if (sessions[0]?.status === expectedStatus) {
+        return sessions
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  throw new Error(`Timed out waiting for agent session status ${expectedStatus}`)
+}
+
+async function waitForActivitySignal(
+  app: ElysiaApp,
+  agentSessionId: string,
+  expectedSignal: string,
+): Promise<AgentActivityView[]> {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const response = await app.handle(
+      new Request(
+        `http://localhost/issue-agent-sessions/${encodeURIComponent(agentSessionId)}/activities`,
+      ),
+    )
+    if (response.status === 200) {
+      const activities = (await response.json()) as AgentActivityView[]
+      if (activities.some(activity => activity.signal === expectedSignal)) {
+        return activities
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  throw new Error(`Timed out waiting for agent activity signal ${expectedSignal}`)
+}
+
+async function waitForActivityBody(
+  app: ElysiaApp,
+  agentSessionId: string,
+  expectedBody: string,
+): Promise<AgentActivityView[]> {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const response = await app.handle(
+      new Request(
+        `http://localhost/issue-agent-sessions/${encodeURIComponent(agentSessionId)}/activities`,
+      ),
+    )
+    if (response.status === 200) {
+      const activities = (await response.json()) as AgentActivityView[]
+      if (activities.some(activity => JSON.parse(activity.content).body === expectedBody)) {
+        return activities
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  throw new Error(`Timed out waiting for agent activity body ${expectedBody}`)
+}
+
+async function waitForChatQueueItemStatus(
+  app: ElysiaApp,
+  chatSessionId: string,
+  queueItemId: string,
+  expectedStatus: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const response = await app.handle(
+      new Request(`http://localhost/chat/sessions/${encodeURIComponent(chatSessionId)}/queue`),
+    )
+    if (response.status === 200) {
+      const queue = (await response.json()) as {
+        items: Array<{ id: string, status: string }>
+      }
+      if (queue.items.some(item => item.id === queueItemId && item.status === expectedStatus)) {
+        return
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  throw new Error(`Timed out waiting for chat queue item ${queueItemId} status ${expectedStatus}`)
+}
+
+function createChatCompletionResponse(text: string, release?: Promise<void>): Response {
+  const encoder = new TextEncoder()
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            `data: {"id":"chunk-1","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"${text}"},"finish_reason":null}]}\n\n`,
+          ),
+        )
+        const close = () => {
+          controller.enqueue(
+            encoder.encode(
+              'data: {"id":"chunk-2","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}\n\n',
+            ),
+          )
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+          controller.close()
+        }
+        if (release) {
+          void release.then(close)
+          return
+        }
+        close()
+      },
+    }),
+    {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    },
+  )
+}
+
+describe('issue-agent capability', () => {
+  afterEach(() => {
+    issueAgentRunTrackingTestHooks.clearActiveRuns()
+  })
+
+  it('keeps human assignee separate from agent delegation metadata and activity history', async () => {
+    const dataDir = makeTempDir('cradle-data-')
+    const previousDataDir = process.env.CRADLE_DATA_DIR
+    process.env.CRADLE_DATA_DIR = dataDir
+
+    try {
+      await createServerApp()
+      const now = Math.floor(Date.now() / 1000)
+      db()
+        .insert(workspaces)
+        .values({
+          id: 'workspace-delegation-model',
+          name: 'Workspace Delegation Model',
+          locatorJson: localWorkspaceLocatorJson('/tmp/workspace-delegation-model'),
+        })
+        .run()
+      db()
+        .insert(providerTargets)
+        .values({
+          id: 'provider-target-delegation-model',
+          kind: 'manual',
+          providerKind: 'openai-compatible',
+          displayName: 'Delegation Provider',
+          enabled: true,
+        })
+        .run()
+      db()
+        .insert(agents)
+        .values({
+          id: 'agent-delegation-model',
+          name: 'Delegation Agent',
+          avatarStyle: 'bottts-neutral',
+          avatarSeed: 'delegation-agent',
+          providerTargetId: 'provider-target-delegation-model',
+          runtimeKind: 'standard',
+          enabled: true,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .run()
+
+      const issue = Issue.createIssue({
+        workspaceId: 'workspace-delegation-model',
+        title: 'Keep ownership clear',
+      })
+      Issue.updateIssue(issue.id, {
+        assigneeKind: 'user',
+        assigneeId: '__self__',
+      })
+
+      const delegatedIssue = Issue.updateIssueDelegation(issue.id, {
+        agentId: 'agent-delegation-model',
+        providerTargetId: 'provider-target-delegation-model',
+      })
+
+      expect(delegatedIssue).toEqual(
+        expect.objectContaining({
+          assigneeKind: 'user',
+          assigneeId: '__self__',
+          delegateAgentId: 'agent-delegation-model',
+          delegateProviderTargetId: 'provider-target-delegation-model',
+        }),
+      )
+
+      Issue.addComment({
+        issueId: issue.id,
+        content: 'Delegated to Delegation Agent',
+        authorKind: 'system.delegated',
+      })
+
+      expect(Issue.listComments(issue.id)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            authorKind: 'system.delegated',
+            authorId: null,
+            content: 'Delegated to Delegation Agent',
+          }),
+        ]),
+      )
+    }
+ finally {
+      shutdownInfra()
+      rmSync(dataDir, { recursive: true, force: true })
+      if (previousDataDir === undefined) {
+        delete process.env.CRADLE_DATA_DIR
+      }
+ else {
+        process.env.CRADLE_DATA_DIR = previousDataDir
+      }
+    }
+  })
+
+  it('ignores stale run completions without deleting the current tracked run', async () => {
+    const dataDir = makeTempDir('cradle-data-')
+    const previousDataDir = process.env.CRADLE_DATA_DIR
+    process.env.CRADLE_DATA_DIR = dataDir
+
+    try {
+      await createServerApp()
+      const now = Math.floor(Date.now() / 1000)
+      db()
+        .insert(workspaces)
+        .values({
+          id: 'workspace-stale-run',
+          name: 'Workspace Stale Run',
+          locatorJson: localWorkspaceLocatorJson('/tmp/workspace-stale-run'),
+        })
+        .run()
+      db()
+        .insert(providerTargets)
+        .values({
+          id: 'provider-target-stale-run',
+          kind: 'manual',
+          providerKind: 'openai-compatible',
+          displayName: 'Stale Run Provider',
+          enabled: true,
+        })
+        .run()
+      db()
+        .insert(agents)
+        .values({
+          id: 'agent-stale-run',
+          name: 'Stale Run Agent',
+          avatarStyle: 'bottts-neutral',
+          avatarSeed: 'stale-run-agent',
+          providerTargetId: 'provider-target-stale-run',
+          runtimeKind: 'standard',
+          enabled: true,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .run()
+
+      const issue = Issue.createIssue({
+        workspaceId: 'workspace-stale-run',
+        title: 'Ignore stale completion',
+      })
+      const session = AgentInteraction.createSession({
+        issueId: issue.id,
+        providerTargetId: 'provider-target-stale-run',
+        agentId: 'agent-stale-run',
+      })
+      AgentInteraction.updateSessionStatus(session.id, 'active')
+      issueAgentRunTrackingTestHooks.setActiveRun(session.id, {
+        runId: 'current-run',
+        chatSessionId: null,
+        aborted: false,
+      })
+
+      expect(
+        issueAgentRunTrackingTestHooks.settleRunCompletion(session.id, 'stale-run', {
+          status: 'complete',
+          errorText: null,
+        }),
+      ).toBe(false)
+      expect(issueAgentRunTrackingTestHooks.getActiveRun(session.id)).toEqual({
+        runId: 'current-run',
+        chatSessionId: null,
+        aborted: false,
+      })
+      expect(AgentInteraction.getSession(session.id)?.status).toBe('active')
+      expect(AgentInteraction.listActivities(session.id)).toHaveLength(0)
+
+      expect(
+        issueAgentRunTrackingTestHooks.settleRunCompletion(session.id, 'current-run', {
+          status: 'complete',
+          errorText: null,
+        }),
+      ).toBe(true)
+      expect(issueAgentRunTrackingTestHooks.getActiveRun(session.id)).toBeUndefined()
+      expect(AgentInteraction.getSession(session.id)?.status).toBe('completed')
+    }
+ finally {
+      shutdownInfra()
+      rmSync(dataDir, { recursive: true, force: true })
+      if (previousDataDir === undefined) {
+        delete process.env.CRADLE_DATA_DIR
+      }
+ else {
+        process.env.CRADLE_DATA_DIR = previousDataDir
+      }
+    }
+  })
+
+  it('delegates an issue, exposes activities and chat output, supports rerun, and clears delegation', async () => {
+    const dataDir = makeTempDir('cradle-data-')
+    const workspaceRoot = makeTempDir('cradle-workspace-')
+    const previousDataDir = process.env.CRADLE_DATA_DIR
+    const previousSecret = process.env.CRADLE_CREDENTIAL_SECRET
+    process.env.CRADLE_DATA_DIR = dataDir
+    process.env.CRADLE_CREDENTIAL_SECRET = 'issue-agent-secret'
+
+    let completionIndex = 0
+    const completionBodies: string[] = []
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = new Request(input).url
+      if (!url.endsWith('/chat/completions')) {
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      completionBodies.push(String(init?.body ?? ''))
+      completionIndex += 1
+      const responseText
+        = completionIndex === 1 ? 'Hello from delegated run 1' : 'Hello from delegated run 2'
+      const encoder = new TextEncoder()
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                `data: {"id":"chunk-${completionIndex}-1","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"${responseText}"},"finish_reason":null}]}\n\n`,
+              ),
+            )
+            controller.enqueue(
+              encoder.encode(
+                `data: {"id":"chunk-${completionIndex}-2","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}\n\n`,
+              ),
+            )
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+            controller.close()
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        },
+      )
+    })
+
+    let app: Awaited<ReturnType<typeof createServerApp>> | undefined
+
+    try {
+      app = await createServerApp()
+      db()
+        .insert(workspaces)
+        .values({
+          id: 'workspace-issue-agent',
+          name: 'Workspace Issue Agent',
+          locatorJson: localWorkspaceLocatorJson(workspaceRoot),
+        })
+        .run()
+
+      await createProfile(app)
+      const agent = await createAgent(app)
+      const issue = await createIssue(app, 'workspace-issue-agent')
+
+      const saveGlobalRule = await app.handle(
+        new Request('http://localhost/workflow-rules/workspace-issue-agent', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ content: 'global issue-agent rule' }),
+        }),
+      )
+      expect(saveGlobalRule.status).toBe(200)
+
+      const saveAgentRule = await app.handle(
+        new Request('http://localhost/workflow-rules/workspace-issue-agent', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ agentId: agent.id, content: 'agent identity issue-agent rule' }),
+        }),
+      )
+      expect(saveAgentRule.status).toBe(200)
+
+      const saveProviderTargetNamedRule = await app.handle(
+        new Request('http://localhost/workflow-rules/workspace-issue-agent', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            agentId: agent.providerTargetId,
+            content: 'provider target named rule should not load',
+          }),
+        }),
+      )
+      expect(saveProviderTargetNamedRule.status).toBe(200)
+
+      const delegateRes = await app.handle(
+        new Request(`http://localhost/issues/${encodeURIComponent(issue.id)}/delegation`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ agentId: agent.id }),
+        }),
+      )
+      expect(delegateRes.status).toBe(200)
+      const delegatedSession = (await delegateRes.json()) as AgentSessionView
+      expect(delegatedSession.issueId).toBe(issue.id)
+      expect(delegatedSession.providerTargetId).toBe('profile-issue-agent')
+      expect(delegatedSession.agentId).toBe(agent.id)
+
+      const sessionsAfterDelegate = await waitForSessionStatus(app, issue.id, 'completed')
+      expect(sessionsAfterDelegate).toHaveLength(1)
+      expect(sessionsAfterDelegate[0]).toEqual(
+        expect.objectContaining({
+          id: delegatedSession.id,
+          isCurrentDelegation: true,
+          status: 'completed',
+        }),
+      )
+
+      const delegationStateRes = await app.handle(
+        new Request(`http://localhost/issues/${encodeURIComponent(issue.id)}/delegation`),
+      )
+      expect(delegationStateRes.status).toBe(200)
+      const delegationState = (await delegationStateRes.json()) as DelegationState
+      expect(delegationState).toEqual(
+        expect.objectContaining({
+          issueId: issue.id,
+          delegated: true,
+          providerTargetId: 'profile-issue-agent',
+          agentId: agent.id,
+          agentSessionId: delegatedSession.id,
+        }),
+      )
+      expect(delegationState.chatSessionId).toBeTruthy()
+      const chatSession = db()
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, delegationState.chatSessionId!))
+        .get()
+      expect(chatSession?.origin).toBe('cradle-issue')
+
+      const assignedIssueRes = await app.handle(
+        new Request(`http://localhost/issues/${encodeURIComponent(issue.id)}`),
+      )
+      expect(assignedIssueRes.status).toBe(200)
+      expect(await assignedIssueRes.json()).toEqual(
+        expect.objectContaining({
+          assigneeKind: null,
+          assigneeId: null,
+          delegateAgentId: agent.id,
+          delegateProviderTargetId: 'profile-issue-agent',
+        }),
+      )
+
+      const commentsRes = await app.handle(
+        new Request(`http://localhost/issues/${encodeURIComponent(issue.id)}/comments`),
+      )
+      expect(commentsRes.status).toBe(200)
+      expect(await commentsRes.json()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ authorKind: 'system.delegated', authorId: null }),
+        ]),
+      )
+
+      const activitiesRes = await app.handle(
+        new Request(
+          `http://localhost/issue-agent-sessions/${encodeURIComponent(delegatedSession.id)}/activities`,
+        ),
+      )
+      expect(activitiesRes.status).toBe(200)
+      const activities = (await activitiesRes.json()) as AgentActivityView[]
+      expect(activities.map(activity => JSON.parse(activity.content).body)).toEqual(
+        expect.arrayContaining([
+          'Delegated to Issue Agent',
+          'Examining issue...',
+          'Completed work on issue',
+        ]),
+      )
+
+      const genericActivitiesRes = await app.handle(
+        new Request(
+          `http://localhost/agent-sessions/${encodeURIComponent(delegatedSession.id)}/activities`,
+        ),
+      )
+      expect(genericActivitiesRes.status).toBe(200)
+      expect(await genericActivitiesRes.json()).toEqual(activities)
+
+      const messagesRes = await app.handle(
+        new Request(
+          `http://localhost/chat/sessions/${encodeURIComponent(String(delegationState.chatSessionId))}/messages`,
+        ),
+      )
+      expect(messagesRes.status).toBe(200)
+      const { rows: messages } = (await messagesRes.json()) as {
+        revision: number
+        rows: Array<{
+          role: string
+          preview: string
+          status: string
+        }>
+      }
+      expect(messages.at(-1)).toEqual(
+        expect.objectContaining({
+          role: 'assistant',
+          preview: 'Hello from delegated run 1',
+          status: 'complete',
+        }),
+      )
+      expect(completionBodies[0]).toContain(`Issue ID: ${issue.id}`)
+      expect(completionBodies[0]).toContain('global issue-agent rule')
+      expect(completionBodies[0]).toContain('agent identity issue-agent rule')
+      expect(completionBodies[0]).not.toContain('provider target named rule should not load')
+
+      const chatSessionRes = await app.handle(
+        new Request(
+          `http://localhost/sessions/${encodeURIComponent(String(delegationState.chatSessionId))}`,
+        ),
+      )
+      expect(chatSessionRes.status).toBe(200)
+      expect(await chatSessionRes.json()).toEqual(expect.objectContaining({ agentId: agent.id }))
+
+      const linkedSessionsRes = await app.handle(
+        new Request(`http://localhost/issues/${encodeURIComponent(issue.id)}/sessions`),
+      )
+      expect(linkedSessionsRes.status).toBe(200)
+      expect(await linkedSessionsRes.json()).toEqual([
+        expect.objectContaining({
+          id: delegationState.chatSessionId,
+          agentId: agent.id,
+          linkedIssueId: issue.id,
+        }),
+      ])
+
+      const rerunRes = await app.handle(
+        new Request(
+          `http://localhost/issue-agent-sessions/${encodeURIComponent(delegatedSession.id)}/rerun`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({}),
+          },
+        ),
+      )
+      expect(rerunRes.status).toBe(200)
+
+      const sessionsAfterRerun = await waitForSessionStatus(app, issue.id, 'completed')
+      const rerunSession = sessionsAfterRerun[0]
+      expect(rerunSession.id).toBe(delegatedSession.id)
+      expect(rerunSession.chatSessionId).toBeTruthy()
+      expect(rerunSession.chatSessionId).not.toBe(delegationState.chatSessionId)
+
+      const rerunMessagesRes = await app.handle(
+        new Request(
+          `http://localhost/chat/sessions/${encodeURIComponent(String(rerunSession.chatSessionId))}/messages`,
+        ),
+      )
+      expect(rerunMessagesRes.status).toBe(200)
+      const { rows: rerunMessages } = (await rerunMessagesRes.json()) as {
+        revision: number
+        rows: Array<{
+          role: string
+          preview: string
+        }>
+      }
+      expect(rerunMessages.at(-1)).toEqual(
+        expect.objectContaining({ role: 'assistant', preview: 'Hello from delegated run 2' }),
+      )
+
+      const undelegateRes = await app.handle(
+        new Request(`http://localhost/issues/${encodeURIComponent(issue.id)}/delegation`, {
+          method: 'DELETE',
+        }),
+      )
+      expect(undelegateRes.status).toBe(200)
+      expect(await undelegateRes.json()).toEqual({ ok: true })
+
+      const delegationAfterDeleteRes = await app.handle(
+        new Request(`http://localhost/issues/${encodeURIComponent(issue.id)}/delegation`),
+      )
+      expect(delegationAfterDeleteRes.status).toBe(200)
+      expect(await delegationAfterDeleteRes.json()).toEqual(
+        expect.objectContaining({
+          issueId: issue.id,
+          delegated: false,
+          providerTargetId: null,
+          agentId: null,
+          agentSessionId: null,
+          chatSessionId: null,
+        }),
+      )
+
+      const unassignedIssueRes = await app.handle(
+        new Request(`http://localhost/issues/${encodeURIComponent(issue.id)}`),
+      )
+      expect(unassignedIssueRes.status).toBe(200)
+      expect(await unassignedIssueRes.json()).toEqual(
+        expect.objectContaining({
+          assigneeKind: null,
+          assigneeId: null,
+          delegateAgentId: null,
+          delegateProviderTargetId: null,
+        }),
+      )
+
+      const activitiesAfterDeleteRes = await app.handle(
+        new Request(
+          `http://localhost/issue-agent-sessions/${encodeURIComponent(delegatedSession.id)}/activities`,
+        ),
+      )
+      const activitiesAfterDelete = (await activitiesAfterDeleteRes.json()) as AgentActivityView[]
+      expect(activitiesAfterDelete.map(activity => JSON.parse(activity.content).body)).toContain(
+        'Delegation removed',
+      )
+      expect(
+        fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/chat/completions')),
+      ).toHaveLength(2)
+    }
+ finally {
+      fetchSpy.mockRestore()
+      shutdownInfra()
+      rmSync(dataDir, { recursive: true, force: true })
+      rmSync(workspaceRoot, { recursive: true, force: true })
+      if (previousDataDir === undefined) {
+        delete process.env.CRADLE_DATA_DIR
+      }
+ else {
+        process.env.CRADLE_DATA_DIR = previousDataDir
+      }
+      if (previousSecret === undefined) {
+        delete process.env.CRADLE_CREDENTIAL_SECRET
+      }
+ else {
+        process.env.CRADLE_CREDENTIAL_SECRET = previousSecret
+      }
+    }
+  })
+
+  it('runs isolated delegations and their reruns as Work sessions', async () => {
+    const dataDir = makeTempDir('cradle-data-')
+    const workspaceRoot = makeTempDir('cradle-workspace-')
+    const previousDataDir = process.env.CRADLE_DATA_DIR
+    const previousSecret = process.env.CRADLE_CREDENTIAL_SECRET
+    process.env.CRADLE_DATA_DIR = dataDir
+    process.env.CRADLE_CREDENTIAL_SECRET = 'issue-agent-secret'
+    initializeGitRepository(workspaceRoot)
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new Request(input).url
+      if (!url.endsWith('/chat/completions')) {
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return createChatCompletionResponse('Completed delegated Work run')
+    })
+
+    try {
+      const app = await createServerApp()
+      db()
+        .insert(workspaces)
+        .values({
+          id: 'workspace-issue-agent-work',
+          name: 'Workspace Issue Agent Work',
+          locatorJson: localWorkspaceLocatorJson(workspaceRoot),
+        })
+        .run()
+
+      await createProfile(app)
+      const agent = await createAgent(app)
+      const issue = await createIssue(app, 'workspace-issue-agent-work')
+
+      const delegateRes = await app.handle(
+        new Request(`http://localhost/issues/${encodeURIComponent(issue.id)}/delegation`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ agentId: agent.id, runInIsolation: true }),
+        }),
+      )
+      expect(delegateRes.status).toBe(200)
+      const delegatedSession = (await delegateRes.json()) as AgentSessionView
+
+      const sessionsAfterDelegate = await waitForSessionStatus(app, issue.id, 'completed')
+      const firstChatSessionId = sessionsAfterDelegate[0]?.chatSessionId
+      expect(firstChatSessionId).toBeTruthy()
+      const firstWork = Work.getBySessionId(firstChatSessionId!)
+      expect(firstWork).toEqual(expect.objectContaining({ linkedIssueId: issue.id }))
+      expect(firstWork?.preparedAt).toBeNull()
+
+      const rerunRes = await app.handle(
+        new Request(
+          `http://localhost/issue-agent-sessions/${encodeURIComponent(delegatedSession.id)}/rerun`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({}),
+          },
+        ),
+      )
+      expect(rerunRes.status).toBe(200)
+
+      const sessionsAfterRerun = await waitForSessionStatus(app, issue.id, 'completed')
+      const rerunChatSessionId = sessionsAfterRerun[0]?.chatSessionId
+      expect(rerunChatSessionId).toBeTruthy()
+      expect(rerunChatSessionId).not.toBe(firstChatSessionId)
+      const rerunWork = Work.getBySessionId(rerunChatSessionId!)
+      expect(rerunWork).toEqual(expect.objectContaining({ linkedIssueId: issue.id }))
+      expect(rerunWork?.preparedAt).toBeNull()
+    }
+    finally {
+      fetchSpy.mockRestore()
+      shutdownInfra()
+      rmSync(dataDir, { recursive: true, force: true })
+      rmSync(workspaceRoot, { recursive: true, force: true })
+      if (previousDataDir === undefined) {
+        delete process.env.CRADLE_DATA_DIR
+      }
+      else {
+        process.env.CRADLE_DATA_DIR = previousDataDir
+      }
+      if (previousSecret === undefined) {
+        delete process.env.CRADLE_CREDENTIAL_SECRET
+      }
+      else {
+        process.env.CRADLE_CREDENTIAL_SECRET = previousSecret
+      }
+    }
+  })
+
+  it('rejects a second delegation while the current delegated run is active', async () => {
+    const dataDir = makeTempDir('cradle-data-')
+    const workspaceRoot = makeTempDir('cradle-workspace-')
+    const previousDataDir = process.env.CRADLE_DATA_DIR
+    const previousSecret = process.env.CRADLE_CREDENTIAL_SECRET
+    process.env.CRADLE_DATA_DIR = dataDir
+    process.env.CRADLE_CREDENTIAL_SECRET = 'issue-agent-secret'
+
+    let releaseRun!: () => void
+    const releaseRunPromise = new Promise<void>((resolve) => {
+      releaseRun = resolve
+    })
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new Request(input).url
+      if (!url.endsWith('/chat/completions')) {
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return createChatCompletionResponse('Delegation still running', releaseRunPromise)
+    })
+
+    let app: Awaited<ReturnType<typeof createServerApp>> | undefined
+
+    try {
+      app = await createServerApp()
+      db()
+        .insert(workspaces)
+        .values({
+          id: 'workspace-issue-agent-double-delegate',
+          name: 'Workspace Issue Agent Double Delegate',
+          locatorJson: localWorkspaceLocatorJson(workspaceRoot),
+        })
+        .run()
+
+      await createProfile(app)
+      const agent = await createAgent(app)
+      const issue = await createIssue(app, 'workspace-issue-agent-double-delegate')
+
+      const firstDelegate = await app.handle(
+        new Request(`http://localhost/issues/${encodeURIComponent(issue.id)}/delegation`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ agentId: agent.id }),
+        }),
+      )
+      expect(firstDelegate.status).toBe(200)
+
+      const secondDelegate = await app.handle(
+        new Request(`http://localhost/issues/${encodeURIComponent(issue.id)}/delegation`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ agentId: agent.id }),
+        }),
+      )
+      expect(secondDelegate.status).toBe(409)
+      expect((await secondDelegate.json()).code).toBe('issue_agent_delegation_in_progress')
+
+      releaseRun()
+      await waitForSessionStatus(app, issue.id, 'completed')
+    }
+ finally {
+      fetchSpy.mockRestore()
+      shutdownInfra()
+      rmSync(dataDir, { recursive: true, force: true })
+      rmSync(workspaceRoot, { recursive: true, force: true })
+      if (previousDataDir === undefined) {
+        delete process.env.CRADLE_DATA_DIR
+      }
+ else {
+        process.env.CRADLE_DATA_DIR = previousDataDir
+      }
+      if (previousSecret === undefined) {
+        delete process.env.CRADLE_CREDENTIAL_SECRET
+      }
+ else {
+        process.env.CRADLE_CREDENTIAL_SECRET = previousSecret
+      }
+    }
+  })
+
+  it('allows only one rapid rerun to claim the pending run marker', async () => {
+    const dataDir = makeTempDir('cradle-data-')
+    const workspaceRoot = makeTempDir('cradle-workspace-')
+    const previousDataDir = process.env.CRADLE_DATA_DIR
+    const previousSecret = process.env.CRADLE_CREDENTIAL_SECRET
+    process.env.CRADLE_DATA_DIR = dataDir
+    process.env.CRADLE_CREDENTIAL_SECRET = 'issue-agent-secret'
+
+    let releaseRerun!: () => void
+    const releaseRerunPromise = new Promise<void>((resolve) => {
+      releaseRerun = resolve
+    })
+    let completionCount = 0
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new Request(input).url
+      if (!url.endsWith('/chat/completions')) {
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      completionCount += 1
+      if (completionCount === 1) {
+        return createChatCompletionResponse('Initial delegated run done')
+      }
+      return createChatCompletionResponse('Rerun still running', releaseRerunPromise)
+    })
+
+    let app: Awaited<ReturnType<typeof createServerApp>> | undefined
+
+    try {
+      app = await createServerApp()
+      db()
+        .insert(workspaces)
+        .values({
+          id: 'workspace-issue-agent-rapid-rerun',
+          name: 'Workspace Issue Agent Rapid Rerun',
+          locatorJson: localWorkspaceLocatorJson(workspaceRoot),
+        })
+        .run()
+
+      await createProfile(app)
+      const agent = await createAgent(app)
+      const issue = await createIssue(app, 'workspace-issue-agent-rapid-rerun')
+
+      const delegateRes = await app.handle(
+        new Request(`http://localhost/issues/${encodeURIComponent(issue.id)}/delegation`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ agentId: agent.id }),
+        }),
+      )
+      expect(delegateRes.status).toBe(200)
+      const delegatedSession = (await delegateRes.json()) as AgentSessionView
+      await waitForSessionStatus(app, issue.id, 'completed')
+
+      const rerunRequests = await Promise.all([
+        app.handle(
+          new Request(
+            `http://localhost/issue-agent-sessions/${encodeURIComponent(delegatedSession.id)}/rerun`,
+            {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({}),
+            },
+          ),
+        ),
+        app.handle(
+          new Request(
+            `http://localhost/issue-agent-sessions/${encodeURIComponent(delegatedSession.id)}/rerun`,
+            {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({}),
+            },
+          ),
+        ),
+      ])
+      expect(rerunRequests.map(response => response.status).sort()).toEqual([200, 409])
+      const rejected = rerunRequests.find(response => response.status === 409)
+      expect((await rejected?.json())?.code).toBe('issue_agent_session_in_progress')
+
+      releaseRerun()
+      await waitForSessionStatus(app, issue.id, 'completed')
+      expect(completionCount).toBe(2)
+    }
+ finally {
+      fetchSpy.mockRestore()
+      shutdownInfra()
+      rmSync(dataDir, { recursive: true, force: true })
+      rmSync(workspaceRoot, { recursive: true, force: true })
+      if (previousDataDir === undefined) {
+        delete process.env.CRADLE_DATA_DIR
+      }
+ else {
+        process.env.CRADLE_DATA_DIR = previousDataDir
+      }
+      if (previousSecret === undefined) {
+        delete process.env.CRADLE_CREDENTIAL_SECRET
+      }
+ else {
+        process.env.CRADLE_CREDENTIAL_SECRET = previousSecret
+      }
+    }
+  })
+
+  it('rolls back delegation writes when one write in the transaction fails', async () => {
+    const dataDir = makeTempDir('cradle-data-')
+    const workspaceRoot = makeTempDir('cradle-workspace-')
+    const previousDataDir = process.env.CRADLE_DATA_DIR
+    const previousSecret = process.env.CRADLE_CREDENTIAL_SECRET
+    process.env.CRADLE_DATA_DIR = dataDir
+    process.env.CRADLE_CREDENTIAL_SECRET = 'issue-agent-secret'
+
+    let app: Awaited<ReturnType<typeof createServerApp>> | undefined
+
+    try {
+      app = await createServerApp()
+      db()
+        .insert(workspaces)
+        .values({
+          id: 'workspace-issue-agent-rollback',
+          name: 'Workspace Issue Agent Rollback',
+          locatorJson: localWorkspaceLocatorJson(workspaceRoot),
+        })
+        .run()
+
+      await createProfile(app)
+      const agent = await createAgent(app)
+      const issue = await createIssue(app, 'workspace-issue-agent-rollback')
+      vi.spyOn(Issue, 'addComment').mockImplementationOnce(() => {
+        throw new Error('forced delegation comment failure')
+      })
+
+      const delegateRes = await app.handle(
+        new Request(`http://localhost/issues/${encodeURIComponent(issue.id)}/delegation`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ agentId: agent.id }),
+        }),
+      )
+      expect(delegateRes.status).toBe(500)
+
+      expect(Issue.getIssue(issue.id)).toEqual(expect.objectContaining({
+        delegateAgentId: null,
+        delegateProviderTargetId: null,
+      }))
+      expect(AgentInteraction.listSessionsForIssue(issue.id)).toHaveLength(0)
+      expect(Issue.listComments(issue.id)).toEqual([])
+    }
+ finally {
+      vi.restoreAllMocks()
+      shutdownInfra()
+      rmSync(dataDir, { recursive: true, force: true })
+      rmSync(workspaceRoot, { recursive: true, force: true })
+      if (previousDataDir === undefined) {
+        delete process.env.CRADLE_DATA_DIR
+      }
+ else {
+        process.env.CRADLE_DATA_DIR = previousDataDir
+      }
+      if (previousSecret === undefined) {
+        delete process.env.CRADLE_CREDENTIAL_SECRET
+      }
+ else {
+        process.env.CRADLE_CREDENTIAL_SECRET = previousSecret
+      }
+    }
+  })
+
+  it('queues an issue agent continuation through Chat Runtime and records activity', async () => {
+    const dataDir = makeTempDir('cradle-data-')
+    const workspaceRoot = makeTempDir('cradle-workspace-')
+    const previousDataDir = process.env.CRADLE_DATA_DIR
+    const previousSecret = process.env.CRADLE_CREDENTIAL_SECRET
+    process.env.CRADLE_DATA_DIR = dataDir
+    process.env.CRADLE_CREDENTIAL_SECRET = 'issue-agent-secret'
+
+    let completionIndex = 0
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new Request(input).url
+      if (!url.endsWith('/chat/completions')) {
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      completionIndex += 1
+      const responseText
+        = completionIndex === 1 ? 'Initial delegated run done' : 'Queued continuation done'
+      const encoder = new TextEncoder()
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                `data: {"id":"chunk-${completionIndex}-1","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"${responseText}"},"finish_reason":null}]}\n\n`,
+              ),
+            )
+            controller.enqueue(
+              encoder.encode(
+                `data: {"id":"chunk-${completionIndex}-2","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":5,"total_tokens":17}}\n\n`,
+              ),
+            )
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+            controller.close()
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        },
+      )
+    })
+
+    let app: Awaited<ReturnType<typeof createServerApp>> | undefined
+
+    try {
+      app = await createServerApp()
+      db()
+        .insert(workspaces)
+        .values({
+          id: 'workspace-issue-agent-continuation',
+          name: 'Workspace Issue Agent Continuation',
+          locatorJson: localWorkspaceLocatorJson(workspaceRoot),
+        })
+        .run()
+
+      await createProfile(app)
+      const agent = await createAgent(app)
+      const issue = await createIssue(app, 'workspace-issue-agent-continuation')
+
+      const delegateRes = await app.handle(
+        new Request(`http://localhost/issues/${encodeURIComponent(issue.id)}/delegation`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ agentId: agent.id }),
+        }),
+      )
+      expect(delegateRes.status).toBe(200)
+      const delegatedSession = (await delegateRes.json()) as AgentSessionView
+      const sessionsAfterDelegate = await waitForSessionStatus(app, issue.id, 'completed')
+      const chatSessionId = sessionsAfterDelegate[0].chatSessionId
+      expect(chatSessionId).toBeTruthy()
+
+      const continuationRes = await app.handle(
+        new Request(
+          `http://localhost/issue-agent-sessions/${encodeURIComponent(delegatedSession.id)}/continuation`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ mode: 'queue', text: 'Continue with follow-up work' }),
+          },
+        ),
+      )
+      expect(continuationRes.status).toBe(200)
+      const continuation = (await continuationRes.json()) as {
+        chatSessionId: string
+        continuationId: string
+        mode: string
+      }
+      expect(continuation).toEqual(
+        expect.objectContaining({
+          chatSessionId,
+          mode: 'queue',
+        }),
+      )
+
+      const activities = await waitForActivitySignal(
+        app,
+        delegatedSession.id,
+        'continuation.completed',
+      )
+      expect(activities).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'prompt',
+            signal: 'continuation.queued',
+          }),
+          expect.objectContaining({
+            type: 'response',
+            signal: 'continuation.completed',
+          }),
+        ]),
+      )
+      expect(activities.map(activity => JSON.parse(activity.content).body)).toContain(
+        'Continue with follow-up work',
+      )
+
+      const queueRes = await app.handle(
+        new Request(
+          `http://localhost/chat/sessions/${encodeURIComponent(String(chatSessionId))}/queue`,
+        ),
+      )
+      expect(queueRes.status).toBe(200)
+      const queueData = (await queueRes.json()) as {
+        items: Array<{ id: string, status: string, startedRunId: string | null }>
+      }
+      expect(queueData.items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: continuation.continuationId,
+            status: 'completed',
+            startedRunId: expect.any(String),
+          }),
+        ]),
+      )
+
+      const messagesRes = await app.handle(
+        new Request(
+          `http://localhost/chat/sessions/${encodeURIComponent(String(chatSessionId))}/messages`,
+        ),
+      )
+      expect(messagesRes.status).toBe(200)
+      const { rows: messages } = (await messagesRes.json()) as {
+        revision: number
+        rows: Array<{
+          role: string
+          preview: string
+          status: string
+        }>
+      }
+      expect(messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: 'user',
+            preview: 'Continue with follow-up work',
+            status: 'complete',
+          }),
+          expect.objectContaining({
+            role: 'assistant',
+            preview: 'Queued continuation done',
+            status: 'complete',
+          }),
+        ]),
+      )
+      expect(
+        fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/chat/completions')),
+      ).toHaveLength(2)
+
+      const steerRes = await app.handle(
+        new Request(
+          `http://localhost/issue-agent-sessions/${encodeURIComponent(delegatedSession.id)}/continuation`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ mode: 'steer', text: 'Steer the next follow-up' }),
+          },
+        ),
+      )
+      expect(steerRes.status).toBe(200)
+      const steer = (await steerRes.json()) as {
+        chatSessionId: string
+        continuationId: string
+        mode: string
+      }
+      expect(steer).toEqual(
+        expect.objectContaining({
+          chatSessionId,
+          mode: 'queue',
+        }),
+      )
+
+      const activitiesAfterQueuedSteer = await waitForActivityBody(
+        app,
+        delegatedSession.id,
+        'Steer the next follow-up',
+      )
+      expect(
+        activitiesAfterQueuedSteer.map(activity => JSON.parse(activity.content).body),
+      ).toContain('Steer the next follow-up')
+      await waitForChatQueueItemStatus(app, String(chatSessionId), steer.continuationId, 'completed')
+      expect(
+        fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/chat/completions')),
+      ).toHaveLength(3)
+    }
+ finally {
+      fetchSpy.mockRestore()
+      shutdownInfra()
+      rmSync(dataDir, { recursive: true, force: true })
+      rmSync(workspaceRoot, { recursive: true, force: true })
+      if (previousDataDir === undefined) {
+        delete process.env.CRADLE_DATA_DIR
+      }
+ else {
+        process.env.CRADLE_DATA_DIR = previousDataDir
+      }
+      if (previousSecret === undefined) {
+        delete process.env.CRADLE_CREDENTIAL_SECRET
+      }
+ else {
+        process.env.CRADLE_CREDENTIAL_SECRET = previousSecret
+      }
+    }
+  })
+
+  it('returns structured errors for invalid input and missing resources', async () => {
+    const dataDir = makeTempDir('cradle-data-')
+    const workspaceRoot = makeTempDir('cradle-workspace-')
+    const previousDataDir = process.env.CRADLE_DATA_DIR
+    const previousSecret = process.env.CRADLE_CREDENTIAL_SECRET
+    process.env.CRADLE_DATA_DIR = dataDir
+    process.env.CRADLE_CREDENTIAL_SECRET = 'issue-agent-secret'
+
+    let app: Awaited<ReturnType<typeof createServerApp>> | undefined
+
+    try {
+      app = await createServerApp()
+      db()
+        .insert(workspaces)
+        .values({
+          id: 'workspace-issue-agent',
+          name: 'Workspace Issue Agent',
+          locatorJson: localWorkspaceLocatorJson(workspaceRoot),
+        })
+        .run()
+
+      await createProfile(app)
+      const agent = await createAgent(app)
+      const issue = await createIssue(app, 'workspace-issue-agent')
+
+      const invalidDelegate = await app.handle(
+        new Request(`http://localhost/issues/${encodeURIComponent(issue.id)}/delegation`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({}),
+        }),
+      )
+      expect(invalidDelegate.status).toBe(400)
+      expect((await invalidDelegate.json()).code).toBe('validation_error')
+
+      const missingIssue = await app.handle(
+        new Request('http://localhost/issues/missing-issue/delegation', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ agentId: agent.id }),
+        }),
+      )
+      expect(missingIssue.status).toBe(404)
+      expect((await missingIssue.json()).code).toBe('issue_agent_issue_not_found')
+
+      const missingAgent = await app.handle(
+        new Request(`http://localhost/issues/${encodeURIComponent(issue.id)}/delegation`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ agentId: 'missing-agent' }),
+        }),
+      )
+      expect(missingAgent.status).toBe(404)
+      expect((await missingAgent.json()).code).toBe('issue_agent_agent_not_found')
+
+      const missingActivities = await app.handle(
+        new Request('http://localhost/issue-agent-sessions/missing-session/activities'),
+      )
+      expect(missingActivities.status).toBe(404)
+      expect((await missingActivities.json()).code).toBe('agent_interaction_session_not_found')
+
+      const missingGenericActivities = await app.handle(
+        new Request('http://localhost/agent-sessions/missing-session/activities'),
+      )
+      expect(missingGenericActivities.status).toBe(404)
+      expect((await missingGenericActivities.json()).code).toBe(
+        'agent_interaction_session_not_found',
+      )
+
+      const missingRerun = await app.handle(
+        new Request('http://localhost/issue-agent-sessions/missing-session/rerun', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({}),
+        }),
+      )
+      expect(missingRerun.status).toBe(404)
+      expect((await missingRerun.json()).code).toBe('agent_interaction_session_not_found')
+    }
+ finally {
+      vi.restoreAllMocks()
+      shutdownInfra()
+      rmSync(dataDir, { recursive: true, force: true })
+      rmSync(workspaceRoot, { recursive: true, force: true })
+      if (previousDataDir === undefined) {
+        delete process.env.CRADLE_DATA_DIR
+      }
+ else {
+        process.env.CRADLE_DATA_DIR = previousDataDir
+      }
+      if (previousSecret === undefined) {
+        delete process.env.CRADLE_CREDENTIAL_SECRET
+      }
+ else {
+        process.env.CRADLE_CREDENTIAL_SECRET = previousSecret
+      }
+    }
+  })
+})
