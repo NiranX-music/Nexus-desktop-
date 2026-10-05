@@ -1,0 +1,157 @@
+import type {
+  RuntimeSettings,
+  StreamTurnInput,
+} from '../../../chat-runtime/runtime-provider-types'
+import {
+  ProviderErrors,
+  ProviderRuntimeError,
+  requireRuntimeProviderTargetProfile,
+} from '../../../chat-runtime/runtime-provider-types'
+import { readCodexLikeRuntimeSettings } from '../../../chat-runtime/runtime-settings'
+import type { CodexConfig } from '../../../provider-contracts/provider-base'
+import { readTrustedCodexConfig } from '../../../provider-contracts/provider-base'
+import type { RuntimeKind } from '../../../provider-contracts/types'
+import { extractProviderInputText } from '../../kit/input-projector'
+import { readWorkspaceProviderStateSnapshot } from '../../kit/state-snapshot'
+import type { CodexAppServerAuthCarrier, CodexAppServerAuthResolution } from '../app-server/chatgpt-auth'
+import type { CodexAppServerClientOptions } from '../app-server/client'
+import { buildCradleCodexAppServerEnv } from '../app-server/client'
+import type { ReasoningEffort } from '../app-server-protocol/ReasoningEffort'
+import type { ThreadForkParams } from '../app-server-protocol/v2/ThreadForkParams'
+import {
+  bindCodexCradleMcpInvocation,
+  buildCodexAuthEnvironment,
+  buildCodexConfig,
+  codexConfigRequiresApiKey,
+  projectCodexRuntimeAccessMode,
+  readCodexReasoningEffort,
+  resolveCodexSkillExtraRoots,
+} from '../config/runtime-config'
+import { resolveCodexRuntimeContext } from '../config/runtime-context'
+import { isCodexGoalContinuationMessage } from '../goal-continuation'
+import type { CodexUserInput } from './input-projector'
+import {
+  isCodexCompactCommand,
+  projectCodexUserInput,
+  readCodexGoalCommandObjective,
+} from './input-projector'
+import { isLiveCodexSideFork } from './thread-lifecycle'
+
+export type CodexStreamRuntimeAccess = ReturnType<typeof projectCodexRuntimeAccessMode>
+
+export interface CodexStreamTurnContext {
+  config: CodexConfig
+  auth: CodexAppServerAuthResolution
+  effectiveModel: string | undefined
+  userInput: CodexUserInput[]
+  userPromptText: string
+  goalContinuationRequested: boolean
+  goalCommandObjective: string | null
+  compactCommandRequested: boolean
+  workspacePath: string
+  agentId: string | null
+  runtimeContext: ReturnType<typeof resolveCodexRuntimeContext>
+  systemPrompt?: string
+  runtimeSettings: RuntimeSettings | undefined
+  requestedReasoningEffort: ReasoningEffort
+  runtimeAccess: CodexStreamRuntimeAccess | null
+  skillExtraRoots: string[]
+  codexConfig: NonNullable<ThreadForkParams['config']>
+  codexEnv: Record<string, string>
+  serverRequestHandler: NonNullable<CodexAppServerClientOptions['serverRequestHandler']>
+  isFreshProviderThread: boolean
+  isLiveSideFork: boolean
+}
+
+export interface CodexStreamTurnContextDeps {
+  runtimeKind: RuntimeKind
+  resolveAppServerAuth: (
+    profile: CodexAppServerAuthCarrier,
+    config: Pick<CodexConfig, 'apiKey' | 'authMode' | 'bedrock'>,
+  ) => CodexAppServerAuthResolution
+  resolveSkillPaths: (workspacePath: string) => string[]
+  createServerRequestHandler: (
+    auth: CodexAppServerAuthResolution,
+  ) => NonNullable<CodexAppServerClientOptions['serverRequestHandler']>
+}
+
+export function resolveCodexStreamTurnContext(
+  input: StreamTurnInput,
+  deps: CodexStreamTurnContextDeps,
+): CodexStreamTurnContext {
+  const profile = requireRuntimeProviderTargetProfile(input.profile, deps.runtimeKind)
+  const config = readTrustedCodexConfig(profile.configJson)
+  const auth = deps.resolveAppServerAuth(profile, config)
+  const effectiveModel = input.modelId ?? config.model
+  const userInput = projectCodexUserInput(input.message, 'Codex provider')
+  const userPromptText = extractProviderInputText(input.message).trim()
+  const goalContinuationRequested = typeof input.message !== 'string' && isCodexGoalContinuationMessage(input.message)
+  const goalCommandObjective = readCodexGoalCommandObjective(input.message)
+  const compactCommandRequested = isCodexCompactCommand(input.message)
+  if (codexConfigRequiresApiKey(config, auth)) {
+    throw new ProviderRuntimeError(ProviderErrors.authFailed(deps.runtimeKind))
+  }
+
+  const snapshot = readWorkspaceProviderStateSnapshot(input.runtimeSession.providerStateSnapshot)
+  const workspacePath = snapshot.workspacePath ?? input.workspacePath ?? '.'
+  const agentId = input.agentId ?? snapshot.agentId ?? null
+  const runtimeContext = resolveCodexRuntimeContext(workspacePath, agentId)
+  const runtimeSettings = input.providerOptions?.runtimeSettings
+  const requestedReasoningEffort = readCodexReasoningEffort(
+    input.providerOptions?.thinkingEffort,
+    config.reasoningEffort,
+  )
+  const runtimeAccess = runtimeSettings
+    ? projectCodexRuntimeAccessMode(readCodexLikeRuntimeSettings(runtimeSettings).accessMode, {
+        writableRoots: runtimeContext.runtimeWorkspaceRoots,
+        additionalDirectories: config.additionalDirectories,
+      })
+    : null
+  const skillExtraRoots = resolveCodexSkillExtraRoots(config, workspacePath, deps.resolveSkillPaths)
+  const projectedCodexConfig = buildCodexConfig(
+    config,
+    workspacePath,
+    deps.resolveSkillPaths,
+    effectiveModel,
+    auth,
+  )
+  if (runtimeAccess) {
+    projectedCodexConfig.approval_policy = runtimeAccess.approvalPolicy
+    projectedCodexConfig.sandbox_mode = runtimeAccess.sandbox
+  }
+  const codexEnv = {
+    ...buildCradleCodexAppServerEnv({
+      chatSessionId: input.runtimeSession.chatSessionId,
+      workspaceId: input.workspaceId,
+      workspacePath,
+      agentId,
+      agentHome: runtimeContext.agentHome,
+    }),
+    ...buildCodexAuthEnvironment(auth),
+  }
+  const codexConfig = bindCodexCradleMcpInvocation(projectedCodexConfig, codexEnv)
+
+  return {
+    config,
+    auth,
+    effectiveModel,
+    userInput,
+    userPromptText,
+    goalContinuationRequested,
+    goalCommandObjective,
+    compactCommandRequested,
+    workspacePath,
+    agentId,
+    runtimeContext,
+    systemPrompt: input.systemPrompt,
+    runtimeSettings,
+    requestedReasoningEffort,
+    runtimeAccess,
+    skillExtraRoots,
+    codexConfig,
+    codexEnv,
+    serverRequestHandler: deps.createServerRequestHandler(auth),
+    isFreshProviderThread: !input.runtimeSession.providerSessionId,
+    isLiveSideFork: isLiveCodexSideFork(input.runtimeSession),
+  }
+}
