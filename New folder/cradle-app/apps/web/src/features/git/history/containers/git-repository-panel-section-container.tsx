@@ -1,0 +1,115 @@
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
+import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
+
+import { postWorkspacesByWorkspaceIdGitFetchMutation } from '~/api-gen/@tanstack/react-query.gen'
+import { toastManager } from '~/components/ui/toast'
+
+import { BranchPicker } from '../../branch/branch-picker'
+import { computeGraphLayout } from '../../shared/graph-layout'
+import type { GitRepository } from '../../shared/types'
+import {
+  gitBranchesQueryKey,
+  gitGraphQueryKey,
+  gitRepositoriesQueryKey,
+  gitStatusQueryKey,
+  useGitGraph,
+} from '../../shared/use-git'
+import { GitRepositoryPanelSectionView } from '../views/git-repository-panel-section-view'
+
+export interface GitRepositoryPanelSectionContainerProps {
+  workspaceId: string
+  repository: GitRepository
+  showRepositoryHeader: boolean
+}
+
+export function GitRepositoryPanelSectionContainer({
+  workspaceId,
+  repository,
+  showRepositoryHeader,
+}: GitRepositoryPanelSectionContainerProps) {
+  const { t } = useTranslation('git')
+  const [limit, setLimit] = useState(100)
+  const {
+    data: commits,
+    isLoading: graphLoading,
+    isFetching: graphFetching,
+    isError: graphError,
+    refetch: refetchGraph,
+  } = useGitGraph(workspaceId, limit, repository.path)
+  const queryClient = useQueryClient()
+  const fetchMutation = useMutation({
+    ...postWorkspacesByWorkspaceIdGitFetchMutation(),
+    onSuccess: () => invalidateAll(),
+  })
+
+  function invalidateAll() {
+    const repositoryQuery = { query: { repo: repository.path } }
+    void queryClient.invalidateQueries({
+      queryKey: gitRepositoriesQueryKey({ path: { workspaceId } }),
+    })
+    void queryClient.invalidateQueries({
+      queryKey: gitStatusQueryKey({ path: { workspaceId }, ...repositoryQuery }),
+    })
+    void queryClient.invalidateQueries({
+      queryKey: gitBranchesQueryKey({ path: { workspaceId }, ...repositoryQuery }),
+    })
+    void queryClient.invalidateQueries({
+      queryKey: gitGraphQueryKey({ path: { workspaceId }, ...repositoryQuery }),
+    })
+  }
+
+  const handleFetch = async () => {
+    await fetchMutation.mutateAsync({
+      path: { workspaceId },
+      body: { repo: repository.path },
+    })
+  }
+
+  const handleCopyCommit = async (sha: string) => {
+    try {
+      await navigator.clipboard.writeText(sha)
+      toastManager.add({
+        type: 'success',
+        title: t('graphRow.copySuccess'),
+        description: sha,
+      })
+    }
+    catch {
+      toastManager.add({ type: 'error', title: t('graphRow.copyError') })
+    }
+  }
+
+  const renderBranchPicker = (trigger: ReactNode) => (
+    <BranchPicker
+      workspaceId={workspaceId}
+      repositoryPath={repository.path}
+      currentBranch={repository.branch}
+    >
+      {trigger}
+    </BranchPicker>
+  )
+
+  return (
+    <GitRepositoryPanelSectionView
+      repository={repository}
+      showRepositoryHeader={showRepositoryHeader}
+      commits={computeGraphLayout(commits ?? [])}
+      graphStatus={graphError ? 'error' : graphLoading ? 'loading' : 'ready'}
+      graphFetching={graphFetching}
+      fetchPending={fetchMutation.isPending}
+      renderBranchPicker={renderBranchPicker}
+      onCopyCommit={sha => void handleCopyCommit(sha)}
+      onFetch={() => {
+        void handleFetch()
+      }}
+      onRetry={() => void refetchGraph()}
+      onLoadMore={
+        graphFetching
+          ? undefined
+          : () => setLimit(currentLimit => currentLimit + 100)
+      }
+    />
+  )
+}
