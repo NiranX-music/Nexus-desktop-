@@ -1,0 +1,29 @@
+# SOC 2: automated dependency updates (OA-C-23).
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    ignore:
+      # v4 breaks the docs dispatch with a mismatched Content-Length on
+      # GitHub-hosted runners. Bumping it silently red-mains the docs sync;
+      # this already happened twice (#1049, #1079). Remove once upstream
+      # ships a fixed release.
+      - dependency-name: "peter-evans/repository-dispatch"
+        versions: ["4.x"]
+    groups:
+      # CodeQL persists version-specific state between init and analyze.
+      codeql-action:
+        patterns:
+          - "github/codeql-action/*"
