@@ -1,0 +1,66 @@
+// Polyfill ResizeObserver for jsdom (required by @dnd-kit/dom)
+function createMemoryStorage(): Storage {
+  const values = new Map<string, string>()
+  return {
+    get length() { return values.size },
+    clear: () => values.clear(),
+    getItem: key => values.get(key) ?? null,
+    key: index => [...values.keys()][index] ?? null,
+    removeItem: key => values.delete(key),
+    setItem: (key, value) => values.set(key, value),
+  }
+}
+
+// Node pool for transport-boundary tests: expose window as globalThis so
+// modules that read window.localStorage / window.cradle work without jsdom.
+if (typeof globalThis.window === 'undefined') {
+  Object.defineProperty(globalThis, 'window', {
+    value: globalThis,
+    configurable: true,
+    writable: true,
+  })
+}
+
+if (typeof globalThis.localStorage === 'undefined') {
+  globalThis.localStorage = createMemoryStorage()
+}
+if (typeof globalThis.sessionStorage === 'undefined') {
+  globalThis.sessionStorage = createMemoryStorage()
+}
+
+if (typeof globalThis.Event === 'undefined') {
+  globalThis.Event = class Event {
+    type: string
+    constructor(type: string) {
+      this.type = type
+    }
+  } as typeof Event
+}
+
+if (typeof globalThis.MessageEvent === 'undefined') {
+  class TestMessageEvent extends Event {
+    data: unknown
+    constructor(type: string, init?: MessageEventInit) {
+      super(type)
+      this.data = init?.data ?? null
+    }
+  }
+  Object.defineProperty(globalThis, 'MessageEvent', {
+    configurable: true,
+    value: TestMessageEvent,
+    writable: true,
+  })
+}
+
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = class ResizeObserver {
+    callback: ResizeObserverCallback
+    constructor(callback: ResizeObserverCallback) {
+      this.callback = callback
+    }
+
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+}
