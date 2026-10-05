@@ -93,9 +93,192 @@ button {
   -webkit-app-region: no-drag;
 }
 
-.scrollbar-small {
-  scrollbar-color: #9b9b9b transparent;
-  scrollbar-width: auto;
+/* ==========================================================================
+   NEXUS SCI-FI CYBERPUNK SCROLLBAR SUITE
+   ========================================================================== */
+
+/* Standard CSS scrollbar styling for non-WebKit browsers (e.g. Firefox) */
+@supports not selector(::-webkit-scrollbar) {
+  *,
+  html,
+  body {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(16, 185, 129, 0.4) transparent;
+  }
+
+  *:hover {
+    scrollbar-color: rgba(16, 185, 129, 0.7) transparent;
+  }
+}
+
+/* Global Chromium / WebKit scrollbar styling applied across entire app */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(16, 185, 129, 0.3);
+  border-radius: 9999px;
+  border: 1px solid rgba(16, 185, 129, 0.18);
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(16, 185, 129, 0.65);
+  border-color: rgba(52, 211, 153, 0.5);
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.45);
+}
+
+::-webkit-scrollbar-thumb:active {
+  background: #10b981;
+  border-color: #34d399;
+  box-shadow: 0 0 14px rgba(52, 211, 153, 0.8);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Specialized & Component-level Scrollbar Helpers */
+.scrollbar-small,
+.scrollbar-thin,
+.custom-scrollbar {
+  scrollbar-width: thin;
+}
+
+.scrollbar-small::-webkit-scrollbar,
+.scrollbar-thin::-webkit-scrollbar,
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.scrollbar-small::-webkit-scrollbar-track,
+.scrollbar-thin::-webkit-scrollbar-track,
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-small::-webkit-scrollbar-thumb,
+.scrollbar-thin::-webkit-scrollbar-thumb,
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(16, 185, 129, 0.32);
+  border-radius: 9999px;
+  border: 1px solid rgba(16, 185, 129, 0.18);
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.scrollbar-small::-webkit-scrollbar-thumb:hover,
+.scrollbar-thin::-webkit-scrollbar-thumb:hover,
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(16, 185, 129, 0.7);
+  border-color: rgba(52, 211, 153, 0.6);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
+}
+
+.scrollbar-small::-webkit-scrollbar-thumb:active,
+.scrollbar-thin::-webkit-scrollbar-thumb:active,
+.custom-scrollbar::-webkit-scrollbar-thumb:active {
+  background: #10b981;
+  border-color: #34d399;
+  box-shadow: 0 0 12px rgba(52, 211, 153, 0.8);
+}
+
+/* Subtle / Muted Zinc Scrollbar (e.g. for code blocks, terminal, secondary widgets) */
+.scrollbar-zinc,
+.scrollbar-thumb-zinc-800 {
+  scrollbar-width: thin;
+}
+
+.scrollbar-zinc::-webkit-scrollbar,
+.scrollbar-thumb-zinc-800::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.scrollbar-zinc::-webkit-scrollbar-track,
+.scrollbar-thumb-zinc-800::-webkit-scrollbar-track,
+.scrollbar-track-transparent::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+
+.scrollbar-zinc::-webkit-scrollbar-thumb,
+.scrollbar-thumb-zinc-800::-webkit-scrollbar-thumb {
+  background: rgba(63, 63, 70, 0.6) !important;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.scrollbar-zinc::-webkit-scrollbar-thumb:hover,
+.scrollbar-thumb-zinc-800::-webkit-scrollbar-thumb:hover {
+  background: rgba(113, 113, 122, 0.85) !important;
+  border-color: rgba(16, 185, 129, 0.4);
+}
+
+/* Cyan Glowing Variant */
+.scrollbar-cyan {
+  scrollbar-width: thin;
+}
+
+.scrollbar-cyan::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.scrollbar-cyan::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-cyan::-webkit-scrollbar-thumb {
+  background: rgba(6, 182, 212, 0.35);
+  border-radius: 9999px;
+  border: 1px solid rgba(6, 182, 212, 0.2);
+}
+
+.scrollbar-cyan::-webkit-scrollbar-thumb:hover {
+  background: rgba(6, 182, 212, 0.7);
+  border-color: rgba(103, 232, 249, 0.6);
+  box-shadow: 0 0 8px rgba(6, 182, 212, 0.5);
+}
+
+/* Scrollbar Hiding Utilities */
+.scrollbar-none,
+.no-scrollbar {
+  -ms-overflow-style: none !important;
+  scrollbar-width: none !important;
+}
+
+.scrollbar-none::-webkit-scrollbar,
+.no-scrollbar::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* Terminal xterm.js custom scrollbar styling */
+.terminal-container .xterm .xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+}
+
+.terminal-container .xterm .xterm-viewport::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.terminal-container .xterm .xterm-viewport::-webkit-scrollbar-thumb {
+  background: rgba(16, 185, 129, 0.35);
+  border-radius: 9999px;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.terminal-container .xterm .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: rgba(16, 185, 129, 0.7);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
 }
 
 .react-flow__controls {
