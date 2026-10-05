@@ -1,0 +1,11 @@
+# Auto-generated backup ignore rules
+Nexus-desktop-/
+.wrangler/
+__pycache__/
+*.pyc
+node_modules/
+dist/
+out/
+target/
+*.exe
+.eslintcache
