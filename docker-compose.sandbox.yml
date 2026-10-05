@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  nexus-sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    container_name: nexus-isolated-sandbox
+    volumes:
+      # Mount only the dedicated sandbox workspace folder - host PC files cannot be touched!
+      - ./sandbox-workspace:/nexus-sandbox/workspace:rw
+    environment:
+      - NEXUS_SANDBOX_ACTIVE=1
+    stdin_open: true
+    tty: true
+    network_mode: bridge
