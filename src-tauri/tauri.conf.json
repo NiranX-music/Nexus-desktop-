@@ -1,0 +1,70 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/schema.json",
+  "build": {
+    "beforeBuildCommand": "",
+    "beforeDevCommand": "",
+    "devPath": "http://localhost:3000",
+    "distDir": "../landing-site"
+  },
+  "package": {
+    "productName": "NexusOS",
+    "version": "4.2.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false,
+      "shell": {
+        "all": false,
+        "open": true
+      },
+      "protocol": {
+        "all": true,
+        "asset": true
+      }
+    },
+    "bundle": {
+      "active": true,
+      "category": "DeveloperTool",
+      "copyright": "© 2026 NEXUS Intelligence Network",
+      "deb": {
+        "depends": ["libwebkit2gtk-4.0-37", "libgtk-3-0", "libappindicator3-1"]
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      },
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.icns",
+        "icons/icon.ico"
+      ],
+      "identifier": "com.nexus.app",
+      "longDescription": "NEXUS OS - Autonomous Intelligence Network & Cross-Device Matrix Desktop Client",
+      "shortDescription": "Autonomous Intelligence Runtime",
+      "targets": ["appimage", "deb", "nsis"]
+    },
+    "security": {
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' https: asset:;"
+    },
+    "updater": {
+      "active": false
+    },
+    "windows": [
+      {
+        "fullscreen": false,
+        "height": 860,
+        "resizable": true,
+        "title": "NEXUS Desktop Runtime",
+        "width": 1360,
+        "transparent": true,
+        "decorations": true,
+        "center": true
+      }
+    ],
+    "systemTray": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true
+    }
+  }
+}
