@@ -1,0 +1,78 @@
+name: Deploy Web
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref in this repository to deploy (branch, tag, or SHA)
+        required: true
+        default: main
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  changes:
+    name: Detect deployment scope
+    runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.filter.outputs.deploy_web }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'push'
+        with:
+          base: ${{ github.event.before }}
+          filters: .github/ci-paths.yml
+
+  deploy-web:
+    name: Deploy Web
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: https://app.cradle.wibus.ren
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Setup pnpm & Node.js
+        uses: ./.github/actions/setup
+        with:
+          node-version: 24
+
+      - name: Build Web App
+        run: |
+          pnpm --filter @cradle/landing build
+          pnpm build:web
+
+      - name: Prepare Pages artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p apps/web/dist/changelog
+          cp -R apps/landing/dist/changelog/. apps/web/dist/changelog/
+          echo "app.cradle.wibus.ren" > apps/web/dist/CNAME
+          cp apps/web/dist/index.html apps/web/dist/404.html
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/web/dist
+
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
