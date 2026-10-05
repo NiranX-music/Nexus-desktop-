@@ -1,0 +1,316 @@
+import asyncio
+from collections.abc import Callable, Coroutine, Hashable
+from datetime import datetime, timedelta
+from typing import Any, TypeVar, TypeVarTuple
+
+import structlog
+from fastapi import HTTPException, status
+
+from skyvern.config import settings
+from skyvern.exceptions import OrganizationNotFound, TaskNotFound, WorkflowRunNotFound
+from skyvern.forge import app
+from skyvern.forge.sdk.db.datetime_utils import naive_utc_now
+from skyvern.forge.sdk.schemas.tasks import TaskStatus
+from skyvern.forge.sdk.workflow.models.workflow import WorkflowRunStatus
+from skyvern.forge.sdk.workflow.retry_policy import LEASE_TAKEOVER_SECONDS, RetryDecision, get_recorded_decision
+from skyvern.forge.sdk.workflow.service import (
+    truncate_oversized_response_text,
+    truncate_oversized_response_value,
+)
+from skyvern.schemas.runs import (
+    BulkCancelRunsResponse,
+    RunEngine,
+    RunResponse,
+    RunType,
+    TaskRunRequest,
+    TaskRunResponse,
+)
+from skyvern.schemas.webhooks import RunWebhookReplayResponse
+from skyvern.services import (
+    task_v1_service,
+    task_v2_service,
+    uploaded_file_service,
+    webhook_service,
+    workflow_service,
+)
+
+LOG = structlog.get_logger()
+
+T = TypeVar("T")
+Ts = TypeVarTuple("Ts")
+
+_IN_FLIGHT: dict[tuple[Hashable, ...], asyncio.Task[Any]] = {}
+
+
+async def coalesce_in_flight(build: Callable[[*Ts], Coroutine[Any, Any, T]], *args: *Ts) -> T:
+    """Overlapping calls of one build with equal arguments await a single run of it, and a finished result is never
+    reused. A caller that joins an in-flight build can get a result older than its own request."""
+    # The key is the whole call, so the build must take everything that changes its result as an argument.
+    key = (build, *args)
+    task = _IN_FLIGHT.get(key)
+    if task is None or task.done():
+        task = asyncio.create_task(build(*args))
+        _IN_FLIGHT[key] = task
+
+        def _forget(done: asyncio.Task[T]) -> None:
+            if _IN_FLIGHT.get(key) is done:
+                del _IN_FLIGHT[key]
+            if not done.cancelled():
+                # Marks the exception retrieved so asyncio does not log it when every waiter cancelled.
+                done.exception()
+
+        task.add_done_callback(_forget)
+    # Shielded so one poller disconnecting does not cancel the build the other pollers are waiting on.
+    return await asyncio.shield(task)
+
+
+async def get_run_response_coalesced(run_id: str, organization_id: str, cap_output_values: bool) -> RunResponse | None:
+    return await coalesce_in_flight(get_run_response, run_id, organization_id, cap_output_values)
+
+
+async def get_run_response(
+    run_id: str, organization_id: str | None = None, cap_output_values: bool = False
+) -> RunResponse | None:
+    run = await app.DATABASE.tasks.get_run(run_id, organization_id=organization_id)
+    if not run:
+        # try to see if it's a workflow run id for task v2
+        task_v2 = await app.DATABASE.observer.get_task_v2_by_workflow_run_id(run_id, organization_id=organization_id)
+        if task_v2:
+            run = await app.DATABASE.tasks.get_run(task_v2.observer_cruise_id, organization_id=organization_id)
+
+    if not run:
+        return None
+
+    if (
+        run.task_run_type == RunType.task_v1
+        or run.task_run_type == RunType.openai_cua
+        or run.task_run_type == RunType.anthropic_cua
+        or run.task_run_type == RunType.ui_tars
+        or run.task_run_type == RunType.yutori_navigator
+        or run.task_run_type == RunType.task_v3
+    ):
+        # fetch task v1 from db and transform to task run response
+        try:
+            task_v1_response = await task_v1_service.get_task_v1_response(
+                task_id=run.run_id, organization_id=organization_id
+            )
+        except TaskNotFound:
+            return None
+        run_engine = RunEngine.skyvern_v1
+        if run.task_run_type == RunType.openai_cua:
+            run_engine = RunEngine.openai_cua
+        elif run.task_run_type == RunType.anthropic_cua:
+            run_engine = RunEngine.anthropic_cua
+        elif run.task_run_type == RunType.ui_tars:
+            run_engine = RunEngine.ui_tars
+        elif run.task_run_type == RunType.yutori_navigator:
+            run_engine = RunEngine.yutori_navigator
+        elif run.task_run_type == RunType.task_v3:
+            run_engine = RunEngine.skyvern_v3
+
+        return TaskRunResponse(
+            run_id=run.run_id,
+            run_type=run.task_run_type,
+            status=str(task_v1_response.status),
+            output=(
+                truncate_oversized_response_value(task_v1_response.extracted_information, run_id=run.run_id)
+                if cap_output_values
+                else task_v1_response.extracted_information
+            ),
+            failure_reason=(
+                truncate_oversized_response_text(task_v1_response.failure_reason)
+                if cap_output_values
+                else task_v1_response.failure_reason
+            ),
+            queued_at=task_v1_response.queued_at,
+            started_at=task_v1_response.started_at,
+            finished_at=task_v1_response.finished_at,
+            created_at=task_v1_response.created_at,
+            modified_at=task_v1_response.modified_at,
+            app_url=f"{settings.SKYVERN_APP_URL.rstrip('/')}/tasks/{task_v1_response.task_id}",
+            recording_url=task_v1_response.recording_url,
+            recording_archived=task_v1_response.recording_archived,
+            screenshot_urls=task_v1_response.action_screenshot_urls,
+            downloaded_files=task_v1_response.downloaded_files,
+            run_request=TaskRunRequest(
+                engine=run_engine,
+                prompt=task_v1_response.request.navigation_goal,
+                url=task_v1_response.request.url,
+                webhook_url=task_v1_response.request.webhook_callback_url,
+                totp_identifier=task_v1_response.request.totp_identifier,
+                totp_url=task_v1_response.request.totp_verification_url,
+                proxy_location=task_v1_response.request.proxy_location,
+                max_steps=task_v1_response.max_steps_per_run,
+                data_extraction_schema=task_v1_response.request.extracted_information_schema,
+                error_code_mapping=task_v1_response.request.error_code_mapping,
+                max_screenshot_scrolls=task_v1_response.request.max_screenshot_scrolls,
+            ),
+            errors=task_v1_response.errors,
+            step_count=task_v1_response.step_count,
+        )
+    elif run.task_run_type == RunType.task_v2:
+        task_v2 = await app.DATABASE.observer.get_task_v2(run.run_id, organization_id=organization_id)
+        if not task_v2:
+            return None
+        return await task_v2_service.build_task_v2_run_response(task_v2, cap_output_values=cap_output_values)
+    elif run.task_run_type == RunType.workflow_run:
+        return await workflow_service.get_workflow_run_response(
+            run.run_id, organization_id=organization_id, cap_output_values=cap_output_values
+        )
+    raise ValueError(f"Invalid task run type: {run.task_run_type}")
+
+
+async def cancel_task_v1(task_id: str, organization_id: str | None = None, api_key: str | None = None) -> None:
+    task = await app.DATABASE.tasks.get_task(task_id, organization_id=organization_id)
+    if not task:
+        raise TaskNotFound(task_id=task_id)
+    task = await app.agent.update_task(task, status=TaskStatus.canceled)
+    # A cancel short-circuits the run's own teardown, so the attachments are deleted here
+    # instead. Same ordering as teardown: bytes gone before the webhook announces the run.
+    await uploaded_file_service.delete_files_attached_to_run(run_id=task_id)
+    await app.agent.execute_task_webhook(task=task, api_key=api_key)
+
+
+async def cancel_task_v2(task_id: str, organization_id: str | None = None) -> None:
+    task_v2 = await app.DATABASE.observer.get_task_v2(task_id, organization_id=organization_id)
+    if not task_v2:
+        raise TaskNotFound(task_id=task_id)
+    await task_v2_service.mark_task_v2_as_canceled(
+        task_v2_id=task_id, workflow_run_id=task_v2.workflow_run_id, organization_id=organization_id
+    )
+    # A task v2's attachments are bound to the workflow run it executes as, not to task_id.
+    if task_v2.workflow_run_id:
+        await uploaded_file_service.delete_files_attached_to_run(run_id=task_v2.workflow_run_id)
+
+
+async def cancel_workflow_run(
+    workflow_run_id: str, organization_id: str | None = None, api_key: str | None = None
+) -> None:
+    workflow_run = await app.DATABASE.workflow_runs.get_workflow_run(
+        workflow_run_id=workflow_run_id,
+        organization_id=organization_id,
+    )
+    if not workflow_run:
+        raise WorkflowRunNotFound(workflow_run_id=workflow_run_id)
+
+    # get all the child workflow runs and cancel them
+    child_workflow_runs = await app.DATABASE.workflow_runs.get_workflow_runs_by_parent_workflow_run_id(
+        parent_workflow_run_id=workflow_run_id,
+        organization_id=organization_id,
+    )
+    for child_workflow_run in child_workflow_runs:
+        if child_workflow_run.status not in [
+            WorkflowRunStatus.running,
+            WorkflowRunStatus.created,
+            WorkflowRunStatus.queued,
+            WorkflowRunStatus.paused,
+        ]:
+            continue
+        await app.WORKFLOW_SERVICE.mark_workflow_run_as_canceled(child_workflow_run.workflow_run_id)
+
+    attempt_rows = await app.DATABASE.workflow_run_attempts.get_attempts(workflow_run_id)
+    if workflow_run.status.is_final() and attempt_rows:
+        latest_attempt = max(attempt_rows, key=lambda attempt: attempt.attempt_number)
+        await app.DATABASE.workflow_run_attempts.revoke_or_abandon_attempt(
+            workflow_run_id=workflow_run_id,
+            attempt_number=latest_attempt.attempt_number,
+            decision="revoked",
+            reason="cancel",
+        )
+        workflow_run = (
+            await app.DATABASE.workflow_runs.get_workflow_run(
+                workflow_run_id=workflow_run_id,
+                organization_id=organization_id,
+            )
+            or workflow_run
+        )
+
+    workflow_run = await app.WORKFLOW_SERVICE.mark_workflow_run_as_canceled(workflow_run_id)
+    attempt_rows = await app.DATABASE.workflow_run_attempts.get_attempts(workflow_run_id)
+    if attempt_rows:
+        decision = await get_recorded_decision(workflow_run_id)
+        if decision is None:
+            attempt_number = max(attempt_rows, key=lambda attempt: attempt.attempt_number).attempt_number
+            decision = RetryDecision(False, attempt_number, 0, True, "cancel")
+        attempt = next((row for row in attempt_rows if row.attempt_number == decision.attempt_number), None)
+        side_effects_claim_at = getattr(attempt, "side_effects_released_at", None)
+        if isinstance(side_effects_claim_at, datetime):
+            await app.WORKFLOW_SERVICE._run_terminal_side_effects_with_retries(
+                workflow_run,
+                decision,
+                api_key=api_key,
+                side_effects_claim_at=side_effects_claim_at,
+                side_effects_stale_before=naive_utc_now() - timedelta(seconds=LEASE_TAKEOVER_SECONDS),
+            )
+        else:
+            await app.WORKFLOW_SERVICE._run_terminal_side_effects_with_retries(
+                workflow_run,
+                decision,
+                api_key=api_key,
+            )
+    else:
+        await uploaded_file_service.delete_files_attached_to_run(run_id=workflow_run_id)
+        await app.WORKFLOW_SERVICE.execute_workflow_webhook(workflow_run, api_key=api_key)
+
+
+async def cancel_run(run_id: str, organization_id: str | None = None, api_key: str | None = None) -> None:
+    run = await app.DATABASE.tasks.get_run(run_id, organization_id=organization_id)
+    if not run:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run not found {run_id}",
+        )
+
+    if run.task_run_type in [
+        RunType.task_v1,
+        RunType.openai_cua,
+        RunType.anthropic_cua,
+        RunType.ui_tars,
+        RunType.yutori_navigator,
+        RunType.task_v3,
+    ]:
+        await cancel_task_v1(run_id, organization_id=organization_id, api_key=api_key)
+    elif run.task_run_type == RunType.task_v2:
+        await cancel_task_v2(run_id, organization_id=organization_id)
+    elif run.task_run_type == RunType.workflow_run:
+        await cancel_workflow_run(run_id, organization_id=organization_id, api_key=api_key)
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid run type to cancel: {run.task_run_type}",
+        )
+
+
+async def bulk_cancel_runs(
+    run_ids: list[str], organization_id: str | None = None, api_key: str | None = None
+) -> BulkCancelRunsResponse:
+    cancelled: list[str] = []
+    failed: list[str] = []
+
+    async def _cancel_one(run_id: str) -> None:
+        try:
+            await cancel_run(run_id, organization_id=organization_id, api_key=api_key)
+            cancelled.append(run_id)
+        except Exception:
+            LOG.warning("bulk_cancel_runs: failed to cancel run", run_id=run_id, exc_info=True)
+            failed.append(run_id)
+
+    await asyncio.gather(*[_cancel_one(run_id) for run_id in dict.fromkeys(run_ids)])
+    return BulkCancelRunsResponse(cancelled=cancelled, failed=failed)
+
+
+async def retry_run_webhook(
+    run_id: str,
+    organization_id: str | None = None,
+    api_key: str | None = None,
+    webhook_url: str | None = None,
+) -> RunWebhookReplayResponse:
+    """Retry sending the webhook for a run, optionally to a custom URL."""
+    if not organization_id:
+        raise OrganizationNotFound(organization_id="")
+    return await webhook_service.replay_run_webhook(
+        organization_id=organization_id,
+        run_id=run_id,
+        target_url=webhook_url,
+        api_key=api_key,
+    )
