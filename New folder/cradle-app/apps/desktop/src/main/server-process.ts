@@ -1,0 +1,1321 @@
+import type { ChildProcess } from 'node:child_process'
+import { execFile } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
+import { homedir, networkInterfaces } from 'node:os'
+import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
+
+import type { AcpDevtoolEvent } from '@cradle/ipc'
+import { app, dialog } from 'electron'
+import getPort from 'get-port'
+import { z } from 'zod'
+
+import type { DesktopServerBootstrapSnapshot, ServerBootstrapEvent, ServerBootstrapEventKind, ServerBootstrapPhase } from '../shared/server-runtime'
+import {
+  applyServerBootstrapEvent,
+  createDesktopServerBootstrapSnapshot,
+  SERVER_BOOTSTRAP_PHASES,
+} from '../shared/server-runtime'
+import { getDesktopDataDirectoryState } from './data-directory'
+import { getIpcDevtoolStore } from './ipc-devtool'
+import type { ManagedChildProcess } from './managed-process'
+import { spawnManagedProcess } from './managed-process'
+import { resolveDesktopInstalledPluginsDir } from './plugin-install-links'
+import { getPluginEnvVars } from './plugin-loader'
+import {
+  resolveDesktopPrimaryPluginsDir,
+  resolveDesktopPrimaryPluginsSourceKind,
+} from './plugin-paths'
+
+let serverProcess: ManagedChildProcess | null = null
+let managedRelayProcess: ManagedChildProcess | null = null
+let managedRelayUrl: string | null = null
+let restartCount = 0
+let locatedServerPid: number | null = null
+const MAX_RESTARTS = 3
+const SERVER_BOOTSTRAP_GLOBAL_TIMEOUT_MS = 30 * 60_000
+const SERVER_BOOTSTRAP_PHASE_TIMEOUT_MS = 10 * 60_000
+const SERVER_OUTPUT_LINE_LIMIT = 200
+const SERVER_PROCESS_COMMAND_TIMEOUT_MS = 1_000
+const LOGIN_SHELL_PATH_TIMEOUT_MS = 1500
+const SHELL_PATH_MARKER_START = '__CRADLE_SHELL_PATH_START__'
+const SHELL_PATH_MARKER_END = '__CRADLE_SHELL_PATH_END__'
+const CREDENTIAL_SECRET_FILE = 'credential-secret'
+const CODEX_APP_SERVER_PATH_ENV = 'CRADLE_CODEX_APP_SERVER_PATH'
+const RELAYD_PATH_ENV = 'CRADLE_RELAYD_PATH'
+const SAFE_STORAGE_PREFIX = 'v1-safe:'
+const PLAIN_STORAGE_PREFIX = 'v1-plain:'
+const KEYCHAIN_BACKUP_SUFFIX = '.keychain-backup'
+const CLI_SERVER_LOCATOR_FILE = 'cli/server.json'
+const NETWORK_PREFERENCES_FILE = 'preferences/network.json'
+const RELAYD_STARTUP_TIMEOUT_MS = 15_000
+const SERVER_EXIT_DIAGNOSTICS_FILE = 'server-process-exits.ndjson'
+export const SERVER_EXIT_DIAGNOSTICS_MAX_BYTES = 8 * 1024 * 1024
+export const SERVER_EXIT_DIAGNOSTICS_GENERATIONS = 3
+const DEV_SERVER_ENTRY_PATTERN = '/apps/server/src/index.ts'
+const PACKAGED_SERVER_ENTRY_PATTERN = '/server/dist/main.js'
+const DESKTOP_SERVER_OBSERVABILITY_ENV_KEYS = [
+  'CRADLE_OTEL_ENABLED',
+  'CRADLE_OTEL_SERVICE_NAME',
+  'CRADLE_OTEL_ENV',
+  'CRADLE_OTEL_TRACES_ENABLED',
+  'CRADLE_OTEL_METRICS_ENABLED',
+  'CRADLE_OTEL_LOG_CORRELATION_ENABLED',
+  'CRADLE_OTEL_EXPORTER_OTLP_ENDPOINT',
+  'CRADLE_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT',
+  'CRADLE_OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
+  'CRADLE_OTEL_PROMETHEUS_ENABLED',
+  'CRADLE_OTEL_PROMETHEUS_HOST',
+  'CRADLE_OTEL_PROMETHEUS_PORT',
+  'CRADLE_OTEL_PROMETHEUS_ENDPOINT',
+  'CRADLE_OTEL_RUNTIME_SAMPLE_INTERVAL_MS',
+  'CRADLE_LANGFUSE_ENABLED',
+  'LANGFUSE_PUBLIC_KEY',
+  'LANGFUSE_SECRET_KEY',
+  'LANGFUSE_BASE_URL',
+  'CRADLE_POSTHOG_AI_OBSERVABILITY_ENABLED',
+  'CRADLE_POSTHOG_AI_CAPTURE_MODE',
+  'CRADLE_POSTHOG_PROJECT_TOKEN',
+  'CRADLE_POSTHOG_HOST',
+  'CRADLE_PROFILING_ENABLED',
+  'CRADLE_PYROSCOPE_SERVER_URL',
+  'CRADLE_DIAGNOSTICS_ENABLED',
+  'CRADLE_DIAGNOSTICS_TOKEN',
+  'OTEL_SERVICE_NAME',
+  'OTEL_EXPORTER_OTLP_ENDPOINT',
+  'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT',
+  'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
+  'OTEL_EXPORTER_OTLP_HEADERS',
+  'OTEL_EXPORTER_OTLP_TRACES_HEADERS',
+  'OTEL_EXPORTER_OTLP_METRICS_HEADERS',
+  'OTEL_EXPORTER_OTLP_PROTOCOL',
+  'OTEL_EXPORTER_OTLP_TRACES_PROTOCOL',
+  'OTEL_EXPORTER_OTLP_METRICS_PROTOCOL',
+] as const
+const ExternalPluginsDirsSchema = z
+  .array(z.string().optional())
+  .transform(values => values.flatMap(value => (value?.trim() ? [value.trim()] : [])))
+const ServerLocatorSchema = z.object({
+  serverUrl: z.string().url(),
+  pid: z.number().int().positive().nullable().optional(),
+  version: z.string().optional(),
+  updatedAt: z.string().optional(),
+})
+const DesktopServerAccessModeSchema = z
+  .object({
+    inbound: z
+      .object({
+        serverAccessMode: z.enum(['local', 'network']).default('local'),
+      })
+      .default({ serverAccessMode: 'local' }),
+  })
+    .passthrough()
+const DesktopRelayAccessPreferencesSchema = z
+  .object({
+    inbound: z
+      .object({
+        relaySource: z.enum(['managed', 'external']).default('managed'),
+        relayUrl: z.string().trim().nullable().default(null),
+        managedRelayAccessMode: z.enum(['local', 'network']).default('network'),
+        managedRelayPublicUrl: z.string().trim().nullable().default(null),
+      })
+      .default({ relaySource: 'managed', relayUrl: null, managedRelayAccessMode: 'network', managedRelayPublicUrl: null }),
+  })
+  .passthrough()
+let currentServerUrl = ''
+const recentServerOutputLines: string[] = []
+
+interface DesktopServerExitExpectation {
+  pid: number | null
+  source: 'desktop'
+  reason: string
+  requestedAt: string
+  requestedSignal: NodeJS.Signals
+}
+
+type DesktopServerExitClassification
+  = | 'desktop-requested'
+    | 'external-signal-or-os-kill'
+    | 'process-exit-or-crash'
+
+let expectedServerExit: DesktopServerExitExpectation | null = null
+let lastServerSignalBeforeExit: { signal: string, line: string, observedAt: string } | null = null
+
+function resolveDevServerEntry(): string {
+  const candidates = [
+    resolve(process.cwd(), '../server/src/index.ts'),
+    resolve(process.cwd(), 'apps/server/src/index.ts'),
+    resolve(__dirname, '../../../../../apps/server/src/index.ts'),
+  ]
+
+  const entry = candidates.find(candidate => existsSync(candidate))
+  if (!entry) {
+    throw new Error(`Cannot find development server entry. Tried: ${candidates.join(', ')}`)
+  }
+  return entry
+}
+
+type DesktopServerAccessMode = 'local' | 'network'
+
+export function desktopServerBindHostForAccessMode(accessMode: DesktopServerAccessMode): string {
+  return accessMode === 'network' ? '0.0.0.0' : '127.0.0.1'
+}
+
+export function readDesktopServerAccessMode(dataDir: string): DesktopServerAccessMode {
+  const preferencesPath = join(dataDir, NETWORK_PREFERENCES_FILE)
+  if (!existsSync(preferencesPath)) {
+    return 'local'
+  }
+  try {
+    return DesktopServerAccessModeSchema.parse(JSON.parse(readFileSync(preferencesPath, 'utf8')))
+      .inbound
+.serverAccessMode
+  }
+ catch {
+    return 'local'
+  }
+}
+
+export type DesktopRelayAccessMode = 'local' | 'network' | 'external'
+
+export type DesktopRelaySource = 'managed' | 'external'
+
+export function readDesktopRelayAccessPreferences(dataDir: string): {
+  source: DesktopRelaySource
+  accessMode: DesktopRelayAccessMode
+  relayUrl: string | null
+  publicUrl: string | null
+} {
+  const preferencesPath = join(dataDir, NETWORK_PREFERENCES_FILE)
+  if (!existsSync(preferencesPath)) {
+    return { source: 'managed', accessMode: 'network', relayUrl: null, publicUrl: null }
+  }
+  try {
+    const parsed = DesktopRelayAccessPreferencesSchema.parse(JSON.parse(readFileSync(preferencesPath, 'utf8')))
+    return {
+      source: parsed.inbound.relaySource,
+      accessMode: parsed.inbound.relaySource === 'external' ? 'external' : parsed.inbound.managedRelayAccessMode,
+      relayUrl: parsed.inbound.relayUrl,
+      publicUrl: parsed.inbound.managedRelayPublicUrl,
+    }
+  }
+ catch {
+    return { source: 'managed', accessMode: 'network', relayUrl: null, publicUrl: null }
+  }
+}
+
+export function desktopRelayBindHostForAccessMode(accessMode: DesktopRelayAccessMode): string {
+  return accessMode === 'network' ? '0.0.0.0' : '127.0.0.1'
+}
+
+export function resolveDesktopRelayAdvertisedUrl(
+  port: number,
+  accessMode: DesktopRelayAccessMode,
+  configuredPublicUrl: string | null,
+): string {
+  if (configuredPublicUrl) {
+    const parsed = new URL(configuredPublicUrl)
+    if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname) {
+      throw new Error('Managed relay public URL must be an HTTP or HTTPS URL.')
+    }
+    return parsed.toString().replace(/\/$/, '')
+  }
+  if (accessMode === 'local') {
+    return `http://127.0.0.1:${port}`
+  }
+  const address = resolveDesktopLanAddress()
+  return `http://${address}:${port}`
+}
+
+/**
+ * Start the Cradle server as a forked child process.
+ * Returns the full URL the server is listening on.
+ */
+export async function startServer(callbacks?: {
+  onBootstrapSnapshot?: (snapshot: DesktopServerBootstrapSnapshot) => void
+  onRestarted?: (serverUrl: string) => void
+}): Promise<string> {
+  const onBootstrapSnapshot = callbacks?.onBootstrapSnapshot
+  expectedServerExit = null
+  lastServerSignalBeforeExit = null
+  restartCount = 0
+
+  const dataDir = getDesktopDataDirectoryState().serverDataRoot
+  const credentialSecret = resolveDesktopCredentialSecret(dataDir)
+  const existingServer = await readHealthyLocatedServerUrl(app.getPath('userData'))
+  if (existingServer) {
+    currentServerUrl = existingServer.serverUrl
+    locatedServerPid = existingServer.pid
+    console.warn(`[desktop] Reusing existing server on ${currentServerUrl}`)
+    return currentServerUrl
+  }
+
+  const port = await getPort({ port: [21423, 21424, 21425, 21426] })
+  const host = desktopServerBindHostForAccessMode(readDesktopServerAccessMode(dataDir))
+  currentServerUrl = `http://127.0.0.1:${port}`
+  const managedRelay = await startManagedRelay(dataDir)
+  let bootstrapSnapshot = createDesktopServerBootstrapSnapshot()
+  const bootstrapWatchdog: ServerBootstrapWatchdog = {
+    globalTimeoutMs: SERVER_BOOTSTRAP_GLOBAL_TIMEOUT_MS,
+    phaseTimeoutMs: SERVER_BOOTSTRAP_PHASE_TIMEOUT_MS,
+    readSnapshot: () => bootstrapSnapshot,
+  }
+
+  try {
+    await spawnServer({
+      host,
+      port,
+      dataDir,
+      credentialSecret,
+      managedRelay,
+      bootstrapWatchdog,
+      onBootstrapEvent: (event) => {
+        bootstrapSnapshot = applyServerBootstrapEvent(bootstrapSnapshot, event)
+        onBootstrapSnapshot?.(bootstrapSnapshot)
+      },
+      onRestarted: callbacks?.onRestarted,
+    })
+  }
+ catch (error) {
+    await stopManagedRelay()
+    throw error
+  }
+
+  await waitForServer(currentServerUrl, { bootstrapWatchdog })
+  writeCliServerLocator({
+    dataDir: app.getPath('userData'),
+    serverUrl: currentServerUrl,
+  })
+
+  console.warn(`[desktop] Server started on ${currentServerUrl}`)
+  return currentServerUrl
+}
+
+async function readHealthyLocatedServerUrl(
+  dataDir: string,
+): Promise<{ serverUrl: string, pid: number | null } | null> {
+  const locatorPath = join(dataDir, CLI_SERVER_LOCATOR_FILE)
+  if (!existsSync(locatorPath)) {
+    return null
+  }
+
+  try {
+    const locator = ServerLocatorSchema.parse(JSON.parse(readFileSync(locatorPath, 'utf8')))
+    await waitForServer(locator.serverUrl, { timeoutMs: 1_000 })
+    return { serverUrl: locator.serverUrl, pid: locator.pid ?? null }
+  }
+ catch {
+    removeCliServerLocator()
+    return null
+  }
+}
+
+function writeCliServerLocator(input: { dataDir: string, serverUrl: string }): void {
+  const locatorPath = join(input.dataDir, CLI_SERVER_LOCATOR_FILE)
+  mkdirSync(dirname(locatorPath), { recursive: true })
+  writeFileSync(
+    locatorPath,
+    `${JSON.stringify(
+      {
+        serverUrl: input.serverUrl,
+        pid: readServerTargetPid(serverProcess),
+        version: app.getVersion(),
+        updatedAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    )}\n`,
+    { encoding: 'utf8', mode: 0o600 },
+  )
+}
+
+function removeCliServerLocator(): void {
+  try {
+    rmSync(join(app.getPath('userData'), CLI_SERVER_LOCATOR_FILE), { force: true })
+  }
+ catch {
+    // Shutdown should not fail because the optional CLI locator cannot be cleared.
+  }
+}
+
+interface ManagedRelayLaunch {
+  command: string
+  args: string[]
+  cwd?: string
+}
+
+async function startManagedRelay(dataDir: string): Promise<{
+  relayUrl: string | null
+  accessMode: DesktopRelayAccessMode
+  pid: number | null
+}> {
+  if (managedRelayProcess && managedRelayUrl) {
+    return {
+      relayUrl: managedRelayUrl,
+      accessMode: process.env.CRADLE_RELAYD_ACCESS_MODE === 'local' ? 'local' : 'network',
+      pid: managedRelayProcess.targetPid ?? managedRelayProcess.pid ?? null,
+    }
+  }
+
+  const isDev = !!process.env.ELECTRON_RENDERER_URL
+  const access = readDesktopRelayAccessPreferences(dataDir)
+  if (access.source === 'external') {
+    return {
+      relayUrl: access.relayUrl ? normalizeDesktopRelayUrl(access.relayUrl) : null,
+      accessMode: 'external',
+      pid: null,
+    }
+  }
+  const port = await getPort({ port: [8787, 8788, 8789, 8790] })
+  const relayUrl = resolveDesktopRelayAdvertisedUrl(port, access.accessMode, access.publicUrl)
+  const localUrl = `http://127.0.0.1:${port}`
+  const relayDatabasePath = join(dataDir, 'relayd', 'fabric.sqlite3')
+  mkdirSync(dirname(relayDatabasePath), { recursive: true })
+
+  const launch = resolveDesktopRelayLaunch({ isDev, moduleDir: __dirname })
+  const relayEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    CRADLE_RELAYD_EXIT_ON_STDIN_CLOSE: 'true',
+    PATH: await resolveDesktopServerPath(process.env),
+  }
+  const child = spawnManagedProcess({
+    kind: 'spawn',
+    command: launch.command,
+    args: [
+      ...launch.args,
+      '-listen',
+      `${desktopRelayBindHostForAccessMode(access.accessMode)}:${port}`,
+      '-public-url',
+      relayUrl,
+      '-fabric-db',
+      relayDatabasePath,
+    ],
+    cwd: launch.cwd,
+    env: relayEnv,
+    stdin: 'pipe',
+    shutdownGraceMs: 5_000,
+  })
+  managedRelayProcess = child
+  managedRelayUrl = relayUrl
+  child.stdout?.on('data', chunk => console.warn(`[relayd] ${String(chunk).trimEnd()}`))
+  child.stderr?.on('data', chunk => console.error(`[relayd:error] ${String(chunk).trimEnd()}`))
+  child.on('error', error => console.error('[desktop] Managed relay process error:', error))
+  child.on('exit', (code, signal) => {
+    if (managedRelayProcess === child) {
+      managedRelayProcess = null
+      managedRelayUrl = null
+    }
+    if (code !== 0 && signal !== 'SIGTERM') {
+      console.error(`[desktop] Managed relay exited unexpectedly (code=${code}, signal=${signal})`)
+    }
+  })
+
+  try {
+    await waitForManagedRelay(localUrl, child)
+  }
+ catch (error) {
+    await stopManagedRelay()
+    throw error
+  }
+  console.warn(`[desktop] Managed relay started on ${relayUrl}`)
+  return {
+    relayUrl,
+    accessMode: access.accessMode,
+    pid: child.targetPid ?? child.pid ?? null,
+  }
+}
+
+async function waitForManagedRelay(url: string, child: ManagedChildProcess): Promise<void> {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < RELAYD_STARTUP_TIMEOUT_MS) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(`Managed relay exited before becoming healthy (code=${child.exitCode}, signal=${child.signalCode})`)
+    }
+    try {
+      const response = await fetch(`${url}/healthz`)
+      if (response.ok) {
+        return
+      }
+    }
+   catch {
+      // relayd is still binding its listener
+    }
+    await new Promise(resolveWait => setTimeout(resolveWait, 100))
+  }
+  throw new Error(`Managed relay failed to start within ${RELAYD_STARTUP_TIMEOUT_MS}ms`)
+}
+
+async function stopManagedRelay(): Promise<void> {
+  const child = managedRelayProcess
+  managedRelayProcess = null
+  managedRelayUrl = null
+  if (!child) {
+    return
+  }
+  await child.stop('SIGTERM')
+}
+
+function resolveDesktopRelayLaunch(input: { isDev: boolean, moduleDir: string }): ManagedRelayLaunch {
+  const configuredPath = process.env[RELAYD_PATH_ENV]?.trim()
+  if (configuredPath) {
+    if (!existsSync(configuredPath)) {
+      throw new Error(`Configured relayd binary is missing at ${configuredPath}`)
+    }
+    return { command: configuredPath, args: [] }
+  }
+
+  const executableName = process.platform === 'win32' ? 'relayd.exe' : 'relayd'
+  const bundledPath = input.isDev
+    ? [
+        resolve(input.moduleDir, '../../resources/relayd', `${process.platform}-${process.arch}`, executableName),
+        resolve(process.cwd(), 'resources/relayd', `${process.platform}-${process.arch}`, executableName),
+        resolve(process.cwd(), 'apps/desktop/resources/relayd', `${process.platform}-${process.arch}`, executableName),
+      ].find(candidate => existsSync(candidate))
+    : join(process.resourcesPath, 'relayd', `${process.platform}-${process.arch}`, executableName)
+  if (bundledPath && existsSync(bundledPath)) {
+    return { command: bundledPath, args: [] }
+  }
+  if (!input.isDev) {
+    throw new Error(`Bundled relayd runtime is missing at ${bundledPath}`)
+  }
+
+  const relaydRoot = [
+    resolve(process.cwd(), '../relayd'),
+    resolve(process.cwd(), 'apps/relayd'),
+    resolve(input.moduleDir, '../../../relayd'),
+  ].find(candidate => existsSync(join(candidate, 'go.mod')))
+  if (!relaydRoot) {
+    throw new Error('Cannot find the relayd source tree for development fallback.')
+  }
+  return { command: 'go', args: ['run', './cmd/relayd'], cwd: relaydRoot }
+}
+
+function resolveDesktopLanAddress(): string {
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      const isIPv4 = entry.family === 'IPv4'
+      if (isIPv4 && !entry.internal && entry.address) {
+        return entry.address
+      }
+    }
+  }
+  return '127.0.0.1'
+}
+
+function normalizeDesktopRelayUrl(value: string): string {
+  const parsed = new URL(value)
+  if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname) {
+    throw new Error('External Relay URL must be an HTTP or HTTPS URL.')
+  }
+  return parsed.toString().replace(/\/$/, '')
+}
+
+async function spawnServer(opts: {
+  host: string
+  port: number
+  dataDir: string
+  credentialSecret: string
+  managedRelay: { relayUrl: string | null, accessMode: DesktopRelayAccessMode, pid: number | null }
+  bootstrapWatchdog?: ServerBootstrapWatchdog
+  onBootstrapEvent?: (event: ServerBootstrapEvent) => void
+  onRestarted?: (serverUrl: string) => void
+}): Promise<void> {
+  const { host, port, dataDir, credentialSecret, managedRelay } = opts
+
+  // In dev, use tsx to run the TS source directly
+  // In production, run the compiled server entry
+  const isDev = !!process.env.ELECTRON_RENDERER_URL
+  const serverEntry = isDev
+    ? resolveDevServerEntry()
+    : join(process.resourcesPath, 'server/dist/main.js')
+
+  const execArgv = isDev ? ['--import', 'tsx'] : []
+  const execPath = isDev ? resolveDevNodeExecPath() : undefined
+  const pluginsDir = resolveDesktopPrimaryPluginsDir({ isDev, moduleDir: __dirname })
+  const pluginsSourceKind = resolveDesktopPrimaryPluginsSourceKind({ isDev })
+  const configuredMigrationsDir = process.env.CRADLE_MIGRATIONS_DIR?.trim()
+  const migrationsDir
+    = configuredMigrationsDir || (isDev ? undefined : join(process.resourcesPath, 'drizzle'))
+  const builtinSkillsDir = isDev ? undefined : join(process.resourcesPath, 'resources/skills')
+  const codexAppServerPath = resolveDesktopCodexAppServerPath()
+  const installedPluginsDir = resolveDesktopInstalledPluginsDir(app.getPath('userData'))
+  const externalPluginsDirs = [installedPluginsDir, process.env.CRADLE_EXTERNAL_PLUGINS_DIRS]
+  const externalPluginsDirList
+    = ExternalPluginsDirsSchema.parse(externalPluginsDirs).join(delimiter)
+  const serverEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...getPluginEnvVars(),
+    ...pickDesktopServerObservabilityEnv(),
+    CRADLE_HOST: host,
+    CRADLE_PORT: String(port),
+    CRADLE_DATA_DIR: dataDir,
+    CRADLE_VERSION: app.getVersion(),
+    CRADLE_CREDENTIAL_SECRET: credentialSecret,
+    ...(managedRelay.relayUrl ? { CRADLE_RELAYD_PUBLIC_URL: managedRelay.relayUrl } : {}),
+    CRADLE_RELAYD_ACCESS_MODE: managedRelay.accessMode,
+    ...(managedRelay.pid ? { CRADLE_RELAYD_PID: String(managedRelay.pid) } : {}),
+    CRADLE_DESKTOP_PID: String(process.pid),
+    CRADLE_PLUGINS_DIR: pluginsDir,
+    CRADLE_PLUGINS_SOURCE_KIND: pluginsSourceKind,
+    CRADLE_EXTERNAL_PLUGINS_DIRS: externalPluginsDirList,
+    CRADLE_MARKETPLACE_PLUGINS_DIR: installedPluginsDir,
+    ...(codexAppServerPath ? { [CODEX_APP_SERVER_PATH_ENV]: codexAppServerPath } : {}),
+    ...(migrationsDir ? { CRADLE_MIGRATIONS_DIR: migrationsDir } : {}),
+    ...(builtinSkillsDir ? { CRADLE_BUILTIN_SKILLS_DIR: builtinSkillsDir } : {}),
+    NODE_ENV: isDev ? 'development' : 'production',
+    FORCE_COLOR: '1',
+  }
+  if (!managedRelay.relayUrl) {
+    delete serverEnv.CRADLE_RELAYD_PUBLIC_URL
+  }
+  serverEnv.PATH = await resolveDesktopServerPath(serverEnv)
+  delete serverEnv.NO_COLOR
+
+  serverProcess = spawnManagedProcess({
+    kind: 'fork',
+    modulePath: serverEntry,
+    env: serverEnv,
+    execPath,
+    execArgv,
+    shutdownGraceMs: 5_000,
+  })
+  const child = serverProcess
+  locatedServerPid = readServerTargetPid(serverProcess)
+
+  child.stdout?.on('data', chunk => recordServerOutput('stdout', chunk))
+  child.stderr?.on('data', chunk => recordServerOutput('stderr', chunk))
+  child.on('message', (message) => {
+    const acpEvent = readServerAcpDevtoolEvent(message)
+    if (acpEvent) { getIpcDevtoolStore().recordAcp(acpEvent) }
+    const event = readServerBootstrapEvent(message)
+    if (event) {
+      opts.onBootstrapEvent?.(event)
+    }
+  })
+  child.on('error', (err) => {
+    const message = `[server:error] ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`
+    appendServerOutputLine(message)
+    console.error(message)
+  })
+  child.on('exit', (code, signal) => {
+    const expectation = takeExpectedServerExit(readServerTargetPid(child))
+    const observedServerSignal = lastServerSignalBeforeExit
+    const classification = classifyDesktopServerExit({
+      signal,
+      observedServerSignal: observedServerSignal?.signal ?? null,
+      expectation,
+    })
+    const diagnosticPath = writeServerExitDiagnostic({
+      child,
+      code,
+      signal,
+      observedServerSignal,
+      classification,
+      expectation,
+    })
+
+    if (classification === 'desktop-requested') {
+      console.warn(
+        `[desktop] Server process exited after desktop request `
+        + `(pid=${readServerTargetPid(child) ?? 'unknown'}, code=${code}, signal=${signal}, reason=${expectation?.reason})`,
+      )
+      return
+    }
+
+    console.error(
+      `[desktop] Server process exited unexpectedly `
+      + `(pid=${child.pid ?? 'unknown'}, code=${code}, signal=${signal}, classification=${classification}, diagnostics=${diagnosticPath ?? 'unwritten'})`,
+    )
+    removeCliServerLocator()
+
+    if (restartCount < MAX_RESTARTS) {
+      restartCount++
+      console.warn(`[desktop] Restarting server (attempt ${restartCount}/${MAX_RESTARTS})...`)
+      spawnServer(opts)
+        .then(() => waitForServer(currentServerUrl, { bootstrapWatchdog: opts.bootstrapWatchdog }))
+        .then(() => {
+          writeCliServerLocator({
+            dataDir: app.getPath('userData'),
+            serverUrl: currentServerUrl,
+          })
+          opts.onRestarted?.(currentServerUrl)
+        })
+        .catch((err) => {
+          console.error('[desktop] Server restart failed:', err)
+          showServerCrashDialog(code)
+        })
+    }
+ else {
+      showServerCrashDialog(code)
+    }
+  })
+}
+
+export function pickDesktopServerObservabilityEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const picked: NodeJS.ProcessEnv = {}
+  for (const key of DESKTOP_SERVER_OBSERVABILITY_ENV_KEYS) {
+    const value = env[key]
+    if (value?.trim()) {
+      picked[key] = value
+    }
+  }
+  return picked
+}
+
+export function classifyDesktopServerExit(input: {
+  signal: NodeJS.Signals | null
+  observedServerSignal?: string | null
+  expectation: DesktopServerExitExpectation | null
+}): DesktopServerExitClassification {
+  if (input.expectation) {
+    return 'desktop-requested'
+  }
+  if (input.signal || input.observedServerSignal) {
+    return 'external-signal-or-os-kill'
+  }
+  return 'process-exit-or-crash'
+}
+
+function markExpectedServerExit(
+  input: Pick<DesktopServerExitExpectation, 'pid' | 'reason' | 'requestedSignal'>,
+): void {
+  expectedServerExit = {
+    pid: input.pid,
+    source: 'desktop',
+    reason: input.reason,
+    requestedSignal: input.requestedSignal,
+    requestedAt: new Date().toISOString(),
+  }
+}
+
+function takeExpectedServerExit(pid: number | null): DesktopServerExitExpectation | null {
+  const expectation = expectedServerExit
+  if (!expectation) {
+    return null
+  }
+  if (expectation.pid !== null && pid !== null && expectation.pid !== pid) {
+    return null
+  }
+  expectedServerExit = null
+  return expectation
+}
+
+function writeServerExitDiagnostic(input: {
+  child: ChildProcess
+  code: number | null
+  signal: NodeJS.Signals | null
+  observedServerSignal: { signal: string, line: string, observedAt: string } | null
+  classification: DesktopServerExitClassification
+  expectation: DesktopServerExitExpectation | null
+}): string | null {
+  const diagnosticsPath = join(
+    getDesktopDataDirectoryState().serverDataRoot,
+    SERVER_EXIT_DIAGNOSTICS_FILE,
+  )
+  try {
+    mkdirSync(dirname(diagnosticsPath), { recursive: true })
+    rotateServerExitDiagnostics(diagnosticsPath)
+    appendFileSync(
+      diagnosticsPath,
+      `${JSON.stringify({
+        at: new Date().toISOString(),
+        classification: input.classification,
+        pid: input.child.pid ?? null,
+        code: input.code,
+        signal: input.signal,
+        observedServerSignal: input.observedServerSignal,
+        expectedExit: input.expectation,
+        desktopPid: process.pid,
+        serverUrl: currentServerUrl || null,
+        command: readChildSpawnCommand(input.child),
+        recentServerOutput: recentServerOutputLines.slice(-40),
+      })}\n`,
+      { encoding: 'utf8', mode: 0o600 },
+    )
+    return diagnosticsPath
+  }
+ catch (err) {
+    console.error('[desktop] Failed to write server exit diagnostics:', err)
+    return null
+  }
+}
+
+export function rotateServerExitDiagnostics(
+  diagnosticsPath: string,
+  maxBytes = SERVER_EXIT_DIAGNOSTICS_MAX_BYTES,
+  generations = SERVER_EXIT_DIAGNOSTICS_GENERATIONS,
+): boolean {
+  if (
+    generations < 1
+    || !existsSync(diagnosticsPath)
+    || statSync(diagnosticsPath).size < maxBytes
+  ) {
+    return false
+  }
+
+  rmSync(`${diagnosticsPath}.${generations}`, { force: true })
+  for (let generation = generations - 1; generation >= 1; generation -= 1) {
+    const source = `${diagnosticsPath}.${generation}`
+    if (existsSync(source)) {
+      renameSync(source, `${diagnosticsPath}.${generation + 1}`)
+    }
+  }
+  renameSync(diagnosticsPath, `${diagnosticsPath}.1`)
+  return true
+}
+
+function readChildSpawnCommand(child: ChildProcess): string[] {
+  const spawnargs = child.spawnargs
+  if (Array.isArray(spawnargs) && spawnargs.length > 0) {
+    return spawnargs
+  }
+  return child.spawnfile ? [child.spawnfile] : []
+}
+
+function recordServerOutput(source: 'stdout' | 'stderr', chunk: Buffer | string): void {
+  const text = chunk.toString()
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trimEnd()
+    if (!line) {
+      continue
+    }
+
+    const message = `[server:${source}] ${line}`
+    appendServerOutputLine(message)
+    if (source === 'stderr') {
+      console.error(message)
+    }
+ else {
+      console.warn(message)
+    }
+  }
+}
+
+function appendServerOutputLine(line: string): void {
+  recentServerOutputLines.push(line)
+  rememberServerSignalLine(line)
+  if (recentServerOutputLines.length > SERVER_OUTPUT_LINE_LIMIT) {
+    recentServerOutputLines.splice(0, recentServerOutputLines.length - SERVER_OUTPUT_LINE_LIMIT)
+  }
+}
+
+function rememberServerSignalLine(line: string): void {
+  if (!line.includes('received process signal')) {
+    return
+  }
+  const signal = line.match(/signal[=:]"?(SIG[A-Z0-9]+)/)?.[1] ?? 'unknown'
+  lastServerSignalBeforeExit = {
+    signal,
+    line,
+    observedAt: new Date().toISOString(),
+  }
+}
+
+function createServerStartupError(
+  url: string,
+  input: {
+    timeoutMs?: number
+    watchdogFailure?: string
+    bootstrapSnapshot?: DesktopServerBootstrapSnapshot
+  } = {},
+): Error {
+  const message
+    = input.watchdogFailure
+      ?? (input.timeoutMs === undefined
+      ? `Server exited before becoming ready at ${url}`
+      : `Server failed to start within ${input.timeoutMs}ms at ${url}`)
+  const bootstrapDiagnostics = input.bootstrapSnapshot
+    ? describeBootstrapDiagnostics(input.bootstrapSnapshot, Date.now())
+    : null
+  const recentOutput = recentServerOutputLines.slice(-40).join('\n') || '(none)'
+  return new Error(
+    [
+      message,
+      ...(bootstrapDiagnostics ? [bootstrapDiagnostics] : []),
+      `Recent server output:\n${recentOutput}`,
+    ].join('\n\n'),
+  )
+}
+
+/**
+ * Detach the desktop-owned reference to the server without stopping it.
+ *
+ * A normal app quit is only an observer disappearing; Chat Runtime still owns
+ * active run lifecycle. The CLI locator is intentionally left in place so the
+ * next desktop process can reattach to the same server.
+ */
+export function detachServer(): void {
+  void stopServer()
+}
+
+function resolveDevNodeExecPath(): string {
+  // npm_node_execpath may point to pnpm or another package manager, not Node.js.
+  // Check the resolved path to ensure we get a real node binary.
+  const candidate = process.env.npm_node_execpath ?? process.env.NODE ?? 'node'
+  const basename = candidate.split('/').pop()?.split('\\').pop()
+  if (basename === 'node' || basename?.includes('node')) {
+    return candidate
+  }
+  return 'node'
+}
+
+async function resolveDesktopServerPath(env: NodeJS.ProcessEnv): Promise<string> {
+  const shellPath = process.platform === 'darwin' ? await readLoginShellPath(env) : null
+  return joinPathSegments([
+    ...splitPath(shellPath),
+    ...splitPath(env.PATH),
+    ...readDesktopCommandPathFallbackSegments(env),
+  ])
+}
+
+function readLoginShellPath(env: NodeJS.ProcessEnv): Promise<string | null> {
+  return new Promise((resolve) => {
+    const shell = resolveLoginShell(env)
+    const command = `printf '${SHELL_PATH_MARKER_START}%s${SHELL_PATH_MARKER_END}' "$PATH"`
+    execFile(
+      shell,
+      ['-ilc', command],
+      {
+        env,
+        encoding: 'utf8',
+        maxBuffer: 64 * 1024,
+        timeout: LOGIN_SHELL_PATH_TIMEOUT_MS,
+      },
+      (_error, stdout) => resolve(readMarkedShellPath(stdout)),
+    )
+  })
+}
+
+function resolveLoginShell(env: NodeJS.ProcessEnv): string {
+  const shell = env.SHELL?.trim()
+  return shell && isAbsolute(shell) ? shell : '/bin/zsh'
+}
+
+function readMarkedShellPath(output: string): string | null {
+  const start = output.lastIndexOf(SHELL_PATH_MARKER_START)
+  if (start < 0) {
+    return null
+  }
+
+  const valueStart = start + SHELL_PATH_MARKER_START.length
+  const end = output.indexOf(SHELL_PATH_MARKER_END, valueStart)
+  if (end < 0) {
+    return null
+  }
+
+  const value = output.slice(valueStart, end)
+  return value || null
+}
+
+function splitPath(value: string | null | undefined): string[] {
+  return value?.split(delimiter).filter(Boolean) ?? []
+}
+
+function joinPathSegments(segments: string[]): string {
+  const seen = new Set<string>()
+  const uniqueSegments: string[] = []
+  for (const segment of segments) {
+    if (seen.has(segment)) {
+      continue
+    }
+    seen.add(segment)
+    uniqueSegments.push(segment)
+  }
+  return uniqueSegments.join(delimiter)
+}
+
+export function resolveDesktopCodexAppServerPath(): string | undefined {
+  // Only an explicit override is forwarded. Bundled and dev-cache binaries are
+  // gone — the server resolves its managed installation (or PATH/CLI fallback).
+  return process.env[CODEX_APP_SERVER_PATH_ENV]?.trim() || undefined
+}
+
+function readDesktopCommandPathFallbackSegments(env: NodeJS.ProcessEnv): string[] {
+  const home = env.HOME?.trim() || homedir()
+  return [
+    join(home, '.local/bin'),
+    join(home, 'bin'),
+    join(home, 'Library/pnpm'),
+    join(home, '.npm-global/bin'),
+    join(home, '.bun/bin'),
+    join(home, '.deno/bin'),
+    join(home, '.cargo/bin'),
+    join(home, 'go/bin'),
+    join(home, '.vite-plus/bin'),
+    '/opt/homebrew/bin',
+    '/opt/homebrew/sbin',
+    '/usr/local/bin',
+    '/usr/local/sbin',
+    '/usr/bin',
+    '/bin',
+    '/usr/sbin',
+    '/sbin',
+  ].filter(path => existsSync(path))
+}
+
+function resolveDesktopCredentialSecret(dataDir: string): string {
+  const configuredSecret = process.env.CRADLE_CREDENTIAL_SECRET?.trim()
+  if (configuredSecret) {
+    return configuredSecret
+  }
+
+  mkdirSync(dataDir, { recursive: true })
+  const secretPath = join(dataDir, CREDENTIAL_SECRET_FILE)
+  if (existsSync(secretPath)) {
+    return readDesktopCredentialSecret(secretPath)
+  }
+
+  const secret = randomBytes(32).toString('base64url')
+  writeDesktopCredentialSecret(secretPath, secret)
+  return secret
+}
+
+function readDesktopCredentialSecret(secretPath: string): string {
+  const serializedSecret = readFileSync(secretPath, 'utf8').trim()
+  if (serializedSecret.startsWith(SAFE_STORAGE_PREFIX)) {
+    const secret = randomBytes(32).toString('base64url')
+    archiveKeychainBackedSecret(secretPath)
+    writeDesktopCredentialSecret(secretPath, secret)
+    return secret
+  }
+  if (serializedSecret.startsWith(PLAIN_STORAGE_PREFIX)) {
+    return serializedSecret.slice(PLAIN_STORAGE_PREFIX.length)
+  }
+  return serializedSecret
+}
+
+function writeDesktopCredentialSecret(secretPath: string, secret: string): void {
+  writeFileSync(secretPath, `${PLAIN_STORAGE_PREFIX}${secret}`, { encoding: 'utf8', mode: 0o600 })
+}
+
+function archiveKeychainBackedSecret(secretPath: string): void {
+  const backupPath = `${secretPath}${KEYCHAIN_BACKUP_SUFFIX}`
+  if (existsSync(backupPath)) {
+    return
+  }
+  renameSync(secretPath, backupPath)
+}
+
+function showServerCrashDialog(exitCode: number | null): void {
+  dialog
+    .showMessageBox({
+      type: 'error',
+      title: 'Server Error',
+      message: 'The Cradle server has stopped unexpectedly.',
+      detail: `Exit code: ${exitCode}\nThe app may not function correctly. Please restart the application.`,
+      buttons: ['Restart App', 'Close'],
+    })
+    .then(({ response }) => {
+      if (response === 0) {
+        app.relaunch()
+        app.exit(0)
+      }
+    })
+}
+
+/**
+ * Stop the server process.
+ */
+export async function stopServer(timeoutMs = 5_000): Promise<void> {
+  const child = serverProcess
+  if (!child) {
+    await stopLocatedServer(timeoutMs)
+    await stopManagedRelay()
+    return
+  }
+
+  serverProcess = null
+  locatedServerPid = null
+  removeCliServerLocator()
+
+  markExpectedServerExit({
+    pid: readServerTargetPid(child),
+    reason: 'desktop stopServer managed shutdown',
+    requestedSignal: 'SIGTERM',
+  })
+  await Promise.race([
+    child.stop('SIGTERM'),
+    new Promise<void>((resolveStop) => {
+      const timer = setTimeout(resolveStop, timeoutMs + 1_000)
+      timer.unref()
+    }),
+  ])
+  await stopManagedRelay()
+}
+
+async function stopLocatedServer(timeoutMs: number): Promise<void> {
+  const pid = locatedServerPid
+  locatedServerPid = null
+  if (!pid) {
+    removeCliServerLocator()
+    return
+  }
+
+  if (!(await canStopLocatedServer(pid))) {
+    console.warn(
+      `[desktop] Skipping located server stop because pid ${pid} no longer matches a Cradle server.`,
+    )
+    removeCliServerLocator()
+    return
+  }
+
+  try {
+    process.kill(pid, 'SIGTERM')
+  }
+ catch {
+    // The located server may have already exited.
+    removeCliServerLocator()
+    return
+  }
+
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0)
+    }
+ catch {
+      removeCliServerLocator()
+      return
+    }
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+
+  try {
+    process.kill(pid, 'SIGKILL')
+  }
+ catch {
+    // The located server may have exited after the timeout check.
+  }
+  removeCliServerLocator()
+}
+
+async function canStopLocatedServer(pid: number): Promise<boolean> {
+  if (!currentServerUrl) {
+    return false
+  }
+
+  try {
+    await waitForServer(currentServerUrl, { timeoutMs: 1_000 })
+  }
+ catch {
+    return false
+  }
+
+  const commandLine = await readProcessCommandLine(pid)
+  return commandLine ? isDesktopServerProcessCommand(commandLine) : false
+}
+
+async function readProcessCommandLine(pid: number): Promise<string | null> {
+  if (process.platform === 'win32') {
+    return null
+  }
+
+  return (
+    (await readUnixProcessCommandLine(pid, ['-p', String(pid), '-wwE', '-o', 'command=']))
+    ?? (await readUnixProcessCommandLine(pid, ['-p', String(pid), '-ww', '-o', 'command=']))
+  )
+}
+
+function readUnixProcessCommandLine(pid: number, args: string[]): Promise<string | null> {
+  return new Promise((resolveCommand) => {
+    execFile(
+      'ps',
+      args,
+      {
+        encoding: 'utf8',
+        maxBuffer: 256 * 1024,
+        timeout: SERVER_PROCESS_COMMAND_TIMEOUT_MS,
+      },
+      (error, stdout) => {
+        if (error) {
+          resolveCommand(null)
+          return
+        }
+
+        const commandLine = stdout.trim()
+        resolveCommand(commandLine || null)
+      },
+    )
+  })
+}
+
+export function isDesktopServerProcessCommand(commandLine: string): boolean {
+  const normalizedCommand = commandLine.replaceAll('\\', '/')
+  return (
+    normalizedCommand.includes(DEV_SERVER_ENTRY_PATTERN)
+    || normalizedCommand.includes(PACKAGED_SERVER_ENTRY_PATTERN)
+  )
+}
+
+function readServerTargetPid(child: ManagedChildProcess | null): number | null {
+  return child?.targetPid ?? child?.pid ?? null
+}
+
+export function readServerBootstrapEvent(message: unknown): ServerBootstrapEvent | null {
+  if (
+    typeof message !== 'object'
+    || message === null
+    || !('type' in message)
+    || message.type !== 'target-message'
+    || !('message' in message)
+  ) {
+    return null
+  }
+  const targetMessage = message.message
+  if (
+    typeof targetMessage !== 'object'
+    || targetMessage === null
+    || !('type' in targetMessage)
+    || targetMessage.type !== 'cradle-server-bootstrap'
+    || !('phase' in targetMessage)
+    || !('kind' in targetMessage)
+    || !('at' in targetMessage)
+    || typeof targetMessage.phase !== 'string'
+    || typeof targetMessage.kind !== 'string'
+    || typeof targetMessage.at !== 'string'
+  ) {
+    return null
+  }
+  if (
+    !SERVER_BOOTSTRAP_PHASES.includes(targetMessage.phase as ServerBootstrapPhase)
+    || !(['started', 'completed', 'failed', 'ready'] as ServerBootstrapEventKind[]).includes(
+      targetMessage.kind as ServerBootstrapEventKind,
+    )
+  ) {
+    return null
+  }
+  return {
+    type: 'cradle-server-bootstrap',
+    phase: targetMessage.phase as ServerBootstrapPhase,
+    kind: targetMessage.kind as ServerBootstrapEventKind,
+    at: targetMessage.at,
+    ...('error' in targetMessage && typeof targetMessage.error === 'string'
+      ? { error: targetMessage.error }
+      : {}),
+  }
+}
+
+export function readServerAcpDevtoolEvent(message: unknown): AcpDevtoolEvent | null {
+  if (
+    typeof message !== 'object'
+    || message === null
+    || !('type' in message)
+    || message.type !== 'target-message'
+    || !('message' in message)
+  ) { return null }
+  const target = message.message
+  if (
+    typeof target !== 'object'
+    || target === null
+    || !('type' in target)
+    || target.type !== 'cradle-acp-devtool-event'
+    || !('event' in target)
+  ) { return null }
+  return target.event as AcpDevtoolEvent
+}
+
+export interface ServerBootstrapWatchdog {
+  globalTimeoutMs: number
+  phaseTimeoutMs: number
+  readSnapshot: () => DesktopServerBootstrapSnapshot
+}
+
+export interface WaitForServerOptions {
+  timeoutMs?: number
+  bootstrapWatchdog?: ServerBootstrapWatchdog
+}
+
+export async function waitForServer(
+  url: string,
+  options: WaitForServerOptions = {},
+): Promise<void> {
+  const start = Date.now()
+  while (options.timeoutMs === undefined || Date.now() - start < options.timeoutMs) {
+    const bootstrapSnapshot = options.bootstrapWatchdog?.readSnapshot()
+    if (serverProcess && (serverProcess.exitCode !== null || serverProcess.signalCode !== null)) {
+      throw createServerStartupError(url, { bootstrapSnapshot })
+    }
+    const watchdogFailure = readBootstrapWatchdogFailure(start, options.bootstrapWatchdog)
+    if (watchdogFailure) {
+      throw createServerStartupError(url, { watchdogFailure, bootstrapSnapshot })
+    }
+    try {
+      const res = await fetch(`${url}/health`)
+      if (res.ok && isBootstrapReady(bootstrapSnapshot)) {
+        return
+      }
+    }
+ catch {
+      // Server not ready yet
+    }
+    await new Promise(r => setTimeout(r, 200))
+  }
+  throw createServerStartupError(url, {
+    timeoutMs: options.timeoutMs,
+    bootstrapSnapshot: options.bootstrapWatchdog?.readSnapshot(),
+  })
+}
+
+function isBootstrapReady(snapshot: DesktopServerBootstrapSnapshot | undefined): boolean {
+  // A managed server must prove both that its listener callback ran and that
+  // its ready-only health endpoint responds. Located external servers use the
+  // bounded health probe without a local bootstrap watchdog.
+  return (
+    !snapshot
+    || (snapshot.lastEvent?.phase === 'listener-establishment' && snapshot.lastEvent.kind === 'ready')
+  )
+}
+
+function readBootstrapWatchdogFailure(
+  startedAt: number,
+  watchdog: ServerBootstrapWatchdog | undefined,
+): string | null {
+  if (!watchdog) {
+    return null
+  }
+  const now = Date.now()
+  const snapshot = watchdog.readSnapshot()
+  if (now - startedAt >= watchdog.globalTimeoutMs) {
+    return `Server bootstrap global timeout after ${watchdog.globalTimeoutMs}ms.`
+  }
+  if (
+    snapshot.currentPhase
+    && snapshot.phaseStartedAt
+    && now - Date.parse(snapshot.phaseStartedAt) >= watchdog.phaseTimeoutMs
+  ) {
+    return `Server bootstrap phase timeout after ${watchdog.phaseTimeoutMs}ms.`
+  }
+  return null
+}
+
+function describeBootstrapDiagnostics(
+  snapshot: DesktopServerBootstrapSnapshot,
+  now: number,
+): string {
+  const phase = snapshot.currentPhase ?? snapshot.lastEvent?.phase ?? 'no reported phase'
+  const phaseReport = phase === 'no reported phase' ? undefined : snapshot.phases[phase]
+  const phaseStartedAt = snapshot.phaseStartedAt ?? phaseReport?.startedAt
+  const phaseEndedAt = phaseReport?.failedAt ?? phaseReport?.completedAt
+  const phaseDurationMs = phaseStartedAt
+    ? Math.max(0, (phaseEndedAt ? Date.parse(phaseEndedAt) : now) - Date.parse(phaseStartedAt))
+    : null
+  const lastEvent = snapshot.lastEvent
+    ? `${snapshot.lastEvent.kind}:${snapshot.lastEvent.phase} at ${snapshot.lastEvent.at}`
+    : 'none'
+  return [
+    `Last bootstrap phase: "${phase}".`,
+    `Phase duration: ${phaseDurationMs === null ? 'unavailable' : `${phaseDurationMs}ms`}.`,
+    `Last known bootstrap event: ${lastEvent}.`,
+  ].join(' ')
+}
