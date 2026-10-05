@@ -104,7 +104,7 @@ export default function VideoStudio() {
   return (
     <div className="h-full w-full overflow-hidden p-4 text-zinc-100">
       <div className="grid h-full min-h-0 grid-cols-12 gap-3">
-        <aside className="col-span-12 flex min-h-0 flex-col gap-4 overflow-y-auto rounded-2xl border border-emerald-500/15 bg-black/55 p-4 lg:col-span-4">
+        <aside className="col-span-12 flex min-h-0 flex-col gap-4 overflow-y-auto pr-2 scrollbar-small rounded-2xl border border-emerald-500/15 bg-black/55 p-4 lg:col-span-4">
           <div className="flex items-center gap-3 border-b border-white/10 pb-4">
             <div className="rounded-xl border border-cyan-400/20 bg-cyan-400/10 p-3 text-cyan-200">
               <RiFilmLine size={24} />
@@ -159,7 +159,7 @@ export default function VideoStudio() {
           </div>
         </aside>
 
-        <main className="col-span-12 flex min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-black/45 lg:col-span-8">
+        <main className="col-span-12 flex min-h-0 flex-col overflow-y-auto pr-1 scrollbar-small rounded-2xl border border-white/10 bg-black/45 lg:col-span-8">
           <form onSubmit={generate} className="flex min-h-0 flex-1 flex-col gap-4 p-5">
             <div>
               <label className="mb-2 block text-[10px] font-mono uppercase tracking-[0.22em] text-zinc-500">
@@ -169,7 +169,7 @@ export default function VideoStudio() {
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
                 placeholder="Describe the video Lance should generate..."
-                className="h-40 w-full resize-none rounded-2xl border border-white/10 bg-black/70 p-4 text-sm leading-6 text-zinc-100 outline-none focus:border-emerald-400/50"
+                className="h-40 w-full resize-none rounded-2xl border border-white/10 bg-black/70 p-4 text-sm leading-6 text-zinc-100 outline-none focus:border-emerald-400/50 scrollbar-small"
               />
             </div>
 
