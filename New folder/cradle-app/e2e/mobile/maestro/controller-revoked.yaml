@@ -1,0 +1,12 @@
+appId: app.cradle.mobile
+---
+- stopApp
+- launchApp:
+    label: "perf-action:refresh-controller-state|relaunch after Controller revocation"
+- extendedWaitUntil:
+    visible:
+      id: fabric-membership-unavailable
+    timeout: 45000
+- assertVisible:
+    text: Access revoked
+    label: "perf-response:refresh-controller-state|access revoked is visible"
