@@ -1,0 +1,20 @@
+[package]
+name = "nexus-desktop"
+version = "4.2.0"
+description = "NEXUS OS Desktop Client & Autonomous Agent Daemon"
+authors = ["Nexdune <nexus@matrix.io>"]
+license = "MIT"
+repository = "https://github.com/nexus-matrix/nexus-desktop"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+
+[dependencies]
+tauri = { version = "1.5", features = ["shell-open", "system-tray"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
