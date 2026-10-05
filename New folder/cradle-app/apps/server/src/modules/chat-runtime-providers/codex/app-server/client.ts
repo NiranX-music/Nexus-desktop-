@@ -1,0 +1,607 @@
+import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { delimiter, isAbsolute, join } from 'node:path'
+import type { Readable, Writable } from 'node:stream'
+
+import { jsonrepair } from 'jsonrepair'
+
+import type { ManagedChildProcess } from '../../../../infra/managed-process'
+import { spawnManagedProcess } from '../../../../infra/managed-process'
+import type { ClientInfo } from '../app-server-protocol/ClientInfo'
+import type { ThreadForkParams } from '../app-server-protocol/v2/ThreadForkParams'
+import { resolveCodexManagedAppServerPath } from '../runtime-installation'
+import { serializeConfigOverrides } from './config-overrides'
+import { syncCodexAppServerLogInsertBlockerFromFeatureFlag } from './log-insert-blocker'
+import { looksLikeJsonNdjsonLine, NdjsonLineSplitter } from './ndjson-lines'
+import { prepareCodexAppServerHome } from './runtime-home'
+import { isCodexAppServerInteractiveServerRequest } from './server-request-methods'
+
+export { resolveCodexAppServerHome } from './runtime-home'
+
+type RequestId = number
+type CodexUserAgentMode = 'cradle' | 'native'
+
+export interface CodexAppServerMessage {
+  jsonrpc?: '2.0'
+  id?: RequestId
+  method?: string
+  params?: unknown
+  emittedAtMs?: number
+  result?: unknown
+  error?: {
+    code: number
+    message: string
+    data?: unknown
+  }
+}
+
+export interface CodexAppServerServerRequest extends CodexAppServerMessage {
+  id: RequestId
+  method: string
+}
+
+export interface CodexAppServerClientOptions {
+  appServerPath?: string
+  codexCliPath?: string
+  apiKey?: string
+  config?: NonNullable<ThreadForkParams['config']>
+  env?: Record<string, string | undefined>
+  userAgentMode?: CodexUserAgentMode
+  cliCompatibleIdentity?: boolean
+  serverRequestHandler?: (request: CodexAppServerServerRequest) => Promise<unknown> | unknown
+  exposeServerRequestsAsNotifications?: boolean
+  onTerminated?: (error: Error) => void
+}
+
+const CODEX_NATIVE_CLIENT_INFO_FALLBACK_VERSION = '0.0.0'
+const CODEX_APP_SERVER_PATH_ENV = 'CRADLE_CODEX_APP_SERVER_PATH'
+const MAX_EXIT_ERROR_DIAGNOSTICS = 3
+const MAX_STDERR_BUFFER_LENGTH = 64_000
+const codexNativeClientVersionByPath = new Map<string, Promise<string>>()
+
+export function buildCradleCodexAppServerEnv(input: {
+  chatSessionId: string
+  workspaceId?: string | null
+  workspacePath?: string | null
+  agentId?: string | null
+  agentHome?: string | null
+}): Record<string, string> {
+  return Object.fromEntries(Object.entries({
+    CRADLE_CHAT_SESSION_ID: input.chatSessionId,
+    CRADLE_WORKSPACE_ID: input.workspaceId ?? undefined,
+    CRADLE_WORKSPACE_PATH: input.workspacePath ?? undefined,
+    CRADLE_AGENT_ID: input.agentId ?? undefined,
+    CRADLE_AGENT_HOME: input.agentHome ?? undefined,
+  }).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+}
+
+export class CodexAppServerClient {
+  private readonly child: ManagedChildProcess
+  private readonly childStdin: Writable
+  private readonly childStdout: Readable
+  private readonly pendingRequests = new Map<RequestId, {
+    resolve: (value: unknown) => void
+    reject: (error: Error) => void
+  }>()
+
+  private readonly notificationQueue: CodexAppServerMessage[] = []
+  private readonly notificationWaiters: Array<(message: CodexAppServerMessage) => void> = []
+  private readonly serverRequestHandler?: (request: CodexAppServerServerRequest) => Promise<unknown> | unknown
+  private readonly exposeServerRequestsAsNotifications: boolean
+  private readonly clientInfoVersion: string
+  /** The resolved app-server command this client spawned (or will spawn). */
+  readonly executablePath: string
+  private readonly userAgentMode: CodexUserAgentMode
+  private readonly cliCompatibleIdentity: boolean
+  private readonly onTerminated?: (error: Error) => void
+  private nextRequestId = 1
+  private closed = false
+  private stderrText = ''
+
+  /** Returns the PID of the underlying codex-app-server process, if known. */
+  get pid(): number | null {
+    return this.child.targetPid ?? this.child.pid ?? null
+  }
+
+  constructor(options: CodexAppServerClientOptions = {}) {
+    this.serverRequestHandler = options.serverRequestHandler
+    this.exposeServerRequestsAsNotifications = options.exposeServerRequestsAsNotifications ?? true
+    this.onTerminated = options.onTerminated
+    const env = { ...process.env, ...options.env }
+    const launch = resolveCodexAppServerLaunch({
+      env,
+      appServerPath: options.appServerPath,
+      codexCliPath: options.codexCliPath,
+    })
+    if (launch.source === 'codex-cli-fallback') {
+      console.warn(
+        '[codex] Standalone codex-app-server was not found; falling back to `codex app-server` with VSCode session source.',
+      )
+    }
+    const args = [...launch.args]
+    this.cliCompatibleIdentity = options.cliCompatibleIdentity ?? false
+    if (this.cliCompatibleIdentity) {
+      delete env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE
+    }
+    if (options.config) {
+      for (const override of serializeConfigOverrides(options.config)) {
+        args.push('--config', override)
+      }
+    }
+
+    this.clientInfoVersion = readCradleCodexClientVersion(env)
+    this.executablePath = launch.command
+    this.userAgentMode = options.userAgentMode ?? 'cradle'
+    env.CODEX_HOME = prepareCodexAppServerHome()
+    syncCodexAppServerLogInsertBlockerFromFeatureFlag()
+    if (options.apiKey) {
+      env.CRADLE_CODEX_API_KEY = options.apiKey
+      env.CODEX_API_KEY = options.apiKey
+      env.OPENAI_API_KEY = options.apiKey
+    }
+
+    this.child = spawnManagedProcess({
+      kind: 'spawn',
+      command: this.executablePath,
+      args,
+      env,
+      stdin: 'pipe',
+      shutdownGraceMs: 5_000,
+    })
+    const childStdin = this.child.stdin
+    const childStdout = this.child.stdout
+    const childStderr = this.child.stderr
+    if (!childStdin || !childStdout || !childStderr) {
+      throw new Error('Codex app-server process did not expose stdio pipes')
+    }
+    this.childStdin = childStdin
+    this.childStdout = childStdout
+    childStderr.on('data', (chunk: Buffer) => {
+      this.stderrText = `${this.stderrText}${chunk.toString('utf8')}`.slice(-MAX_STDERR_BUFFER_LENGTH)
+    })
+    childStdin.on('error', error => this.terminate(error))
+    this.child.once('error', error => this.terminate(error))
+    this.child.once('exit', (code, signal) => this.terminate(this.createExitError(code, signal)))
+    this.child.once('close', (code, signal) => this.terminate(this.createExitError(code, signal)))
+
+    // Frame on LF only — Node readline also splits on U+2028/U+2029 and will
+    // shred valid NDJSON that embeds those characters inside JSON strings.
+    const lines = new NdjsonLineSplitter(line => this.handleLine(line))
+    childStdout.on('data', (chunk: Buffer) => lines.push(chunk))
+    childStdout.on('end', () => lines.flush())
+  }
+
+  async initialize(): Promise<void> {
+    const clientInfo = await this.readClientInfo()
+    await this.request('initialize', {
+      clientInfo,
+      capabilities: { experimentalApi: true },
+    })
+    syncCodexAppServerLogInsertBlockerFromFeatureFlag()
+  }
+
+  private async readClientInfo(): Promise<ClientInfo> {
+    if (this.cliCompatibleIdentity) {
+      return {
+        name: 'codex-tui',
+        title: 'Codex CLI',
+        version: await readCodexNativeClientVersion(this.executablePath),
+      }
+    }
+    if (this.userAgentMode === 'native') {
+      return {
+        name: 'codex',
+        title: 'Codex',
+        version: await readCodexNativeClientVersion(this.executablePath),
+      }
+    }
+    return {
+      name: 'cradle',
+      title: 'Cradle',
+      version: this.clientInfoVersion,
+    }
+  }
+
+  request(method: string, params?: unknown): Promise<unknown> {
+    if (this.closed) {
+      return Promise.reject(new Error('Codex app-server is closed'))
+    }
+    const id = this.nextRequestId
+    this.nextRequestId += 1
+    const payload = params === undefined
+      ? { jsonrpc: '2.0' as const, id, method }
+      : { jsonrpc: '2.0' as const, id, method, params }
+    return new Promise((resolve, reject) => {
+      this.pendingRequests.set(id, { resolve, reject })
+      this.childStdout.resume()
+      this.writeMessage(payload).catch((error) => {
+        this.pendingRequests.delete(id)
+        reject(error)
+      })
+    })
+  }
+
+  async nextNotification(signal?: AbortSignal): Promise<CodexAppServerMessage | null> {
+    if (this.notificationQueue.length > 0) {
+      return this.notificationQueue.shift() ?? null
+    }
+    if (this.closed) {
+      return null
+    }
+    return new Promise((resolve, reject) => {
+      let waiter: ((message: CodexAppServerMessage) => void) | null = null
+      const onAbort = () => {
+        const index = waiter ? this.notificationWaiters.indexOf(waiter) : -1
+        if (index >= 0) {
+          this.notificationWaiters.splice(index, 1)
+        }
+        reject(new Error('Codex app-server notification wait aborted'))
+      }
+      if (signal?.aborted) {
+        reject(new Error('Codex app-server notification wait aborted'))
+        return
+      }
+      signal?.addEventListener('abort', onAbort, { once: true })
+      waiter = (message) => {
+        signal?.removeEventListener('abort', onAbort)
+        resolve(message)
+      }
+      this.notificationWaiters.push(waiter)
+      this.childStdout.resume()
+    })
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) {
+      return
+    }
+    await this.child.stop('SIGTERM')
+    this.terminate(new Error('Codex app-server closed'))
+  }
+
+  private createExitError(code: number | null, signal: NodeJS.Signals | null): Error {
+    if (code === 0 && !signal) {
+      return new Error('Codex app-server exited')
+    }
+    const detail = signal ? `signal ${signal}` : `code ${code ?? 1}`
+    const stderrSummary = summarizeCodexAppServerStderr(this.stderrText)
+    return new Error(`Codex app-server exited with ${detail}${stderrSummary ? `: ${stderrSummary}` : ''}`)
+  }
+
+  private terminate(error: Error): void {
+    if (this.closed) {
+      return
+    }
+    this.closed = true
+    this.failAll(error)
+    this.onTerminated?.(error)
+  }
+
+  private handleLine(line: string): void {
+    if (this.closed || !line.trim()) {
+      return
+    }
+    // Plaintext on the NDJSON pipe (logs, catalog fragments, etc.) must not
+    // go through jsonrepair — repair can invent plausible but wrong messages.
+    if (!looksLikeJsonNdjsonLine(line)) {
+      return
+    }
+    let message: CodexAppServerMessage
+    try {
+      message = JSON.parse(line) as CodexAppServerMessage
+    }
+    catch {
+      // First parse failed — the line may be truncated (e.g. process killed mid-write).
+      // Attempt to repair the JSON (close unterminated strings, add missing brackets).
+      try {
+        message = JSON.parse(jsonrepair(line)) as CodexAppServerMessage
+      }
+      catch (repairError) {
+        const msg = repairError instanceof Error ? repairError.message : String(repairError)
+        this.pushNotification({
+          method: 'error',
+          params: {
+            message: `Malformed JSON from codex app-server (repair failed): ${msg}`,
+            lineLength: line.length,
+            linePreview: line.length > 200 ? `${line.slice(0, 200)}…` : line,
+          },
+        })
+        return
+      }
+    }
+
+    if (message.id !== undefined && message.method) {
+      void this.handleServerRequest(message as CodexAppServerServerRequest)
+      return
+    }
+
+    if (message.id !== undefined) {
+      const pending = this.pendingRequests.get(message.id)
+      if (!pending) {
+        return
+      }
+      this.pendingRequests.delete(message.id)
+      if (message.error) {
+        pending.reject(new Error(message.error.message))
+      }
+      else {
+        pending.resolve(message.result)
+      }
+      this.pauseStdoutWithoutDemand()
+      return
+    }
+
+    this.pushNotification(message)
+  }
+
+  private async handleServerRequest(message: CodexAppServerServerRequest): Promise<void> {
+    if (!this.serverRequestHandler) {
+      await this.writeServerResponse({
+        id: message.id,
+        error: {
+          code: -32601,
+          message: `Cradle does not handle Codex app-server request: ${message.method}`,
+        },
+      })
+      return
+    }
+
+    let response: CodexAppServerMessage
+    try {
+      if (this.exposeServerRequestsAsNotifications && isCodexAppServerInteractiveServerRequest(message.method)) {
+        const threadId = readServerRequestThreadId(message)
+        this.pushNotification({
+          method: 'serverRequest/pending',
+          params: {
+            ...(threadId ? { threadId } : {}),
+            id: message.id,
+            method: message.method,
+            params: message.params,
+          },
+        })
+      }
+      const result = await this.serverRequestHandler(message)
+      response = { id: message.id, result }
+      if (this.exposeServerRequestsAsNotifications) {
+        const threadId = readServerRequestThreadId(message)
+        this.pushNotification({
+          method: 'serverRequest/handled',
+          params: {
+            ...(threadId ? { threadId } : {}),
+            id: message.id,
+            method: message.method,
+            params: message.params,
+            result,
+          },
+        })
+      }
+    }
+    catch (error) {
+      response = {
+        id: message.id,
+        error: {
+          code: -32000,
+          message: error instanceof Error ? error.message : String(error),
+        },
+      }
+    }
+
+    await this.writeServerResponse(response)
+  }
+
+  private pushNotification(message: CodexAppServerMessage): void {
+    const waiter = this.notificationWaiters.shift()
+    if (waiter) {
+      waiter(message)
+      this.pauseStdoutWithoutDemand()
+      return
+    }
+    this.notificationQueue.push(message)
+    this.pauseStdoutWithoutDemand()
+  }
+
+  private pauseStdoutWithoutDemand(): void {
+    if (this.pendingRequests.size === 0 && this.notificationWaiters.length === 0) {
+      this.childStdout.pause()
+    }
+  }
+
+  private failAll(error: Error): void {
+    for (const pending of this.pendingRequests.values()) {
+      pending.reject(error)
+    }
+    this.pendingRequests.clear()
+    while (this.notificationWaiters.length > 0) {
+      this.notificationWaiters.shift()?.({ method: 'error', params: { message: error.message } })
+    }
+  }
+
+  private writeServerResponse(payload: CodexAppServerMessage): Promise<void> {
+    return this.writeMessage(payload).catch(() => undefined)
+  }
+
+  private writeMessage(payload: CodexAppServerMessage): Promise<void> {
+    if (this.closed) {
+      return Promise.reject(new Error('Codex app-server is closed'))
+    }
+    return new Promise((resolve, reject) => {
+      try {
+        this.childStdin.write(`${JSON.stringify(payload)}\n`, (error) => {
+          if (!error) {
+            resolve()
+            return
+          }
+          this.terminate(error)
+          reject(error)
+        })
+      }
+      catch (error) {
+        const writeError = error instanceof Error ? error : new Error(String(error))
+        this.terminate(writeError)
+        reject(writeError)
+      }
+    })
+  }
+}
+
+function readServerRequestThreadId(message: CodexAppServerServerRequest): string | null {
+  const params = message.params
+  if (!params || typeof params !== 'object' || !('threadId' in params)) {
+    return null
+  }
+  const threadId = (params as { threadId?: unknown }).threadId
+  return typeof threadId === 'string' ? threadId : null
+}
+
+/**
+ * Keep process failures actionable without copying the app-server's entire
+ * stderr buffer into the user-facing Error.message. The buffer often contains
+ * the same retry/transport failure hundreds of times, plus unrelated agent
+ * tool output from earlier in the process lifetime.
+ */
+export function summarizeCodexAppServerStderr(stderr: string): string | null {
+  const lines = stripAnsi(stderr)
+    .split(/\r?\n/)
+    .map(normalizeCodexAppServerStderrLine)
+    .filter((line): line is string => line !== null)
+
+  const candidates = lines.filter(line => /fatal|panic|error|failed|transport|websocket|handshake|http\s+\d{3}|server|startup/i.test(line))
+  const infrastructureCandidates = candidates.filter(line => /fatal|panic|transport|websocket|handshake|http\s+\d{3}|server|startup/i.test(line))
+  const selected = (infrastructureCandidates.length > 0 ? infrastructureCandidates : candidates)
+    .filter((line, index, all) => all.findIndex(candidate => candidate.toLowerCase() === line.toLowerCase()) === index)
+    .slice(0, MAX_EXIT_ERROR_DIAGNOSTICS)
+
+  return selected.length > 0 ? selected.join('; ') : null
+}
+
+function normalizeCodexAppServerStderrLine(line: string): string | null {
+  const normalized = line
+    .replace(/^\d{4}-\d{2}-\d{2}T\S+\s+(?:ERROR|WARN|WARNING|INFO|DEBUG|TRACE)\s+\S+:\s*/i, '')
+    .replace(/,?\s*url:\s*\S+/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return normalized.length > 0 ? normalized : null
+}
+
+function stripAnsi(value: string): string {
+  return value.replace(/\u001B\[[0-9;]*m/g, '')
+}
+
+export function readCradleCodexClientVersion(env: Record<string, string | undefined> = process.env): string {
+  return env.CRADLE_VERSION?.trim() || env.npm_package_version?.trim() || '0.0.1'
+}
+
+export function isCodexAppServerUnknownMethodError(error: unknown, method: string): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes(`unknown variant \`${method}\``)
+}
+
+export interface CodexAppServerLaunch {
+  command: string
+  args: string[]
+  source: 'configured-app-server' | 'managed-app-server' | 'path-app-server' | 'codex-cli-fallback'
+}
+
+export function resolveCodexAppServerLaunch(input: {
+  env?: Record<string, string | undefined>
+  appServerPath?: string
+  codexCliPath?: string
+} = {}): CodexAppServerLaunch {
+  const env = input.env ?? process.env
+  const configuredAppServerPath = input.appServerPath?.trim() || env[CODEX_APP_SERVER_PATH_ENV]?.trim()
+  if (configuredAppServerPath) {
+    return {
+      command: configuredAppServerPath,
+      args: ['--listen', 'stdio://', '--session-source', 'cli'],
+      source: 'configured-app-server',
+    }
+  }
+
+  const managedAppServer = resolveCodexManagedAppServerPath({ env })
+  if (managedAppServer) {
+    return {
+      command: managedAppServer,
+      args: ['--listen', 'stdio://', '--session-source', 'cli'],
+      source: 'managed-app-server',
+    }
+  }
+
+  const pathAppServer = findExecutableOnPath(
+    process.platform === 'win32' ? 'codex-app-server.exe' : 'codex-app-server',
+    env,
+  )
+  if (pathAppServer) {
+    return {
+      command: pathAppServer,
+      args: ['--listen', 'stdio://', '--session-source', 'cli'],
+      source: 'path-app-server',
+    }
+  }
+
+  return {
+    command: input.codexCliPath?.trim() || 'codex',
+    args: ['app-server', '--listen', 'stdio://'],
+    source: 'codex-cli-fallback',
+  }
+}
+
+export function readCodexNativeClientVersion(codexPath = 'codex'): Promise<string> {
+  const cached = codexNativeClientVersionByPath.get(codexPath)
+  if (cached) {
+    return cached
+  }
+
+  const pending = new Promise<string>((resolve) => {
+    let resolved = false
+    let stdoutText = ''
+    const child = spawn(codexPath, ['--version'], {
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+
+    const finish = (version: string) => {
+      if (resolved) {
+        return
+      }
+      resolved = true
+      clearTimeout(timer)
+      resolve(version)
+    }
+
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM')
+      finish(CODEX_NATIVE_CLIENT_INFO_FALLBACK_VERSION)
+    }, 1500)
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdoutText += chunk.toString('utf8')
+    })
+    child.once('error', () => {
+      finish(CODEX_NATIVE_CLIENT_INFO_FALLBACK_VERSION)
+    })
+    child.once('close', () => {
+      finish(readCodexVersionFromCliOutput(stdoutText))
+    })
+  })
+
+  codexNativeClientVersionByPath.set(codexPath, pending)
+  return pending
+}
+
+function readCodexVersionFromCliOutput(output: string): string {
+  return output.match(/\b\d+\.\d+\.\d+(?:[-+][0-9A-Z.-]+)?\b/i)?.[0]
+    ?? CODEX_NATIVE_CLIENT_INFO_FALLBACK_VERSION
+}
+
+function findExecutableOnPath(executableName: string, env: Record<string, string | undefined>): string | null {
+  if (isAbsolute(executableName)) {
+    return existsSync(executableName) ? executableName : null
+  }
+  for (const directory of env.PATH?.split(delimiter).filter(Boolean) ?? []) {
+    const candidate = join(directory, executableName)
+    if (existsSync(candidate)) {
+      return candidate
+    }
+  }
+  return null
+}
