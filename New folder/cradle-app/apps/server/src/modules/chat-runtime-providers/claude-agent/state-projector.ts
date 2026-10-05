@@ -1,0 +1,1054 @@
+import type { AccountInfo, PostModelSwitchHookInput, SDKAuthStatusMessage, SDKRateLimitInfo, SDKResultMessage } from '@anthropic-ai/claude-agent-sdk'
+
+import { readObjectRecord as readRecord } from '../../../helpers/json-record'
+import type { RuntimeCrewAgentItem, RuntimeCrewCallItem, RuntimeCrewUiSlotState, RuntimePlanStepStatus, RuntimePlanUiSlotState, RuntimeProgressUiSlotState, RuntimeSession, RuntimeToolActivityItem, RuntimeToolActivityUiSlotState, RuntimeUsageUiSlotState } from '../../chat-runtime/runtime-provider-types'
+import { replaceRuntimeSessionProviderCheckpoint } from '../../chat-runtime/runtime-session-checkpoint'
+import type { WorkspaceProviderStateSnapshot } from '../kit/state-snapshot'
+import { readWorkspaceProviderStateSnapshot } from '../kit/state-snapshot'
+import type { ClaudeAgentCapturedPlan, ClaudeAgentCapturedTaskActivity, ClaudeAgentCapturedTodos } from './event-to-chunk-mapper'
+import type { TodoPluginItem, TodoPluginStatus } from './tools/todo-plugin-state'
+import type { ClaudeWorkflowExecutionRecord } from './workflow'
+import { mergeClaudeWorkflowExecutionRecord, readClaudeWorkflowExecutionRecord } from './workflow'
+
+interface ClaudeAgentPlanSnapshot {
+  threadId: string
+  turnId: string
+  content: string
+  steps: Array<{ step: string, status: RuntimePlanStepStatus }>
+  updatedAt: number
+}
+
+interface ClaudeAgentProgressSnapshot {
+  threadId: string
+  turnId: string
+  source: string
+  items: TodoPluginItem[]
+  updatedAt: number
+}
+
+interface ClaudeAgentAccountSnapshot {
+  threadId: string
+  email: string | null
+  organization: string | null
+  subscriptionType: string | null
+  tokenSource: string | null
+  apiKeySource: string | null
+  apiProvider: AccountInfo['apiProvider'] | null
+  updatedAt: number
+}
+
+interface ClaudeAgentAuthStatusSnapshot {
+  threadId: string
+  isAuthenticating: boolean
+  output: string[]
+  error: string | null
+  updatedAt: number
+}
+
+interface ClaudeAgentRateLimitSnapshot {
+  threadId: string
+  info: SDKRateLimitInfo
+  updatedAt: number
+}
+
+interface ClaudeAgentResultSnapshot {
+  threadId: string
+  resultMessageId: string
+  userMessageUuid: string | null
+  queuedTurnCount: number | null
+  totalCostUsd: number
+  modelCosts: NonNullable<RuntimeUsageUiSlotState['modelCosts']>
+  updatedAt: number
+}
+
+type ClaudeAgentModelSwitchSnapshot = NonNullable<RuntimeUsageUiSlotState['lastModelSwitch']>
+
+const CLAUDE_AGENT_RECENT_CREW_CALL_LIMIT = 24
+const CLAUDE_AGENT_RECENT_WORKFLOW_EXECUTION_LIMIT = 12
+const CLAUDE_AGENT_RECENT_TASK_ACTIVITY_LIMIT = 24
+const CLAUDE_AGENT_CREW_PROMPT_SNAPSHOT_LIMIT = 2_000
+
+function writeClaudeAgentProviderSnapshot(
+  runtimeSession: RuntimeSession,
+  snapshot: WorkspaceProviderStateSnapshot,
+): void {
+  replaceRuntimeSessionProviderCheckpoint(runtimeSession, JSON.stringify(snapshot))
+}
+
+function retainRecentClaudeActivity<T extends { status: string, startedAt: number | null }>(
+  items: T[],
+  limit: number,
+): T[] {
+  const running = items.filter(item => item.status === 'running')
+  const recentTerminal = items
+    .filter(item => item.status !== 'running')
+    .sort((left, right) => (right.startedAt ?? 0) - (left.startedAt ?? 0))
+    .slice(0, limit)
+  return [...running, ...recentTerminal]
+}
+
+export const CLAUDE_AGENT_RUNTIME_DEFAULT_MODEL_SWITCH_ID = '__cradle_claude_runtime_default__'
+
+export function resolveClaudeAgentPendingModelSwitchId(snapshot: WorkspaceProviderStateSnapshot, requestedModelId: string | null): string | null {
+  const existingPendingModelSwitchId = readClaudeAgentPendingModelSwitchId(snapshot)
+  if (requestedModelId === null) {
+    return snapshot.models.currentModelId === null ? null : CLAUDE_AGENT_RUNTIME_DEFAULT_MODEL_SWITCH_ID
+  }
+  if (requestedModelId !== snapshot.models.currentModelId) {
+    return requestedModelId
+  }
+  return existingPendingModelSwitchId === requestedModelId ? existingPendingModelSwitchId : null
+}
+
+export function readClaudeAgentPendingModelSwitchId(snapshot: WorkspaceProviderStateSnapshot): string | null {
+  const claudeAgentState = readRecord(snapshot.claudeAgent)
+  const pendingModelSwitchId = typeof claudeAgentState.pendingModelSwitchId === 'string'
+    ? claudeAgentState.pendingModelSwitchId.trim()
+    : ''
+  return pendingModelSwitchId || null
+}
+
+export function writeClaudeAgentPendingModelSwitch(
+  snapshot: WorkspaceProviderStateSnapshot,
+  pendingModelSwitchId: string | null,
+): WorkspaceProviderStateSnapshot {
+  const claudeAgentState = { ...readRecord(snapshot.claudeAgent) }
+  if (pendingModelSwitchId) {
+    claudeAgentState.pendingModelSwitchId = pendingModelSwitchId
+  }
+  else {
+    delete claudeAgentState.pendingModelSwitchId
+  }
+
+  const nextSnapshot: WorkspaceProviderStateSnapshot = { ...snapshot }
+  if (Object.keys(claudeAgentState).length > 0) {
+    nextSnapshot.claudeAgent = claudeAgentState
+  }
+  else {
+    delete nextSnapshot.claudeAgent
+  }
+  return nextSnapshot
+}
+
+export function clearClaudeAgentPendingModelSwitch(runtimeSession: RuntimeSession): void {
+  const snapshot = readWorkspaceProviderStateSnapshot(runtimeSession.providerStateSnapshot)
+  writeClaudeAgentProviderSnapshot(runtimeSession, writeClaudeAgentPendingModelSwitch(snapshot, null))
+}
+
+export function clearClaudeAgentCapturedPlan(runtimeSession: RuntimeSession): void {
+  const snapshot = readWorkspaceProviderStateSnapshot(runtimeSession.providerStateSnapshot)
+  const claudeAgentState = { ...readRecord(snapshot.claudeAgent) }
+  delete claudeAgentState.plan
+
+  const nextSnapshot: WorkspaceProviderStateSnapshot = { ...snapshot }
+  if (Object.keys(claudeAgentState).length > 0) {
+    nextSnapshot.claudeAgent = claudeAgentState
+  }
+  else {
+    delete nextSnapshot.claudeAgent
+  }
+  writeClaudeAgentProviderSnapshot(runtimeSession, nextSnapshot)
+}
+
+export function clearClaudeAgentProgress(runtimeSession: RuntimeSession): void {
+  const snapshot = readWorkspaceProviderStateSnapshot(runtimeSession.providerStateSnapshot)
+  const claudeAgentState = { ...readRecord(snapshot.claudeAgent) }
+  delete claudeAgentState.progress
+
+  const nextSnapshot: WorkspaceProviderStateSnapshot = { ...snapshot }
+  if (Object.keys(claudeAgentState).length > 0) {
+    nextSnapshot.claudeAgent = claudeAgentState
+  }
+  else {
+    delete nextSnapshot.claudeAgent
+  }
+  writeClaudeAgentProviderSnapshot(runtimeSession, nextSnapshot)
+}
+
+export function writeClaudeAgentCapturedPlan(runtimeSession: RuntimeSession, plan: ClaudeAgentCapturedPlan, updatedAt: number = Date.now()): void {
+  const snapshot = readWorkspaceProviderStateSnapshot(runtimeSession.providerStateSnapshot)
+  const claudeAgentState = {
+    ...readRecord(snapshot.claudeAgent),
+    plan: {
+      threadId: runtimeSession.chatSessionId,
+      turnId: plan.toolCallId,
+      content: plan.content,
+      steps: projectPlanSteps(plan.content),
+      updatedAt,
+    } satisfies ClaudeAgentPlanSnapshot,
+  }
+  writeClaudeAgentProviderSnapshot(runtimeSession, {
+    ...snapshot,
+    claudeAgent: claudeAgentState,
+  })
+}
+
+export function writeClaudeAgentProgress(runtimeSession: RuntimeSession, progress: ClaudeAgentCapturedTodos, updatedAt: number = Date.now()): void {
+  const snapshot = readWorkspaceProviderStateSnapshot(runtimeSession.providerStateSnapshot)
+  const claudeAgentState = {
+    ...readRecord(snapshot.claudeAgent),
+    progress: {
+      threadId: runtimeSession.chatSessionId,
+      turnId: progress.toolCallId,
+      source: progress.source ?? 'TodoWrite',
+      items: progress.todos,
+      updatedAt,
+    } satisfies ClaudeAgentProgressSnapshot,
+  }
+  writeClaudeAgentProviderSnapshot(runtimeSession, {
+    ...snapshot,
+    claudeAgent: claudeAgentState,
+  })
+}
+
+export function projectClaudeAgentPlanUiSlotState(runtimeSession: RuntimeSession): RuntimePlanUiSlotState | null {
+  const snapshot = readWorkspaceProviderStateSnapshot(runtimeSession.providerStateSnapshot)
+  const plan = readClaudeAgentPlanSnapshot(snapshot)
+  if (!plan || plan.threadId !== runtimeSession.chatSessionId) {
+    return null
+  }
+  const pendingCount = plan.steps.filter(step => step.status === 'pending').length
+  const inProgressCount = plan.steps.filter(step => step.status === 'inProgress').length
+  const completedCount = plan.steps.filter(step => step.status === 'completed').length
+  return {
+    kind: 'plan',
+    slotId: 'claude-agent:plan',
+    threadId: plan.threadId,
+    turnId: plan.turnId,
+    explanation: null,
+    content: plan.content,
+    steps: plan.steps,
+    currentStep: plan.steps.find(step => step.status === 'inProgress')?.step
+      ?? plan.steps.find(step => step.status === 'pending')?.step
+      ?? null,
+    pendingCount,
+    inProgressCount,
+    completedCount,
+    updatedAt: plan.updatedAt,
+  }
+}
+
+export function projectClaudeAgentProgressUiSlotState(runtimeSession: RuntimeSession): RuntimeProgressUiSlotState | null {
+  const snapshot = readWorkspaceProviderStateSnapshot(runtimeSession.providerStateSnapshot)
+  const progress = readClaudeAgentProgressSnapshot(snapshot)
+  if (!progress || progress.threadId !== runtimeSession.chatSessionId) {
+    return null
+  }
+  const items = progress.items.map(item => ({
+    id: item.id,
+    label: item.content,
+    status: mapTodoPluginStatusToRuntimeStatus(item.status),
+    sourceStatus: item.sourceStatus,
+  }))
+  const pendingCount = items.filter(item => item.status === 'pending').length
+  const inProgressCount = items.filter(item => item.status === 'inProgress').length
+  const completedCount = items.filter(item => item.status === 'completed').length
+  return {
+    kind: 'progress',
+    slotId: 'claude-agent:progress',
+    threadId: progress.threadId,
+    turnId: progress.turnId,
+    source: progress.source,
+    items,
+    currentItem: items.find(item => item.status === 'inProgress')?.label
+      ?? items.find(item => item.status === 'pending')?.label
+      ?? null,
+    pendingCount,
+    inProgressCount,
+    completedCount,
+    updatedAt: progress.updatedAt,
+  }
+}
+
+export function writeClaudeAgentAccountSnapshot(
+  runtimeSession: RuntimeSession,
+  account: AccountInfo,
+  updatedAt: number = Date.now(),
+): void {
+  const snapshot = readWorkspaceProviderStateSnapshot(runtimeSession.providerStateSnapshot)
+  const claudeAgentState = {
+    ...readRecord(snapshot.claudeAgent),
+    account: {
+      threadId: runtimeSession.chatSessionId,
+      email: account.email ?? null,
+      organization: account.organization ?? null,
+      subscriptionType: account.subscriptionType ?? null,
+      tokenSource: account.tokenSource ?? null,
+      apiKeySource: account.apiKeySource ?? null,
+      apiProvider: account.apiProvider ?? null,
+      updatedAt,
+    } satisfies ClaudeAgentAccountSnapshot,
+  }
+  writeClaudeAgentProviderSnapshot(runtimeSession, {
+    ...snapshot,
+    claudeAgent: claudeAgentState,
+  })
+}
+
+export function writeClaudeAgentAuthStatusSnapshot(
+  runtimeSession: RuntimeSession,
+  message: SDKAuthStatusMessage,
+  updatedAt: number = Date.now(),
+): void {
+  const snapshot = readWorkspaceProviderStateSnapshot(runtimeSession.providerStateSnapshot)
+  const claudeAgentState = {
+    ...readRecord(snapshot.claudeAgent),
+    authStatus: {
+      threadId: runtimeSession.chatSessionId,
+      isAuthenticating: message.isAuthenticating,
+      output: message.output,
+      error: message.error ?? null,
+      updatedAt,
+    } satisfies ClaudeAgentAuthStatusSnapshot,
+  }
+  writeClaudeAgentProviderSnapshot(runtimeSession, {
+    ...snapshot,
+    claudeAgent: claudeAgentState,
+  })
+}
+
+export function writeClaudeAgentRateLimitSnapshot(
+  runtimeSession: RuntimeSession,
+  info: SDKRateLimitInfo,
+  updatedAt: number = Date.now(),
+): void {
+  const snapshot = readWorkspaceProviderStateSnapshot(runtimeSession.providerStateSnapshot)
+  const claudeAgentState = {
+    ...readRecord(snapshot.claudeAgent),
+    rateLimit: {
+      threadId: runtimeSession.chatSessionId,
+      info,
+      updatedAt,
+    } satisfies ClaudeAgentRateLimitSnapshot,
+  }
+  writeClaudeAgentProviderSnapshot(runtimeSession, {
+    ...snapshot,
+    claudeAgent: claudeAgentState,
+  })
+}
+
+export function writeClaudeAgentResultSnapshot(
+  runtimeSession: RuntimeSession,
+  result: SDKResultMessage,
+  updatedAt: number = Date.now(),
+): void {
+  if (
+    !result.uuid
+    || typeof result.total_cost_usd !== 'number'
+    || !result.modelUsage
+  ) {
+    return
+  }
+  const snapshot = readWorkspaceProviderStateSnapshot(runtimeSession.providerStateSnapshot)
+  const claudeAgentState = {
+    ...readRecord(snapshot.claudeAgent),
+    result: {
+      threadId: runtimeSession.chatSessionId,
+      resultMessageId: result.uuid,
+      userMessageUuid: result.user_message_uuid ?? null,
+      queuedTurnCount: result.queued_turn_count ?? null,
+      totalCostUsd: result.total_cost_usd,
+      modelCosts: Object.entries(result.modelUsage).map(([modelId, usage]) => ({
+        modelId,
+        canonicalModelId: usage.canonicalModel ?? null,
+        provider: usage.provider ?? null,
+        costUsd: usage.costUSD,
+        costBasis: usage.costBasis ?? 'unknown',
+        ...(typeof usage.thinkingTokens === 'number'
+          ? {
+              reasoningOutputTokens: usage.thinkingTokens,
+              reasoningOutputTokensMayBePartial: true,
+            }
+          : {}),
+      })),
+      updatedAt,
+    } satisfies ClaudeAgentResultSnapshot,
+  }
+  writeClaudeAgentProviderSnapshot(runtimeSession, {
+    ...snapshot,
+    claudeAgent: claudeAgentState,
+  })
+}
+
+export function writeClaudeAgentModelSwitchSnapshot(
+  runtimeSession: RuntimeSession,
+  modelSwitch: PostModelSwitchHookInput,
+  updatedAt: number = Date.now(),
+): void {
+  const snapshot = readWorkspaceProviderStateSnapshot(runtimeSession.providerStateSnapshot)
+  const claudeAgentState = {
+    ...readRecord(snapshot.claudeAgent),
+    modelSwitch: {
+      fromModelId: modelSwitch.from_model,
+      toModelId: modelSwitch.to_model,
+      requestedModelId: modelSwitch.requested_model,
+      source: modelSwitch.source,
+      contextTokens: modelSwitch.context_tokens,
+      promptCacheWarm: modelSwitch.prompt_cache_warm,
+      cacheTtl: modelSwitch.cache_ttl,
+      estimatedCacheWriteUsd: modelSwitch.estimated_cache_write_usd,
+      pricing: modelSwitch.pricing,
+      updatedAt,
+    } satisfies ClaudeAgentModelSwitchSnapshot,
+  }
+  writeClaudeAgentProviderSnapshot(runtimeSession, {
+    ...snapshot,
+    claudeAgent: claudeAgentState,
+  })
+}
+
+export function projectClaudeAgentUsageUiSlotState(runtimeSession: RuntimeSession): RuntimeUsageUiSlotState | null {
+  const snapshot = readWorkspaceProviderStateSnapshot(runtimeSession.providerStateSnapshot)
+  const claudeAgentState = readRecord(snapshot.claudeAgent)
+  const account = readClaudeAgentAccountSnapshot(claudeAgentState.account)
+  const rateLimit = readClaudeAgentRateLimitSnapshot(claudeAgentState.rateLimit)
+  const result = readClaudeAgentResultSnapshot(claudeAgentState.result)
+  const modelSwitch = readClaudeAgentModelSwitchSnapshot(claudeAgentState.modelSwitch)
+  if (!account && !rateLimit && !result && !modelSwitch) {
+    return null
+  }
+  const info = rateLimit?.info
+  return {
+    kind: 'usage',
+    slotId: 'claude-agent:usage',
+    threadId: runtimeSession.chatSessionId,
+    limitName: info?.rateLimitType ?? info?.status ?? null,
+    usedPercent: info?.utilization ?? null,
+    primaryWindowDurationMins: null,
+    primaryResetsAt: info?.resetsAt ?? null,
+    secondaryUsedPercent: null,
+    secondaryWindowDurationMins: null,
+    secondaryResetsAt: info?.overageResetsAt ?? null,
+    creditsBalance: null,
+    hasCredits: info?.errorCode === 'credits_required' ? false : null,
+    rateLimitReachedType: info?.status === 'rejected'
+      ? info.errorCode ?? info.rateLimitType ?? info.status
+      : null,
+    planType: account?.subscriptionType ?? null,
+    estimatedCostUsd: result?.totalCostUsd ?? null,
+    queuedTurnCount: result?.queuedTurnCount ?? null,
+    resultMessageId: result?.resultMessageId ?? null,
+    correlatedUserMessageId: result?.userMessageUuid ?? null,
+    modelCosts: result?.modelCosts ?? [],
+    lastModelSwitch: modelSwitch,
+    updatedAt: Math.max(
+      account?.updatedAt ?? 0,
+      rateLimit?.updatedAt ?? 0,
+      result?.updatedAt ?? 0,
+      modelSwitch?.updatedAt ?? 0,
+    ),
+  }
+}
+
+function readClaudeAgentModelSwitchSnapshot(value: unknown): ClaudeAgentModelSwitchSnapshot | null {
+  const modelSwitch = readRecord(value)
+  if (
+    typeof modelSwitch.fromModelId !== 'string'
+    || typeof modelSwitch.toModelId !== 'string'
+    || typeof modelSwitch.source !== 'string'
+    || typeof modelSwitch.contextTokens !== 'number'
+    || typeof modelSwitch.promptCacheWarm !== 'boolean'
+    || (modelSwitch.cacheTtl !== '5m' && modelSwitch.cacheTtl !== '1h')
+    || typeof modelSwitch.estimatedCacheWriteUsd !== 'number'
+    || (modelSwitch.pricing !== 'configured' && modelSwitch.pricing !== 'catalog' && modelSwitch.pricing !== 'default')
+    || typeof modelSwitch.updatedAt !== 'number'
+  ) {
+    return null
+  }
+  return {
+    fromModelId: modelSwitch.fromModelId,
+    toModelId: modelSwitch.toModelId,
+    requestedModelId: typeof modelSwitch.requestedModelId === 'string' ? modelSwitch.requestedModelId : null,
+    source: modelSwitch.source,
+    contextTokens: modelSwitch.contextTokens,
+    promptCacheWarm: modelSwitch.promptCacheWarm,
+    cacheTtl: modelSwitch.cacheTtl,
+    estimatedCacheWriteUsd: modelSwitch.estimatedCacheWriteUsd,
+    pricing: modelSwitch.pricing,
+    updatedAt: modelSwitch.updatedAt,
+  }
+}
+
+function readClaudeAgentResultSnapshot(value: unknown): ClaudeAgentResultSnapshot | null {
+  const result = readRecord(value)
+  const threadId = typeof result.threadId === 'string' ? result.threadId : ''
+  const resultMessageId = typeof result.resultMessageId === 'string' ? result.resultMessageId : ''
+  const updatedAt = typeof result.updatedAt === 'number' ? result.updatedAt : 0
+  if (
+    !threadId
+    || !resultMessageId
+    || updatedAt <= 0
+    || typeof result.totalCostUsd !== 'number'
+  ) {
+    return null
+  }
+  return {
+    threadId,
+    resultMessageId,
+    userMessageUuid: typeof result.userMessageUuid === 'string' ? result.userMessageUuid : null,
+    queuedTurnCount: typeof result.queuedTurnCount === 'number' ? result.queuedTurnCount : null,
+    totalCostUsd: result.totalCostUsd,
+    modelCosts: readClaudeAgentModelCosts(result.modelCosts),
+    updatedAt,
+  }
+}
+
+function readClaudeAgentModelCosts(value: unknown): NonNullable<RuntimeUsageUiSlotState['modelCosts']> {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  return value.flatMap((item): NonNullable<RuntimeUsageUiSlotState['modelCosts']> => {
+    const cost = readRecord(item)
+    if (
+      typeof cost.modelId !== 'string'
+      || typeof cost.costUsd !== 'number'
+      || (cost.costBasis !== 'list' && cost.costBasis !== 'managed' && cost.costBasis !== 'unknown')
+    ) {
+      return []
+    }
+    return [{
+      modelId: cost.modelId,
+      canonicalModelId: typeof cost.canonicalModelId === 'string' ? cost.canonicalModelId : null,
+      provider: typeof cost.provider === 'string' ? cost.provider : null,
+      costUsd: cost.costUsd,
+      costBasis: cost.costBasis,
+      ...(typeof cost.reasoningOutputTokens === 'number'
+        ? {
+            reasoningOutputTokens: cost.reasoningOutputTokens,
+            reasoningOutputTokensMayBePartial: cost.reasoningOutputTokensMayBePartial === true,
+          }
+        : {}),
+    }]
+  })
+}
+
+function readClaudeAgentPlanSnapshot(snapshot: WorkspaceProviderStateSnapshot): ClaudeAgentPlanSnapshot | null {
+  const plan = readRecord(readRecord(snapshot.claudeAgent).plan)
+  const threadId = typeof plan.threadId === 'string' ? plan.threadId : ''
+  const turnId = typeof plan.turnId === 'string' ? plan.turnId : ''
+  const content = typeof plan.content === 'string' ? plan.content.trim() : ''
+  const updatedAt = typeof plan.updatedAt === 'number' ? plan.updatedAt : 0
+  if (!threadId || !turnId || !content || updatedAt <= 0) {
+    return null
+  }
+  return {
+    threadId,
+    turnId,
+    content,
+    steps: readClaudeAgentPlanSteps(plan.steps, content),
+    updatedAt,
+  }
+}
+
+function readClaudeAgentProgressSnapshot(snapshot: WorkspaceProviderStateSnapshot): ClaudeAgentProgressSnapshot | null {
+  const progress = readRecord(readRecord(snapshot.claudeAgent).progress)
+  const threadId = typeof progress.threadId === 'string' ? progress.threadId : ''
+  const turnId = typeof progress.turnId === 'string' ? progress.turnId : ''
+  const source = typeof progress.source === 'string' ? progress.source.trim() : ''
+  const updatedAt = typeof progress.updatedAt === 'number' ? progress.updatedAt : 0
+  const items = readClaudeAgentProgressItems(progress.items)
+  if (!threadId || !turnId || !source || items.length === 0 || updatedAt <= 0) {
+    return null
+  }
+  return {
+    threadId,
+    turnId,
+    source,
+    items,
+    updatedAt,
+  }
+}
+
+function readClaudeAgentAccountSnapshot(value: unknown): ClaudeAgentAccountSnapshot | null {
+  const account = readRecord(value)
+  const threadId = typeof account.threadId === 'string' ? account.threadId : ''
+  const updatedAt = typeof account.updatedAt === 'number' ? account.updatedAt : 0
+  if (!threadId || updatedAt <= 0) {
+    return null
+  }
+  return {
+    threadId,
+    email: typeof account.email === 'string' ? account.email : null,
+    organization: typeof account.organization === 'string' ? account.organization : null,
+    subscriptionType: typeof account.subscriptionType === 'string' ? account.subscriptionType : null,
+    tokenSource: typeof account.tokenSource === 'string' ? account.tokenSource : null,
+    apiKeySource: typeof account.apiKeySource === 'string' ? account.apiKeySource : null,
+    apiProvider: isClaudeAgentApiProvider(account.apiProvider) ? account.apiProvider : null,
+    updatedAt,
+  }
+}
+
+function readClaudeAgentRateLimitSnapshot(value: unknown): ClaudeAgentRateLimitSnapshot | null {
+  const rateLimit = readRecord(value)
+  const threadId = typeof rateLimit.threadId === 'string' ? rateLimit.threadId : ''
+  const updatedAt = typeof rateLimit.updatedAt === 'number' ? rateLimit.updatedAt : 0
+  const info = readRecord(rateLimit.info) as Partial<SDKRateLimitInfo>
+  if (!threadId || updatedAt <= 0 || !isClaudeAgentRateLimitStatus(info.status)) {
+    return null
+  }
+  return {
+    threadId,
+    info: {
+      ...info,
+      status: info.status,
+    },
+    updatedAt,
+  }
+}
+
+function isClaudeAgentRateLimitStatus(value: unknown): value is SDKRateLimitInfo['status'] {
+  return value === 'allowed' || value === 'allowed_warning' || value === 'rejected'
+}
+
+function isClaudeAgentApiProvider(value: unknown): value is NonNullable<AccountInfo['apiProvider']> {
+  return value === 'firstParty'
+    || value === 'bedrock'
+    || value === 'vertex'
+    || value === 'foundry'
+    || value === 'anthropicAws'
+    || value === 'mantle'
+    || value === 'gateway'
+}
+
+function readClaudeAgentProgressItems(value: unknown): TodoPluginItem[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  return value.flatMap((item): TodoPluginItem[] => {
+    const record = readRecord(item)
+    const content = typeof record.content === 'string' ? record.content.trim() : ''
+    const status = record.status
+    if (!content || !isTodoPluginStatus(status)) {
+      return []
+    }
+    return [{
+      id: typeof record.id === 'string' ? record.id : null,
+      content,
+      status,
+      sourceStatus: typeof record.sourceStatus === 'string' ? record.sourceStatus : null,
+    }]
+  })
+}
+
+function readClaudeAgentPlanSteps(value: unknown, content: string): ClaudeAgentPlanSnapshot['steps'] {
+  if (!Array.isArray(value)) {
+    return projectPlanSteps(content)
+  }
+  const steps = value.flatMap((item): ClaudeAgentPlanSnapshot['steps'] => {
+    const record = readRecord(item)
+    const step = typeof record.step === 'string' ? record.step.trim() : ''
+    const status = record.status
+    return step && isRuntimePlanStepStatus(status) ? [{ step, status }] : []
+  })
+  return steps.length > 0 ? steps : projectPlanSteps(content)
+}
+
+function projectPlanSteps(content: string): ClaudeAgentPlanSnapshot['steps'] {
+  return content
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.length > 0)
+    .map(step => ({ step, status: 'pending' }))
+}
+
+function isRuntimePlanStepStatus(value: unknown): value is RuntimePlanStepStatus {
+  return value === 'pending' || value === 'inProgress' || value === 'completed'
+}
+
+function isTodoPluginStatus(value: unknown): value is TodoPluginStatus {
+  return value === 'todo' || value === 'processing' || value === 'completed'
+}
+
+function mapTodoPluginStatusToRuntimeStatus(status: TodoPluginStatus): RuntimePlanStepStatus {
+  switch (status) {
+    case 'completed':
+      return 'completed'
+    case 'processing':
+      return 'inProgress'
+    case 'todo':
+    default:
+      return 'pending'
+  }
+}
+
+// ── Crew State ────────────────────────────────────────────────────────────────
+
+interface ClaudeAgentCrewCallSnapshot {
+  id: string
+  agentId: string | null
+  tool: string
+  prompt: string | null
+  description: string | null
+  subagentType: string | null
+  model: string | null
+  reasoningEffort: string | null
+  tools: string[]
+  outputFile: string | null
+  runInBackground: boolean
+  status: 'running' | 'completed' | 'failed'
+  retry?: {
+    agentId: string
+    attempt: number
+    maxRetries: number
+    retryDelayMs: number
+    errorStatus: number | null
+    errorCategory: string
+  } | null
+  startedAt: number
+  completedAt: number | null
+}
+
+export function writeClaudeAgentCrewCall(
+  runtimeSession: RuntimeSession,
+  call: ClaudeAgentCrewCallSnapshot,
+): void {
+  const snapshot = readWorkspaceProviderStateSnapshot(runtimeSession.providerStateSnapshot)
+  const claudeAgentState = { ...readRecord(snapshot.claudeAgent) }
+  const existingCalls = readClaudeAgentCrewCallsSnapshot(claudeAgentState.crewCalls)
+  const snapshotCall: ClaudeAgentCrewCallSnapshot = {
+    ...call,
+    prompt: call.prompt?.slice(0, CLAUDE_AGENT_CREW_PROMPT_SNAPSHOT_LIMIT) ?? null,
+  }
+
+  // Upsert: update existing call or append new one
+  const index = existingCalls.findIndex(c => c.id === snapshotCall.id || (snapshotCall.agentId !== null && c.agentId === snapshotCall.agentId))
+  if (index >= 0) {
+    existingCalls[index] = mergeClaudeAgentCrewCall(existingCalls[index]!, snapshotCall)
+  }
+  else {
+    existingCalls.push(snapshotCall)
+  }
+
+  claudeAgentState.crewCalls = retainRecentClaudeActivity(existingCalls, CLAUDE_AGENT_RECENT_CREW_CALL_LIMIT)
+  writeClaudeAgentProviderSnapshot(runtimeSession, {
+    ...snapshot,
+    claudeAgent: claudeAgentState,
+  })
+}
+
+export function writeClaudeAgentWorkflowExecution(
+  runtimeSession: RuntimeSession,
+  execution: ClaudeWorkflowExecutionRecord,
+): void {
+  const snapshot = readWorkspaceProviderStateSnapshot(runtimeSession.providerStateSnapshot)
+  const claudeAgentState = { ...readRecord(snapshot.claudeAgent) }
+  const existingExecutions = readClaudeAgentWorkflowExecutionsSnapshot(claudeAgentState.workflowExecutions)
+  const index = existingExecutions.findIndex(item => item.toolCallId === execution.toolCallId)
+
+  if (index >= 0) {
+    existingExecutions[index] = mergeClaudeWorkflowExecutionRecord(existingExecutions[index]!, execution)
+  }
+  else {
+    existingExecutions.push(execution)
+  }
+
+  claudeAgentState.workflowExecutions = retainRecentClaudeActivity(
+    existingExecutions,
+    CLAUDE_AGENT_RECENT_WORKFLOW_EXECUTION_LIMIT,
+  )
+  writeClaudeAgentProviderSnapshot(runtimeSession, {
+    ...snapshot,
+    claudeAgent: claudeAgentState,
+  })
+}
+
+export function readClaudeAgentWorkflowExecutions(
+  runtimeSession: RuntimeSession,
+): ClaudeWorkflowExecutionRecord[] {
+  const snapshot = readWorkspaceProviderStateSnapshot(runtimeSession.providerStateSnapshot)
+  return readClaudeAgentWorkflowExecutionsSnapshot(readRecord(snapshot.claudeAgent).workflowExecutions)
+}
+
+function readClaudeAgentWorkflowExecutionsSnapshot(value: unknown): ClaudeWorkflowExecutionRecord[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  return value.flatMap((item): ClaudeWorkflowExecutionRecord[] => {
+    const execution = readClaudeWorkflowExecutionRecord(item)
+    return execution ? [execution] : []
+  })
+}
+
+export function projectClaudeAgentCrewUiSlotState(
+  runtimeSession: RuntimeSession,
+): RuntimeCrewUiSlotState | null {
+  const snapshot = readWorkspaceProviderStateSnapshot(runtimeSession.providerStateSnapshot)
+  const calls = readClaudeAgentCrewCallsSnapshot(readRecord(snapshot.claudeAgent).crewCalls)
+  if (calls.length === 0) {
+    return null
+  }
+
+  const activeCount = calls.filter(c => c.status === 'running').length
+  const completedCount = calls.filter(c => c.status === 'completed').length
+  const failedCount = calls.filter(c => c.status === 'failed').length
+
+  const crewCalls: RuntimeCrewCallItem[] = calls.map(call => ({
+    id: call.id,
+    tool: call.tool,
+    status: call.status,
+    senderThreadId: runtimeSession.chatSessionId,
+    receiverThreadIds: readClaudeAgentReceiverThreadIds(call),
+    prompt: call.description ?? call.prompt,
+    model: call.model,
+    reasoningEffort: call.reasoningEffort,
+    agents: projectClaudeAgentCrewAgents(call),
+    retry: call.retry ?? null,
+    startedAt: call.startedAt,
+    completedAt: call.completedAt,
+  }))
+
+  const recentItems: RuntimeToolActivityItem[] = calls.map(call => ({
+    id: call.id,
+    type: 'agentToolCall',
+    label: call.description ?? call.prompt ?? call.subagentType ?? call.tool,
+    status: call.status,
+    startedAt: call.startedAt,
+    completedAt: call.completedAt,
+  }))
+
+  // Build agent list from calls so completed subagent transcripts stay readable
+  // from the runtime panel after the active stream has finished.
+  const agents: RuntimeCrewAgentItem[] = calls
+    .flatMap(projectClaudeAgentCrewAgents)
+
+  return {
+    kind: 'crew',
+    slotId: 'claude-agent:crew',
+    threadId: runtimeSession.chatSessionId,
+    activeCount,
+    completedCount,
+    failedCount,
+    recentItems,
+    agents,
+    collaborationModeCount: 0,
+    collaborationModes: [],
+    calls: crewCalls,
+    updatedAt: Date.now(),
+  }
+}
+
+export function readClaudeAgentCrewProviderThreadIdForAgent(
+  runtimeSession: RuntimeSession,
+  agentId: string,
+): string | null {
+  const normalizedAgentId = agentId.trim()
+  if (!normalizedAgentId) {
+    return null
+  }
+
+  const snapshot = readWorkspaceProviderStateSnapshot(runtimeSession.providerStateSnapshot)
+  const calls = readClaudeAgentCrewCallsSnapshot(readRecord(snapshot.claudeAgent).crewCalls)
+  const call = calls.find(item => item.agentId === normalizedAgentId)
+  return call?.id ?? null
+}
+
+function mergeClaudeAgentCrewCall(
+  existing: ClaudeAgentCrewCallSnapshot,
+  next: ClaudeAgentCrewCallSnapshot,
+): ClaudeAgentCrewCallSnapshot {
+  return {
+    id: existing.id,
+    agentId: next.agentId ?? existing.agentId,
+    tool: mergeClaudeAgentCrewTool(existing.tool, next.tool),
+    prompt: (next.prompt ?? existing.prompt)?.slice(0, CLAUDE_AGENT_CREW_PROMPT_SNAPSHOT_LIMIT) ?? null,
+    description: next.description ?? existing.description,
+    subagentType: next.subagentType ?? existing.subagentType,
+    model: next.model ?? existing.model,
+    reasoningEffort: next.reasoningEffort ?? existing.reasoningEffort,
+    tools: next.tools.length > 0 ? next.tools : existing.tools,
+    outputFile: next.outputFile ?? existing.outputFile,
+    runInBackground: next.runInBackground || existing.runInBackground,
+    status: next.status,
+    startedAt: next.startedAt > 0 ? next.startedAt : existing.startedAt,
+    completedAt: next.completedAt ?? existing.completedAt,
+    retry: next.retry ?? null,
+  }
+}
+
+function mergeClaudeAgentCrewTool(existing: string, next: string): string {
+  if (existing === 'Workflow' && next === 'Agent') {
+    return existing
+  }
+  return next || existing
+}
+
+function readClaudeAgentCrewCallsSnapshot(value: unknown): ClaudeAgentCrewCallSnapshot[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  return value.flatMap((item): ClaudeAgentCrewCallSnapshot[] => {
+    const record = readRecord(item)
+    const id = typeof record.id === 'string' ? record.id.trim() : ''
+    const tool = typeof record.tool === 'string' ? record.tool.trim() : ''
+    const status = record.status
+    if (!id || !tool || (status !== 'running' && status !== 'completed' && status !== 'failed')) {
+      return []
+    }
+    return [{
+      id,
+      agentId: typeof record.agentId === 'string' ? record.agentId : null,
+      tool,
+      prompt: typeof record.prompt === 'string' ? record.prompt : null,
+      description: typeof record.description === 'string' ? record.description : null,
+      subagentType: typeof record.subagentType === 'string' ? record.subagentType : null,
+      model: typeof record.model === 'string' ? record.model : null,
+      reasoningEffort: typeof record.reasoningEffort === 'string' ? record.reasoningEffort : null,
+      tools: Array.isArray(record.tools) ? record.tools.filter((tool): tool is string => typeof tool === 'string') : [],
+      outputFile: typeof record.outputFile === 'string' ? record.outputFile : null,
+      runInBackground: record.runInBackground === true,
+      status,
+      retry: readClaudeAgentCrewRetry(record.retry),
+      startedAt: typeof record.startedAt === 'number' ? record.startedAt : 0,
+      completedAt: typeof record.completedAt === 'number' ? record.completedAt : null,
+    }]
+  })
+}
+
+function readClaudeAgentCrewRetry(value: unknown): ClaudeAgentCrewCallSnapshot['retry'] {
+  const record = readRecord(value)
+  const agentId = typeof record.agentId === 'string' ? record.agentId.trim() : ''
+  const errorCategory = typeof record.errorCategory === 'string' ? record.errorCategory.trim() : ''
+  if (
+    !agentId
+    || !errorCategory
+    || typeof record.attempt !== 'number'
+    || typeof record.maxRetries !== 'number'
+    || typeof record.retryDelayMs !== 'number'
+  ) {
+    return null
+  }
+  return {
+    agentId,
+    attempt: record.attempt,
+    maxRetries: record.maxRetries,
+    retryDelayMs: record.retryDelayMs,
+    errorStatus: typeof record.errorStatus === 'number' ? record.errorStatus : null,
+    errorCategory,
+  }
+}
+
+function readClaudeAgentReceiverThreadIds(call: ClaudeAgentCrewCallSnapshot): string[] {
+  if (call.tool !== 'Agent') {
+    return []
+  }
+  return [call.id]
+}
+
+function projectClaudeAgentCrewAgents(call: ClaudeAgentCrewCallSnapshot): RuntimeCrewAgentItem[] {
+  if (call.tool !== 'Agent') {
+    return []
+  }
+  return [{
+    threadId: call.id,
+    status: call.retry ? 'retrying' : call.status,
+    message: call.description ?? call.prompt,
+    name: call.subagentType,
+    preview: (call.description ?? call.prompt)?.slice(0, 120) ?? null,
+    modelProvider: call.model,
+    agentNickname: call.subagentType,
+    agentRole: call.description ?? call.prompt,
+  }]
+}
+
+// ── Task Activity State ─────────────────────────────────────────────────────
+//
+// Background `task_*` lifecycle events that are not linked to a real `Agent`/`Workflow`
+// tool_use are projected here instead of into the crew store — see `resolveClaudeLinkedCrewTool`
+// in `event-to-chunk-mapper.ts`. This keeps generic runtime task progress (e.g. a `Bash` call
+// that happens to carry a `description`) out of the Subagent UI.
+
+interface ClaudeAgentTaskActivitySnapshot {
+  id: string
+  label: string
+  status: 'running' | 'completed' | 'failed'
+  startedAt: number | null
+  completedAt: number | null
+}
+
+export function writeClaudeAgentTaskActivity(
+  runtimeSession: RuntimeSession,
+  item: ClaudeAgentCapturedTaskActivity,
+): void {
+  const snapshot = readWorkspaceProviderStateSnapshot(runtimeSession.providerStateSnapshot)
+  const claudeAgentState = { ...readRecord(snapshot.claudeAgent) }
+  const existingItems = readClaudeAgentTaskActivitySnapshot(claudeAgentState.taskActivity)
+
+  const index = existingItems.findIndex(existing => existing.id === item.id)
+  if (index >= 0) {
+    existingItems[index] = mergeClaudeAgentTaskActivity(existingItems[index]!, item)
+  }
+  else {
+    existingItems.push(item)
+  }
+
+  claudeAgentState.taskActivity = retainRecentClaudeActivity(existingItems, CLAUDE_AGENT_RECENT_TASK_ACTIVITY_LIMIT)
+  writeClaudeAgentProviderSnapshot(runtimeSession, {
+    ...snapshot,
+    claudeAgent: claudeAgentState,
+  })
+}
+
+export function projectClaudeAgentToolActivityUiSlotState(
+  runtimeSession: RuntimeSession,
+): RuntimeToolActivityUiSlotState | null {
+  const snapshot = readWorkspaceProviderStateSnapshot(runtimeSession.providerStateSnapshot)
+  const items = readClaudeAgentTaskActivitySnapshot(readRecord(snapshot.claudeAgent).taskActivity)
+  if (items.length === 0) {
+    return null
+  }
+
+  const recentItems: RuntimeToolActivityItem[] = items.map(item => ({
+    id: item.id,
+    type: 'backgroundTask',
+    label: item.label,
+    status: item.status,
+    startedAt: item.startedAt,
+    completedAt: item.completedAt,
+  }))
+
+  return {
+    kind: 'toolActivity',
+    slotId: 'claude-agent:tool-activity',
+    threadId: runtimeSession.chatSessionId,
+    turnId: null,
+    activeCount: items.filter(item => item.status === 'running').length,
+    completedCount: items.filter(item => item.status === 'completed').length,
+    failedCount: items.filter(item => item.status === 'failed').length,
+    recentItems,
+    updatedAt: Date.now(),
+  }
+}
+
+function mergeClaudeAgentTaskActivity(
+  existing: ClaudeAgentTaskActivitySnapshot,
+  next: ClaudeAgentCapturedTaskActivity,
+): ClaudeAgentTaskActivitySnapshot {
+  return {
+    id: existing.id,
+    label: next.label || existing.label,
+    status: next.status,
+    startedAt: next.startedAt ?? existing.startedAt,
+    completedAt: next.completedAt ?? existing.completedAt,
+  }
+}
+
+function readClaudeAgentTaskActivitySnapshot(value: unknown): ClaudeAgentTaskActivitySnapshot[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  return value.flatMap((item): ClaudeAgentTaskActivitySnapshot[] => {
+    const record = readRecord(item)
+    const id = typeof record.id === 'string' ? record.id.trim() : ''
+    const status = record.status
+    if (!id || (status !== 'running' && status !== 'completed' && status !== 'failed')) {
+      return []
+    }
+    return [{
+      id,
+      label: typeof record.label === 'string' ? record.label : id,
+      status,
+      startedAt: typeof record.startedAt === 'number' ? record.startedAt : null,
+      completedAt: typeof record.completedAt === 'number' ? record.completedAt : null,
+    }]
+  })
+}
