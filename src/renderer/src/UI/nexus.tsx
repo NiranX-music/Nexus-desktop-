@@ -231,7 +231,7 @@ const NEXUS = (props: NexusProps) => {
           </div>
         </div>
 
-        <div className="flex flex-col gap-1.5 p-2">
+        <div className="flex flex-col gap-1.5 p-2 overflow-y-auto overflow-x-hidden scrollbar-none h-[calc(100%-56px)]">
           {tabs.map((tab) => (
             <button
               key={tab.id}
