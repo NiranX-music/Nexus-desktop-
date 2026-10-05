@@ -1,0 +1,16 @@
+# ==============================================================================
+# Cloudflare Pages Configuration: Site 4 (Admin Command HQ - Tier 4)
+# Project Name: ecosystem-admin
+# ==============================================================================
+
+name = "ecosystem-admin"
+pages_build_output_dir = "."
+compatibility_date = "2024-09-23"
+
+[vars]
+SITE_ROLE = "ADMIN_CONSOLE_TIER4"
+ENVIRONMENT = "production"
+LANDING_URL = "https://nexus.io"
+AUTH_GATEWAY_URL = "https://auth.nexus.io"
+STATUS_RADAR_URL = "https://status.nexus.io"
+MASTER_ADMIN_KEY_HASH = "SEC-X94-K982-Z710-Q441-V019-DELTA"
