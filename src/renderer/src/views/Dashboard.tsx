@@ -491,7 +491,7 @@ export default function DashboardView({
 
   return (
     <div className="flex-1 min-h-0 p-4 bg-white/[0.02] grid grid-cols-12 gap-4 h-full overflow-hidden relative animate-in fade-in zoom-in duration-300 w-full">
-      <div className="hidden lg:flex col-span-3 min-h-0 flex-col gap-3 overflow-y-auto pr-1 pb-2 z-40 scrollbar-small">
+      <div className="hidden lg:flex col-span-3 min-h-0 flex-col gap-3 overflow-y-auto pr-1.5 pb-2 z-40 scrollbar-small">
         <div
           className={`${glassPanel} h-[224px] shrink-0 flex flex-col p-1 overflow-hidden relative group`}
         >
@@ -756,7 +756,7 @@ export default function DashboardView({
         </div>
       </div>
 
-      <div className="col-span-12 lg:col-span-6 relative isolate flex min-h-0 flex-col items-center overflow-hidden pb-3">
+      <div className="col-span-12 lg:col-span-6 relative isolate flex min-h-0 flex-col items-center overflow-y-auto overflow-x-hidden pb-3 scrollbar-small">
         <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
           <div className="absolute left-1/2 top-[42%] h-[min(58vh,540px)] w-[min(58vh,540px)] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(circle,#10b98126_0%,#06b6d41a_36%,transparent_70%)] blur-3xl" />
           <div className="nexus-core-grid absolute left-1/2 top-[42%] h-[min(62vh,580px)] w-[min(62vh,580px)] -translate-x-1/2 -translate-y-1/2 opacity-60" />
