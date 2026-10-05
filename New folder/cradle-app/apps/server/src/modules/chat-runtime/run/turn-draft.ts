@@ -1,0 +1,241 @@
+import { randomUUID } from 'node:crypto'
+
+import type { ChatMessagePartBoundary } from '@cradle/chat-runtime-contracts'
+import type { BackendRun } from '@cradle/db'
+import type { FileUIPart, UIMessage } from 'ai'
+
+import { readObjectRecord } from '../../../helpers/json-record'
+import { currentUnixSeconds } from '../../../helpers/time'
+import { readDurableProviderRuntimeBinding } from '../../provider-runtime/service'
+import type { ChatContextPart } from '../context-parts'
+import { commitSessionEvents } from '../es/commands'
+import type { BackendRunStartedFact } from '../es/events'
+import { toDurableMessagePayload } from '../message-durable-payload'
+import type { ChatSessionContinuationMode } from '../queue/session-queue'
+import type { RuntimeGoalContinuation } from '../runtime-provider-types'
+import {
+  annotateGoalMessage,
+  createUserMessage,
+} from '../ui-message'
+
+interface ContinuationMetadataInput {
+  mode: ChatSessionContinuationMode
+  queueItemId?: string
+  sourceMessageId?: string
+  splitParts?: ChatMessagePartBoundary[]
+}
+
+export interface DraftTurnInput {
+  sessionId: string
+  userText: string
+  files: FileUIPart[]
+  contextParts: ChatContextPart[]
+  goalContinuation?: RuntimeGoalContinuation
+  continuation?: { mode: ChatSessionContinuationMode, queueItemId?: string }
+}
+
+export interface DraftTurnFromUserMessageInput {
+  sessionId: string
+  userMessage: UIMessage
+  continuation?: { mode: ChatSessionContinuationMode, queueItemId?: string }
+}
+
+export interface DraftTurnResult {
+  userMessageId: string
+  assistantMessageId: string
+  userMessage: UIMessage
+  appendUserMessage: boolean
+}
+
+export interface InsertCompletedUserMessageInput {
+  sessionId: string
+  message: UIMessage
+  parentMessageId?: string | null
+}
+
+export interface StartRunInput {
+  sessionId: string
+  messageId: string
+  origin: 'user' | 'issue-agent' | 'system'
+  assistantMessage: UIMessage
+  userMessage?: UIMessage
+  queueItemId?: string | null
+  bindingId?: string | null
+}
+
+export function annotateContinuationMessage(
+  message: UIMessage,
+  continuation: ContinuationMetadataInput | null,
+): UIMessage {
+  if (!continuation) {
+    return message
+  }
+
+  const currentMetadata = readObjectRecord((message as { metadata?: unknown }).metadata)
+  const currentCradleMetadata = readObjectRecord(currentMetadata.cradle)
+
+  return {
+    ...message,
+    metadata: {
+      ...currentMetadata,
+      cradle: {
+        ...currentCradleMetadata,
+        continuation: {
+          mode: continuation.mode,
+          ...(continuation.queueItemId ? { queueItemId: continuation.queueItemId } : {}),
+          ...(continuation.sourceMessageId
+            ? { sourceMessageId: continuation.sourceMessageId }
+            : {}),
+          ...(continuation.splitParts !== undefined ? { splitParts: continuation.splitParts } : {}),
+        },
+      },
+    },
+  } as UIMessage
+}
+
+export function createDraftTurn(input: DraftTurnInput): DraftTurnResult {
+  const userMessageId = randomUUID()
+  const assistantMessageId = randomUUID()
+  const goalObjective
+    = input.goalContinuation?.readGoalCommandObjective?.({ text: input.userText }) ?? null
+  const userText = goalObjective ?? input.userText
+  const userMessage = annotateContinuationMessage(
+    goalObjective
+      ? annotateGoalMessage(
+          createUserMessage(userMessageId, userText, input.files, input.contextParts),
+          goalObjective,
+        )
+      : createUserMessage(userMessageId, userText, input.files, input.contextParts),
+    input.continuation ?? null,
+  )
+  return { userMessageId, assistantMessageId, userMessage, appendUserMessage: true }
+}
+
+export function createDraftTurnFromUserMessage(
+  input: DraftTurnFromUserMessageInput,
+): DraftTurnResult {
+  const assistantMessageId = randomUUID()
+  const userMessage = annotateContinuationMessage(input.userMessage, input.continuation ?? null)
+  return {
+    userMessageId: userMessage.id,
+    assistantMessageId,
+    userMessage,
+    appendUserMessage: true,
+  }
+}
+
+export async function appendDraftUserMessage(input: {
+  sessionId: string
+  userMessage: UIMessage
+}): Promise<void> {
+  const now = currentUnixSeconds()
+  await commitSessionEvents(input.sessionId, [{
+    type: 'UserMessageAppended',
+    payload: { message: await createUserMessageFact(input.sessionId, input.userMessage, now) },
+  }])
+}
+
+export async function insertCompletedUserMessage(
+  input: InsertCompletedUserMessageInput,
+): Promise<void> {
+  const now = currentUnixSeconds()
+  const durable = await toDurableMessagePayload({
+    sessionId: input.sessionId,
+    message: input.message,
+  })
+  await commitSessionEvents(input.sessionId, [
+    {
+      type: 'SteerApplied',
+      payload: {
+        message: {
+          id: durable.message.id,
+          sessionId: input.sessionId,
+          parentMessageId: input.parentMessageId ?? null,
+          parentToolCallId: null,
+          taskId: null,
+          depth: 0,
+          role: 'user',
+          status: 'complete',
+          content: durable.content,
+          messageJson: durable.messageJson,
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+    },
+  ])
+}
+
+export async function startRun(input: StartRunInput): Promise<BackendRun> {
+  const bindingId = input.bindingId === undefined
+    ? readDurableProviderRuntimeBinding(input.sessionId)?.id ?? null
+    : input.bindingId
+  const now = currentUnixSeconds()
+  const run = {
+    id: randomUUID(),
+    bindingId,
+    chatSessionId: input.sessionId,
+    messageId: input.messageId,
+    origin: input.origin,
+    status: 'streaming',
+    stopReason: null,
+    errorText: null,
+    startedAt: now,
+    finishedAt: null,
+  } satisfies BackendRunStartedFact
+  const assistantDurable = await toDurableMessagePayload({
+    sessionId: input.sessionId,
+    message: input.assistantMessage,
+  })
+  await commitSessionEvents(input.sessionId, [
+    ...(input.userMessage
+      ? [{
+          type: 'UserMessageAppended' as const,
+          payload: {
+            message: await createUserMessageFact(input.sessionId, input.userMessage, now),
+          },
+        }]
+      : []),
+    {
+      type: 'RunStarted',
+      payload: {
+        run,
+        assistantMessage: {
+          id: input.messageId,
+          sessionId: input.sessionId,
+          parentMessageId: null,
+          parentToolCallId: null,
+          taskId: null,
+          depth: 0,
+          role: 'assistant',
+          status: 'streaming',
+          content: assistantDurable.content,
+          messageJson: assistantDurable.messageJson,
+          errorText: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+        queueItemId: input.queueItemId ?? null,
+      },
+    },
+  ])
+  return run
+}
+
+async function createUserMessageFact(sessionId: string, message: UIMessage, now: number) {
+  const durable = await toDurableMessagePayload({ sessionId, message })
+  return {
+    id: durable.message.id,
+    sessionId,
+    parentMessageId: null,
+    parentToolCallId: null,
+    taskId: null,
+    depth: 0,
+    role: 'user' as const,
+    status: 'complete' as const,
+    content: durable.content,
+    messageJson: durable.messageJson,
+    createdAt: now,
+    updatedAt: now,
+  }
+}
