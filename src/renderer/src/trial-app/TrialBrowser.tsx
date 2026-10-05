@@ -315,7 +315,7 @@ export default function TrialBrowser({
                   ? 'Open/search/type/click/scroll/play/pause/add account in Serverless Chromium...'
                   : 'Tell Nexus what to do in the browser...'
               }
-              className="min-h-[8rem] w-full resize-none rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-300/25"
+              className="min-h-[8rem] w-full resize-none rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-300/25 scrollbar-small"
             />
 
             <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto]">
@@ -374,7 +374,7 @@ export default function TrialBrowser({
           </span>
         </div>
 
-        <div ref={logRef} className="mt-5 flex-1 space-y-4 overflow-y-auto pr-1">
+        <div ref={logRef} className="mt-5 flex-1 space-y-4 overflow-y-auto pr-1 scrollbar-small">
           {events.length ? (
             events.map((item) => (
               <div
