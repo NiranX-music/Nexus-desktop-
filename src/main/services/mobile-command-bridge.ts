@@ -129,6 +129,25 @@ function loadDesktopGeminiKey(app: App) {
   }
 }
 
+function saveDesktopGeminiKey(app: App, key: string) {
+  const secureConfigPath = path.join(app.getPath('userData'), 'nexus_secure_vault.json')
+  let existing: any = {}
+  try {
+    if (fs.existsSync(secureConfigPath)) {
+      existing = JSON.parse(fs.readFileSync(secureConfigPath, 'utf8'))
+    }
+  } catch {}
+
+  const encrypted = safeStorage.isEncryptionAvailable()
+    ? safeStorage.encryptString(key).toString('base64')
+    : Buffer.from(key).toString('base64')
+
+  existing.gemini = encrypted
+  if (!existing.groq) existing.groq = encrypted
+
+  fs.writeFileSync(secureConfigPath, JSON.stringify(existing, null, 2))
+}
+
 function readSecureVaultStatus(app: App) {
   const secureConfigPath = path.join(app.getPath('userData'), 'nexus_secure_vault.json')
   if (!fs.existsSync(secureConfigPath)) {
@@ -439,6 +458,33 @@ export default function registerMobileCommandBridge({ app, getMainWindow }: Brid
 
       if (req.method === 'GET' && requestUrl.pathname === '/mobile-pairing.svg') {
         sendSvg(res, 200, renderPairingQrSvg(port))
+        return
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/web-auth-bridge') {
+        try {
+          const rawBody = await readBody(req)
+          const payload = JSON.parse(rawBody || '{}')
+          const key = String(payload.apiKey || payload.key || '').trim()
+          const token = String(payload.token || '').trim()
+          const user = String(payload.user || '').trim()
+
+          if (key) {
+            saveDesktopGeminiKey(app, key)
+          }
+
+          const targetWindow = getMainWindow()
+          if (targetWindow && !targetWindow.isDestroyed()) {
+            if (targetWindow.isMinimized()) targetWindow.restore()
+            targetWindow.show()
+            targetWindow.focus()
+            targetWindow.webContents.send('web-auth-bridge:synced', { key, token, user })
+          }
+
+          sendJson(res, 200, { ok: true, message: 'Web Bridge Authenticated Successfully' })
+        } catch (err: any) {
+          sendJson(res, 400, { ok: false, error: err?.message || 'Invalid payload' })
+        }
         return
       }
 

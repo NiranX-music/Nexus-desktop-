@@ -95,6 +95,61 @@ if (!gotTheLock) {
   process.exit(0)
 }
 
+function handleDeepLinkUrl(urlStr: string) {
+  try {
+    const parsed = new URL(urlStr)
+    if (parsed.protocol === 'nexus:' && (parsed.hostname === 'auth' || parsed.pathname.includes('auth'))) {
+      const key = parsed.searchParams.get('key') || ''
+      const token = parsed.searchParams.get('token') || ''
+      const user = parsed.searchParams.get('user') || ''
+
+      if (key) {
+        try {
+          const configPath = join(app.getPath('userData'), 'nexus_secure_vault.json')
+          let existing: any = {}
+          if (fs.existsSync(configPath)) {
+            existing = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+          }
+          const encrypted = safeStorage.isEncryptionAvailable()
+            ? safeStorage.encryptString(key).toString('base64')
+            : Buffer.from(key).toString('base64')
+
+          existing.gemini = encrypted
+          if (!existing.groq) existing.groq = encrypted
+          fs.writeFileSync(configPath, JSON.stringify(existing, null, 2))
+          console.log('[DEEP LINK] Stored API key from web bridge.')
+        } catch (err) {
+          console.error('[DEEP LINK] Failed to store API key:', err)
+        }
+      }
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('web-auth-bridge:synced', { key, token, user })
+      }
+    }
+  } catch (err) {
+    console.error('[DEEP LINK] Error parsing deep link:', err)
+  }
+}
+
+app.on('second-instance', (_event, commandLine) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+  }
+
+  const urlArg = commandLine.find((arg) => arg.startsWith('nexus://'))
+  if (urlArg) {
+    handleDeepLinkUrl(urlArg)
+  }
+})
+
+app.on('open-url', (event, url) => {
+  event.preventDefault()
+  handleDeepLinkUrl(url)
+})
+
 let mainWindow: BrowserWindow | null = null
 let dockWindow: BrowserWindow | null = null
 let tray: Tray | null = null
