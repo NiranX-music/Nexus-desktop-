@@ -229,7 +229,7 @@ export default function DocForgeWidget() {
                   <span className="text-[10px] font-mono text-zinc-400 uppercase tracking-widest">
                     Available Presentation Blueprints
                   </span>
-                  <div className="flex flex-col gap-2">
+                  <div className="flex flex-col gap-2 max-h-[340px] overflow-y-auto pr-1 scrollbar-small">
                     {SLIDE_PRESETS.map((preset, idx) => (
                       <div
                         key={idx}
@@ -312,7 +312,7 @@ export default function DocForgeWidget() {
                   <span className="text-[10px] font-mono text-zinc-400 uppercase tracking-widest">
                     Spreadsheet Blueprints
                   </span>
-                  <div className="flex flex-col gap-2">
+                  <div className="flex flex-col gap-2 max-h-[340px] overflow-y-auto pr-1 scrollbar-small">
                     {SPREADSHEET_PRESETS.map((sheet, idx) => (
                       <div
                         key={idx}
@@ -346,7 +346,7 @@ export default function DocForgeWidget() {
                   <span className="text-[10px] font-mono text-zinc-400 tracking-widest uppercase mb-3">
                     Structured Data Matrix Preview
                   </span>
-                  <div className="overflow-x-auto">
+                  <div className="overflow-x-auto scrollbar-small">
                     <table className="w-full text-left text-xs">
                       <thead>
                         <tr className="border-b border-white/10 text-zinc-400 font-mono text-[10px]">
