@@ -1,0 +1,198 @@
+from datetime import datetime
+from decimal import Decimal
+from enum import StrEnum
+
+from pydantic import BaseModel, ConfigDict, field_validator
+
+from skyvern.forge.sdk.db.utils import deserialize_proxy_location
+from skyvern.schemas.browser_session_close import BrowserSessionCloseReason
+from skyvern.schemas.proxy_pinning import validate_proxy_session_id
+from skyvern.schemas.runs import GeoTarget, ProxyLocation, ProxyLocationInput
+
+
+class PersistentBrowserSessionStatus(StrEnum):
+    created = "created"
+    running = "running"
+    failed = "failed"
+    completed = "completed"
+    timeout = "timeout"
+    retry = "retry"
+
+
+API_BROWSER_SESSION_CREATED_BY = "api"
+
+
+FINAL_STATUSES = (
+    PersistentBrowserSessionStatus.completed,
+    PersistentBrowserSessionStatus.failed,
+    PersistentBrowserSessionStatus.timeout,
+)
+
+
+def is_final_status(status: str | None) -> bool:
+    return status in FINAL_STATUSES
+
+
+def resolve_terminal_status(status: str, close_reason: str | None) -> str:
+    """A close requested as an abort lands on failed; every other terminal write keeps what it asked for."""
+    if status == PersistentBrowserSessionStatus.completed and close_reason == BrowserSessionCloseReason.aborted:
+        return PersistentBrowserSessionStatus.failed.value
+    return status
+
+
+def export_profile_storage_id(
+    *,
+    session_id: str,
+    browser_profile_id: str | None,
+    generate_browser_profile: bool,
+) -> str:
+    """Pure (cloud-dep-free) routing helper mapping a session to the storage id its profile archive is exported
+    to and read from (pass the loaded profile id, or None when no profile loaded)."""
+    if generate_browser_profile:
+        return session_id
+    return browser_profile_id or session_id
+
+
+class PersistentBrowserType(StrEnum):
+    MSEdge = "msedge"
+    Chrome = "chrome"
+    StealthChromium = "stealth-chromium"
+
+    @classmethod
+    def from_source_browser_type(cls, value: str) -> "PersistentBrowserType | None":
+        try:
+            return cls(value)
+        except ValueError:
+            return None
+
+
+class Extensions(StrEnum):
+    AdBlocker = "ad-blocker"
+    CaptchaSolver = "captcha-solver"
+
+
+FORCED_WORKFLOW_SESSION_RUNNABLE_TYPE = "forced_workflow_run"
+SESSION_RETIREMENT_RUNNABLE_TYPE = "session_retirement"
+
+
+class PersistentBrowserSession(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    persistent_browser_session_id: str
+    organization_id: str
+    runnable_type: str | None = None
+    runnable_id: str | None = None
+    runnable_generation_id: str | None = None
+    download_run_id: str | None = None
+    browser_address: str | None = None
+    ip_address: str | None = None
+    # Server-side only: the upstream CDP endpoint and the adapter that dials it. browser_address
+    # remains the client-facing proxy URL. These must never reach a client or a log —
+    # BrowserSessionResponse.from_browser_session is the allowlist that enforces the former.
+    upstream_cdp_url: str | None = None
+    browser_vendor: str | None = None
+    # The upstream provider's own id for this browser. Server-side only, under the same allowlist
+    # as the two fields above. It is the sole handle for terminating a session out of band, so the
+    # orphan reaper reads it off the row after the process that created the session is gone.
+    browser_id: str | None = None
+    status: str | None = None
+    timeout_minutes: int | None = None
+    proxy_location: ProxyLocationInput = None
+    proxy_session_id: str | None = None
+    instance_type: str | None = None
+    vcpu_millicores: int | None = None
+    memory_mb: int | None = None
+    duration_ms: int | None = None
+    compute_cost: Decimal | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    last_activity_at: datetime | None = None
+    close_requested_at: datetime | None = None
+    cdp_unreachable_at: datetime | None = None
+    close_reason: str | None = None
+    created_by: str | None = None
+    created_at: datetime
+    modified_at: datetime
+    deleted_at: datetime | None = None
+    extensions: list[Extensions] | None = None
+    browser_type: PersistentBrowserType | None = None
+    browser_profile_id: str | None = None
+    generate_browser_profile: bool = False
+    bound_workflow_permanent_id: str | None = None
+    bound_key: str | None = None
+    # False once a requested browser_profile_id failed to load at launch (fell back to a fresh profile),
+    # so teardown exported under the session id rather than the bp_ id.
+    browser_profile_loaded: bool = True
+    # Loads browser_profile_id but saves nothing at teardown, under either the bp_ or the session id.
+    profile_read_only: bool = False
+    # Keyed digest of the egress IP probed at launch; server-side only, never on BrowserSessionResponse.
+    exit_identity_digest: str | None = None
+
+    @property
+    def is_browser_ready(self) -> bool:
+        """Whether a browser exists for this session and can be connected to.
+
+        Keyed on upstream_cdp_url and NOT on browser_address: a client-facing address can be
+        minted when the session is created, before anything is provisioned, so its presence says
+        only that an address was issued. The session worker writes this column in the same call
+        that starts the session clock, which is what makes it the readiness signal.
+        """
+        return bool(self.upstream_cdp_url)
+
+    @field_validator("proxy_location", mode="before")
+    @classmethod
+    def deserialize_proxy_location_field(cls, value: object) -> object:
+        if isinstance(value, str):
+            return deserialize_proxy_location(value, raise_on_invalid_geo_target=True)
+        return value
+
+    @field_validator("proxy_session_id")
+    @classmethod
+    def validate_proxy_session_id_field(cls, value: str | None) -> str | None:
+        return validate_proxy_session_id(value)
+
+    def should_export_profile(self) -> bool:
+        """A session persists its profile at teardown only when it opted in or is reusing a saved profile.
+
+        A reuse session (browser_profile_id set) must always re-export so the updated session-cookie
+        sidecar survives; gating it off would silently log the profile out on the next reuse.
+        """
+        return not self.profile_read_only and bool(self.generate_browser_profile or self.browser_profile_id)
+
+
+class FreshExitOutcome(StrEnum):
+    distinct_verified = "distinct_verified"
+    no_alternate = "no_alternate"
+    pin_conflict = "pin_conflict"
+
+
+class NoAlternateReason(StrEnum):
+    unsupported = "unsupported"
+    prior_not_found = "prior_not_found"
+    scope_mismatch = "scope_mismatch"
+    profile_unavailable = "profile_unavailable"
+    direct = "direct"
+    custom_proxy = "custom_proxy"
+    prior_exit_unknown = "prior_exit_unknown"
+    same_exit = "same_exit"
+    exit_unverified = "exit_unverified"
+    close_failed = "close_failed"
+
+
+class FreshExitReceipt(BaseModel):
+    """Exit ids are opaque keyed digests. ``verified`` means the two exits differed when each browser launched."""
+
+    outcome: FreshExitOutcome
+    reason: NoAlternateReason | None = None
+    prior_browser_session_id: str
+    new_browser_session_id: str | None = None
+    prior_exit_id: str | None = None
+    new_exit_id: str | None = None
+    verified: bool = False
+    proxy_location: ProxyLocation | GeoTarget | None = None
+    browser_profile_id: str | None = None
+    profile_read_only: bool = False
+
+
+class AddressablePersistentBrowserSession(PersistentBrowserSession):
+    browser_address: str
