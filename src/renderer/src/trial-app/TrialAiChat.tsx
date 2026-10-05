@@ -167,7 +167,7 @@ export default function TrialAiChat() {
 
   return (
     <div className="grid h-full min-h-0 gap-5 xl:grid-cols-[0.78fr_1.22fr]">
-      <aside className="rounded-3xl border border-emerald-400/14 bg-[linear-gradient(180deg,rgba(8,14,14,0.96),rgba(4,7,8,0.92))] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.25)]">
+      <aside className="overflow-y-auto scrollbar-small rounded-3xl border border-emerald-400/14 bg-[linear-gradient(180deg,rgba(8,14,14,0.96),rgba(4,7,8,0.92))] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.25)]">
         <div className="border-b border-white/10 pb-4">
           <div className="flex items-center gap-3">
             <div className="rounded-2xl border border-emerald-400/18 bg-emerald-400/10 p-3 text-emerald-200">
@@ -282,7 +282,7 @@ export default function TrialAiChat() {
           </div>
         </div>
 
-        <div ref={scrollRef} className="mt-5 flex-1 space-y-3 overflow-y-auto pr-1">
+        <div ref={scrollRef} className="mt-5 flex-1 space-y-3 overflow-y-auto pr-1 scrollbar-small">
           {messages.map((message, index) => (
             <div
               key={`${message.role}-${index}`}
@@ -320,7 +320,7 @@ export default function TrialAiChat() {
             value={input}
             onChange={(event) => setInput(event.target.value)}
             placeholder="Ask Nexus Trial something..."
-            className="min-h-[4.5rem] min-w-0 flex-1 resize-none rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-300/25"
+            className="min-h-[4.5rem] min-w-0 flex-1 resize-none rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-300/25 scrollbar-small"
           />
           <div className="flex flex-col gap-2">
             <button
