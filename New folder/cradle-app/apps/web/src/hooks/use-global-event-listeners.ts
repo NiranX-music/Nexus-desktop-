@@ -1,0 +1,202 @@
+import type { QueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import type { UIMessageChunk } from 'ai'
+import { useCallback, useEffect } from 'react'
+
+import {
+  getChatSessionsBySessionIdMessagesQueryKey,
+} from '~/api-gen/@tanstack/react-query.gen'
+import { postSessionsByIdRead } from '~/api-gen/sdk.gen'
+import { runtimeUiSlotStatesQueryKey } from '~/features/chat/capabilities/chat-capabilities'
+import { runtimeSettingsQueryKey } from '~/features/chat/commands/runtime-settings-command'
+import { onAnyChatRunEvent, onChatRunSettled } from '~/features/chat/transport/sse-chat-transport'
+import {
+  applySessionReadResult,
+  refreshSessionProjections,
+  refreshSessionRuntimeStatus,
+} from '~/features/session/api/session-projection'
+import { useGlobalSessionEventSync } from '~/features/session/use-global-session-event-sync'
+import { useShortcut } from '~/hooks/use-shortcut'
+import { isElectron, isTearoffWindow, nativeIpc, platform } from '~/lib/electron'
+import {
+  activateAdjacentSurface,
+  closeActiveSurface,
+  openNewChat,
+  reopenLastClosedSurface,
+} from '~/navigation/navigation-commands'
+import { HOME_SURFACE_ID } from '~/navigation/surface-identity'
+import { useSurfaceStore } from '~/navigation/surface-store'
+import {
+  BROWSER_PANEL_WEBVIEW_TAB_SHORTCUT_CHANNEL,
+  closeActiveBrowserPanelTab,
+  handleBrowserPanelTabShortcut,
+  handleBrowserPanelTabShortcutPayload,
+  useBrowserPanelStore,
+} from '~/store/browser-panel'
+import { useLayoutStore } from '~/store/layout'
+import { useSessionActivityStore } from '~/store/session-activity'
+
+function invalidateChatSessionRuntimeQueries(queryClient: QueryClient, sessionId: string): void {
+  void queryClient.invalidateQueries({
+    queryKey: getChatSessionsBySessionIdMessagesQueryKey({ path: { sessionId } }),
+  })
+  void refreshSessionProjections(queryClient, sessionId)
+  void queryClient.invalidateQueries({ queryKey: runtimeUiSlotStatesQueryKey(sessionId) })
+  void queryClient.invalidateQueries({ queryKey: runtimeSettingsQueryKey(sessionId) })
+}
+
+function isClaudeEnterPlanModeChunk(chunk: UIMessageChunk): boolean {
+  return chunk.type === 'tool-input-start' && chunk.toolName === 'EnterPlanMode'
+}
+
+export function useGlobalEventListeners(
+  options: {
+    workspacePath?: string | null
+  } = {},
+) {
+  const queryClient = useQueryClient()
+  useGlobalSessionEventSync(queryClient)
+  const toggleBottomPanel = useLayoutStore(s => s.toggleBottomPanel)
+  const toggleAside = useLayoutStore(s => s.toggleAside)
+  const workspacePath = options.workspacePath
+
+  // Chrome layout chords must work from Composer (contenteditable) and the
+  // bottom-panel xterm textarea; without allowInEditable they are silently
+  // skipped while the user is typing.
+  useShortcut(
+    'layout.toggle-bottom-panel',
+    { ctrl: true, key: '`', allowInEditable: true },
+    toggleBottomPanel,
+  )
+  useShortcut(
+    'layout.toggle-aside',
+    { mod: true, alt: true, key: 'b', allowInEditable: true },
+    toggleAside,
+  )
+  useShortcut(
+    'terminal.open-external',
+    {
+      ...(platform === 'darwin' ? { meta: true } : { ctrl: true }),
+      shift: true,
+      key: 'c',
+      allowInEditable: true,
+    },
+    useCallback(() => {
+      if (!isElectron || !nativeIpc || !workspacePath) {
+        return
+      }
+      void nativeIpc.native.openPathInTerminal(workspacePath).catch((error) => {
+        console.error('Failed to open external terminal', error)
+      })
+    }, [workspacePath]),
+    Boolean(workspacePath),
+  )
+  useShortcut(
+    'surface.close',
+    { mod: true, key: 'w', allowInEditable: true },
+    useCallback(() => {
+      const browserPanelState = useBrowserPanelStore.getState()
+      if (closeActiveBrowserPanelTab({
+        panelOpen: browserPanelState.open,
+        ownerId: browserPanelState.activeOwnerId,
+        onCloseLastTab: ownerId => useBrowserPanelStore.getState().setDockOpen(false, ownerId),
+      })) {
+        return
+      }
+      if (isTearoffWindow) {
+        void nativeIpc?.window.close().catch(() => {})
+        return
+      }
+      if (closeActiveSurface()) {
+        return
+      }
+      const surfaces = useSurfaceStore.getState().surfaces
+      if (surfaces.length === 1 && surfaces[0]?.id === HOME_SURFACE_ID) {
+        void nativeIpc?.window.close().catch(() => {})
+      }
+    }, []),
+  )
+  useShortcut(
+    'chat.new',
+    { mod: true, key: 't', allowInEditable: true },
+    openNewChat,
+    !isTearoffWindow,
+  )
+  useShortcut(
+    'surface.reopen-closed',
+    { mod: true, shift: true, key: 't', allowInEditable: true },
+    reopenLastClosedSurface,
+    !isTearoffWindow,
+  )
+  useShortcut(
+    'surface.next',
+    { ctrl: true, key: 'Tab', allowInEditable: true },
+    () => activateAdjacentSurface(1),
+    !isTearoffWindow,
+  )
+  useShortcut(
+    'surface.previous',
+    { ctrl: true, shift: true, key: 'Tab', allowInEditable: true },
+    () => activateAdjacentSurface(-1),
+    !isTearoffWindow,
+  )
+
+  // Panel + tab keyboard shortcuts
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.defaultPrevented) {
+        return
+      }
+      // ── Tab shortcuts ──────────────────────────────────────────────
+      const browserPanelState = useBrowserPanelStore.getState()
+      handleBrowserPanelTabShortcut(e, {
+        panelOpen: browserPanelState.open,
+        ownerId: browserPanelState.activeOwnerId,
+        onCloseLastTab: ownerId => useBrowserPanelStore.getState().setDockOpen(false, ownerId),
+      })
+    }
+    window.addEventListener('keydown', handleKeyDown, { capture: true })
+    return () => window.removeEventListener('keydown', handleKeyDown, { capture: true })
+  }, [])
+
+  useEffect(() => {
+    return (
+      window.cradle?.ipc.on(BROWSER_PANEL_WEBVIEW_TAB_SHORTCUT_CHANNEL, (payload) => {
+        const browserPanelState = useBrowserPanelStore.getState()
+        handleBrowserPanelTabShortcutPayload(payload, {
+          panelOpen: browserPanelState.open,
+          ownerId: browserPanelState.activeOwnerId,
+          onCloseLastTab: ownerId => useBrowserPanelStore.getState().setDockOpen(false, ownerId),
+        })
+      }) ?? (() => {})
+    )
+  }, [])
+
+  useEffect(() => {
+    return onChatRunSettled(({ chatSessionId }) => {
+      invalidateChatSessionRuntimeQueries(queryClient, chatSessionId)
+      if (useSessionActivityStore.getState().visibleSessionId === chatSessionId) {
+        void postSessionsByIdRead({ path: { id: chatSessionId } })
+          .then(({ data }) => {
+            if (data) {
+              applySessionReadResult(queryClient, data)
+            }
+          })
+          .catch(() => {})
+      }
+    })
+  }, [queryClient])
+
+  useEffect(() => {
+    return onAnyChatRunEvent(({ chatSessionId, chunk }) => {
+      if (chunk.type === 'start') {
+        invalidateChatSessionRuntimeQueries(queryClient, chatSessionId)
+        return
+      }
+      if (isClaudeEnterPlanModeChunk(chunk)) {
+        void queryClient.invalidateQueries({ queryKey: runtimeSettingsQueryKey(chatSessionId) })
+        void refreshSessionRuntimeStatus(queryClient, chatSessionId)
+      }
+    })
+  }, [queryClient])
+}
