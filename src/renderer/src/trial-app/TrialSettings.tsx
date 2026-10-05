@@ -391,7 +391,7 @@ export default function TrialSettings({ isSystemActive }: TrialSettingsProps) {
               </button>
             </div>
 
-            <pre className="rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-[11px] leading-relaxed text-zinc-400 whitespace-pre-wrap">
+            <pre className="rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-[11px] leading-relaxed text-zinc-400 whitespace-pre-wrap max-h-48 overflow-y-auto scrollbar-small">
               {updateNotes}
             </pre>
 
