@@ -272,7 +272,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#050505] text-emerald-50 font-sans flex items-center justify-center p-3 lg:p-5 relative overflow-hidden selection:bg-emerald-500/30 selection:text-emerald-100">
+    <div className="min-h-screen bg-[#050505] text-emerald-50 font-sans flex items-center justify-center p-3 lg:p-5 relative overflow-y-auto scrollbar-small selection:bg-emerald-500/30 selection:text-emerald-100">
       <div className="absolute top-[-10%] left-[-5%] w-125 h-125 bg-emerald-600/10 blur-[150px] rounded-full pointer-events-none animate-pulse" />
       <div className="absolute bottom-[-10%] right-[-5%] w-125 h-125 bg-cyan-900/10 blur-[150px] rounded-full pointer-events-none" />
       <div className="absolute inset-0 bg-[linear-linear(to_right,#10b98105_1px,transparent_1px),linear-linear(to_bottom,#10b98105_1px,transparent_1px)] bg-size-[40px_40px] pointer-events-none mix-blend-screen" />
