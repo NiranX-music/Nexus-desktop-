@@ -1,0 +1,120 @@
+/**
+ * Diffs surface chrome — layout rhythm + Pierre bridge only.
+ *
+ * Color, type, radius, and shadow come from the app token system in
+ * `apps/web/src/styles.css` (`--background`, `--foreground`, `--primary`, …).
+ * Legacy `--rv-*` names remain as thin aliases so the dense review Views keep
+ * reading through `var(--rv-…)` without owning a second palette.
+ */
+
+[data-review-surface] {
+  /* Ground */
+  --rv-bg: var(--background);
+  --rv-bg-subtle: color-mix(in srgb, var(--muted) 55%, var(--background));
+  --rv-bg-inset: var(--muted);
+  --rv-bg-raised: var(--card);
+  --rv-bg-hover: var(--muted);
+  --rv-bg-active: var(--accent);
+
+  /* Hairlines */
+  --rv-line: var(--border);
+  --rv-edge: color-mix(in srgb, var(--border) 100%, var(--foreground) 8%);
+
+  /* Type */
+  --rv-fg: var(--foreground);
+  --rv-fg-muted: var(--muted-foreground);
+  --rv-fg-subtle: var(--text-tertiary);
+
+  /* Accent — app primary, spent sparingly for selection / focus / CTA */
+  --rv-accent: var(--primary);
+  --rv-accent-fg: var(--primary-foreground);
+  --rv-accent-wash: color-mix(in srgb, var(--primary) 12%, transparent);
+
+  /* Diff + status semantics */
+  --rv-add: var(--success-foreground);
+  --rv-add-wash: color-mix(in srgb, var(--success) 14%, transparent);
+  --rv-add-gutter: color-mix(in srgb, var(--success) 22%, transparent);
+  --rv-del: var(--destructive-foreground);
+  --rv-del-wash: color-mix(in srgb, var(--destructive) 14%, transparent);
+  --rv-del-gutter: color-mix(in srgb, var(--destructive) 22%, transparent);
+  --rv-warn: var(--warning-foreground);
+  --rv-danger: var(--destructive);
+  --rv-open: var(--success-foreground);
+  --rv-merged: var(--info-foreground);
+  --rv-closed: var(--text-tertiary);
+  --rv-draft: var(--text-tertiary);
+
+  /* Geometry — follow app radius / shadow scales */
+  --rv-radius: var(--radius-md);
+  --rv-radius-lg: var(--radius-lg);
+  --rv-shadow-raised: var(--shadow-xs);
+  --rv-shadow-pop: var(--shadow-md);
+
+  /* Rhythm unique to the review reading surface */
+  --rv-topbar-h: 44px;
+  --rv-rail-w: 248px;
+  --rv-meta-w: 264px;
+  --rv-code-line-h: 18px;
+
+  --rv-font-ui: var(--font-sans);
+  --rv-font-mono: var(--font-mono);
+
+  background: var(--rv-bg);
+  color: var(--rv-fg);
+  font-family: var(--rv-font-ui);
+  font-feature-settings: 'cv01', 'ss03';
+}
+
+/*
+ * Pierre paints through `light-dark()`, which resolves against the used
+ * color-scheme — not our `.dark` class. Pin it here so the diff always
+ * matches the app theme, even when the OS theme disagrees.
+ */
+[data-review-surface] {
+  color-scheme: light;
+}
+
+.dark [data-review-surface],
+[data-review-surface].dark {
+  color-scheme: dark;
+}
+
+/* Digits that stack in columns (line counts, stats, check tallies) must align. */
+[data-review-surface] [data-rv-num] {
+  font-variant-numeric: tabular-nums;
+}
+
+[data-review-surface] :focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
+/*
+ * Pierre's CodeView paints its own chrome through `--diffs-*-override` hooks.
+ * Map them onto app tokens so additions/deletions read as quiet washes over
+ * the app background (Linear-style), not saturated blocks.
+ */
+[data-review-surface] [data-rv-code] {
+  --diffs-bg-addition-override: color-mix(in srgb, var(--success) 9%, var(--background));
+  --diffs-bg-deletion-override: color-mix(in srgb, var(--destructive) 9%, var(--background));
+  --diffs-bg-addition-emphasis-override: color-mix(in srgb, var(--success) 26%, var(--background));
+  --diffs-bg-deletion-emphasis-override: color-mix(in srgb, var(--destructive) 26%, var(--background));
+  --diffs-bg-addition-number-override: color-mix(in srgb, var(--success) 13%, var(--background));
+  --diffs-bg-deletion-number-override: color-mix(in srgb, var(--destructive) 13%, var(--background));
+  --diffs-fg-number-override: var(--text-tertiary);
+  --diffs-bg-context-override: transparent;
+  --diffs-bg-buffer-override: transparent;
+  --diffs-bg-separator-override: var(--border);
+  --diffs-bg-hover-override: color-mix(in srgb, var(--foreground) 4%, transparent);
+  --diffs-bg-selection-override: color-mix(in srgb, var(--primary) 16%, transparent);
+  --diffs-bg-selection-number-override: color-mix(in srgb, var(--primary) 22%, transparent);
+  font-family: var(--rv-font-mono);
+  font-size: 12px;
+  line-height: var(--rv-code-line-h);
+}
+
+/* Inline comment cards live inside Pierre's annotation slots; give them air. */
+[data-review-surface] [data-rv-code] [data-gutter-buffer='annotation'] {
+  padding-block: 3px;
+}
