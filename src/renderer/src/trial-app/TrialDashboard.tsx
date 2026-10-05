@@ -508,7 +508,7 @@ export default function TrialDashboard(props: TrialRuntimeProps) {
             </span>
           </div>
 
-          <div className="mt-4 flex-1 space-y-3 overflow-y-auto pr-1">
+          <div className="mt-4 flex-1 space-y-3 overflow-y-auto pr-1 scrollbar-small">
             {transcript.length ? (
               transcript.map((entry, index) => (
                 <div
