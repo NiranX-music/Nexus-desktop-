@@ -1,0 +1,20 @@
+# ==============================================================================
+# Cloudflare Pages / Worker Configuration for Nexus Cross-Device Bridge
+# Free-Tier Stack: 100% Free CDN, D1 SQLite Database, and R2 Object Storage
+# ==============================================================================
+
+name = "nexus-bridge"
+pages_build_output_dir = "frontend"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# Cloudflare D1 Serverless SQLite Database Binding
+[[d1_databases]]
+binding = "DB"
+database_name = "nexus-db"
+database_id = "05f5359f-83fa-444c-891a-8714bc126adf"
+
+# Environment Variables
+[vars]
+ENVIRONMENT = "production"
+MODAL_API_URL = "https://barhateniranjan725--nexus-ai-core-nexusaicore-fastapi-app.modal.run"
