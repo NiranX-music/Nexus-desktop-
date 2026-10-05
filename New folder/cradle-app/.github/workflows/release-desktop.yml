@@ -1,0 +1,1052 @@
+name: Release Desktop
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*.*.*' # release; SemVer is validated in the resolve job
+      - 'dev-*' # dev
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel
+        required: true
+        type: choice
+        options:
+          - dev
+          - bleeding-edge
+          - release
+      version:
+        description: 'Version (e.g. 1.2.3 for release, or auto-generated for dev)'
+        required: true
+      ref:
+        description: Git ref in this repository to build (branch, tag, or SHA)
+        required: true
+        default: main
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  # Dev and bleeding-edge channels update shared rolling releases/feed tags.
+  # Serialize all desktop publishes so different refs cannot race those assets.
+  group: release-desktop-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  changes:
+    name: Detect desktop release scope
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.filter.outputs.release_desktop }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        with:
+          base: ${{ github.event.before }}
+          filters: .github/ci-paths.yml
+
+  # Resolve release parameters.
+  resolve:
+    name: Resolve release params
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || github.ref_type == 'tag' || needs.changes.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.params.outputs.channel }}
+      desktop_version: ${{ steps.params.outputs.desktop_version }}
+      display_version: ${{ steps.params.outputs.display_version }}
+      sparkle_bundle_version: ${{ steps.params.outputs.sparkle_bundle_version }}
+      release_tag: ${{ steps.params.outputs.release_tag }}
+      dev_feed_tag: ${{ steps.params.outputs.dev_feed_tag }}
+      bleeding_edge_feed_tag: ${{ steps.params.outputs.bleeding_edge_feed_tag }}
+      checkout_ref: ${{ steps.params.outputs.checkout_ref }}
+      update_url: ${{ steps.params.outputs.update_url }}
+      sparkle_appcast_url: ${{ steps.params.outputs.sparkle_appcast_url }}
+      sparkle_tag_prefix: ${{ steps.params.outputs.sparkle_tag_prefix }}
+      release_download_url: ${{ steps.params.outputs.release_download_url }}
+      analytics_build_channel: ${{ steps.params.outputs.analytics_build_channel }}
+      analytics_audience: ${{ steps.params.outputs.analytics_audience }}
+      posthog_ai_enabled: ${{ steps.params.outputs.posthog_ai_enabled }}
+      posthog_ai_capture_mode: ${{ steps.params.outputs.posthog_ai_capture_mode }}
+    steps:
+      - name: Resolve parameters
+        id: params
+        shell: bash
+        run: |
+          semver_regex='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+          RUN_NUMBER="${{ github.run_number }}"
+          SPARKLE_BUNDLE_VERSION="$RUN_NUMBER"
+          DEV_FEED_TAG="feed-dev"
+          BLEEDING_EDGE_FEED_TAG="feed-bleeding-edge"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            CHANNEL="${{ inputs.channel }}"
+            INPUT_VERSION="${{ inputs.version }}"
+            CHECKOUT_REF="${{ inputs.ref }}"
+
+            if [ "$CHANNEL" = "dev" ]; then
+              DISPLAY_VERSION="$INPUT_VERSION"
+              DESKTOP_VERSION="0.0.0-dev.${RUN_NUMBER}"
+              RELEASE_TAG="dev-${DISPLAY_VERSION}"
+            elif [ "$CHANNEL" = "bleeding-edge" ]; then
+              DISPLAY_VERSION="$INPUT_VERSION"
+              DESKTOP_VERSION="0.0.0-be.${RUN_NUMBER}"
+              RELEASE_TAG="bleeding-edge-${DISPLAY_VERSION}"
+            else
+              DISPLAY_VERSION="${INPUT_VERSION#v}"
+              DESKTOP_VERSION="$DISPLAY_VERSION"
+              RELEASE_TAG="v${DISPLAY_VERSION}"
+            fi
+          elif [ "${{ github.ref_type }}" = "branch" ]; then
+            SHORT_SHA="${{ github.sha }}"
+            SHORT_SHA="${SHORT_SHA:0:7}"
+            CHANNEL="bleeding-edge"
+            DISPLAY_VERSION="$SHORT_SHA"
+            DESKTOP_VERSION="0.0.0-be.${RUN_NUMBER}"
+            RELEASE_TAG="bleeding-edge-$SHORT_SHA"
+            # Build the pushed commit, not a floating branch tip.
+            CHECKOUT_REF="${{ github.sha }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+            if [[ "$TAG" == dev-* ]]; then
+              CHANNEL="dev"
+              DISPLAY_VERSION="${TAG#dev-}"
+              DESKTOP_VERSION="0.0.0-dev.${RUN_NUMBER}"
+            else
+              CHANNEL="release"
+              DISPLAY_VERSION="${TAG#v}"
+              DESKTOP_VERSION="$DISPLAY_VERSION"
+            fi
+            # Tag push: build the tagged commit itself.
+            CHECKOUT_REF="${{ github.sha }}"
+            RELEASE_TAG="$TAG"
+          fi
+
+          if [[ ! "$DESKTOP_VERSION" =~ $semver_regex ]]; then
+            echo "Desktop version must be SemVer-compatible: $DESKTOP_VERSION" >&2
+            exit 1
+          fi
+          if [[ ! "$SPARKLE_BUNDLE_VERSION" =~ ^[0-9]+$ ]]; then
+            echo "Sparkle bundle version must be an increasing numeric build number: $SPARKLE_BUNDLE_VERSION" >&2
+            exit 1
+          fi
+
+          if [ "$CHANNEL" = "release" ]; then
+            UPDATE_URL="https://github.com/${{ github.repository }}/releases/latest/download/"
+            SPARKLE_APPCAST_URL="https://github.com/${{ github.repository }}/releases/latest/download/appcast.xml"
+            # Official Sparkle action filters previous releases by tag prefix for delta bases.
+            SPARKLE_TAG_PREFIX="v"
+            ANALYTICS_BUILD_CHANNEL="release"
+            ANALYTICS_AUDIENCE="external"
+            # End-user builds: product analytics only. AI full/metadata capture stays off
+            # until explicit server-side consent exists.
+            POSTHOG_AI_ENABLED="0"
+            POSTHOG_AI_CAPTURE_MODE="metadata"
+          elif [ "$CHANNEL" = "bleeding-edge" ]; then
+            UPDATE_URL="https://github.com/${{ github.repository }}/releases/download/${BLEEDING_EDGE_FEED_TAG}/"
+            SPARKLE_APPCAST_URL="https://github.com/${{ github.repository }}/releases/download/${BLEEDING_EDGE_FEED_TAG}/appcast.xml"
+            SPARKLE_TAG_PREFIX="bleeding-edge-"
+            ANALYTICS_BUILD_CHANNEL="bleeding-edge"
+            ANALYTICS_AUDIENCE="internal"
+            POSTHOG_AI_ENABLED="1"
+            POSTHOG_AI_CAPTURE_MODE="full"
+          else
+            UPDATE_URL="https://github.com/${{ github.repository }}/releases/download/${DEV_FEED_TAG}/"
+            SPARKLE_APPCAST_URL="https://github.com/${{ github.repository }}/releases/download/${DEV_FEED_TAG}/appcast.xml"
+            SPARKLE_TAG_PREFIX="dev-"
+            ANALYTICS_BUILD_CHANNEL="development"
+            ANALYTICS_AUDIENCE="internal"
+            POSTHOG_AI_ENABLED="1"
+            POSTHOG_AI_CAPTURE_MODE="full"
+          fi
+          RELEASE_DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}"
+
+          # bleeding-edge: no versioned release, all artifacts go to the feed release
+          if [ "$CHANNEL" = "bleeding-edge" ]; then
+            RELEASE_DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${BLEEDING_EDGE_FEED_TAG}"
+          fi
+
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "desktop_version=$DESKTOP_VERSION" >> "$GITHUB_OUTPUT"
+          echo "display_version=$DISPLAY_VERSION" >> "$GITHUB_OUTPUT"
+          echo "sparkle_bundle_version=$SPARKLE_BUNDLE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "dev_feed_tag=$DEV_FEED_TAG" >> "$GITHUB_OUTPUT"
+          echo "bleeding_edge_feed_tag=$BLEEDING_EDGE_FEED_TAG" >> "$GITHUB_OUTPUT"
+          echo "checkout_ref=$CHECKOUT_REF" >> "$GITHUB_OUTPUT"
+          echo "update_url=$UPDATE_URL" >> "$GITHUB_OUTPUT"
+          echo "sparkle_appcast_url=$SPARKLE_APPCAST_URL" >> "$GITHUB_OUTPUT"
+          echo "sparkle_tag_prefix=$SPARKLE_TAG_PREFIX" >> "$GITHUB_OUTPUT"
+          echo "release_download_url=$RELEASE_DOWNLOAD_URL" >> "$GITHUB_OUTPUT"
+          echo "analytics_build_channel=$ANALYTICS_BUILD_CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "analytics_audience=$ANALYTICS_AUDIENCE" >> "$GITHUB_OUTPUT"
+          echo "posthog_ai_enabled=$POSTHOG_AI_ENABLED" >> "$GITHUB_OUTPUT"
+          echo "posthog_ai_capture_mode=$POSTHOG_AI_CAPTURE_MODE" >> "$GITHUB_OUTPUT"
+
+          echo "Channel: $CHANNEL"
+          echo "Desktop version: $DESKTOP_VERSION"
+          echo "Display version: $DISPLAY_VERSION"
+          echo "Sparkle bundle version: $SPARKLE_BUNDLE_VERSION"
+          echo "Release tag: $RELEASE_TAG"
+          echo "Dev feed tag: $DEV_FEED_TAG"
+          echo "Bleeding edge feed tag: $BLEEDING_EDGE_FEED_TAG"
+          echo "Checkout ref: $CHECKOUT_REF"
+          echo "Update URL: $UPDATE_URL"
+          echo "Release download URL: $RELEASE_DOWNLOAD_URL"
+          echo "Analytics build channel: $ANALYTICS_BUILD_CHANNEL"
+          echo "Analytics audience: $ANALYTICS_AUDIENCE"
+          echo "PostHog AI observability: $POSTHOG_AI_ENABLED ($POSTHOG_AI_CAPTURE_MODE)"
+
+  build-macos:
+    name: Build Desktop (mac arm64)
+    needs: [resolve]
+    runs-on: macos-latest
+    # Sparkle delta generation over multiple large app archives can exceed an hour.
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.checkout_ref }}
+
+      - name: Verify macOS packaging fix is present
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Checked out source commit: $(git rev-parse HEAD)"
+          if [ ! -f apps/desktop/scripts/fix-macos-framework-symlinks.mjs ]; then
+            echo "Checked-out ref '${{ needs.resolve.outputs.checkout_ref }}' is missing apps/desktop/scripts/fix-macos-framework-symlinks.mjs" >&2
+            exit 1
+          fi
+          if ! /usr/bin/grep -q 'fixMacOSFrameworkSymlinks' apps/desktop/electron-builder.mjs; then
+            echo "Checked-out ref '${{ needs.resolve.outputs.checkout_ref }}' does not run the macOS framework symlink fix from electron-builder.afterPack" >&2
+            exit 1
+          fi
+
+      - name: Setup pnpm & Node.js
+        uses: ./.github/actions/setup
+        with:
+          node-version: 24
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      # - name: Configure PostHog build env
+      #   env:
+      #     POSTHOG_PROJECT_TOKEN: ${{ secrets.POSTHOG_PROJECT_TOKEN }}
+      #     ANALYTICS_BUILD_CHANNEL: ${{ needs.resolve.outputs.analytics_build_channel }}
+      #     ANALYTICS_AUDIENCE: ${{ needs.resolve.outputs.analytics_audience }}
+      #     POSTHOG_AI_ENABLED: ${{ needs.resolve.outputs.posthog_ai_enabled }}
+      #     POSTHOG_AI_CAPTURE_MODE: ${{ needs.resolve.outputs.posthog_ai_capture_mode }}
+      #   shell: bash
+      #   run: |
+      #     set -euo pipefail
+      #     if [ -z "${POSTHOG_PROJECT_TOKEN:-}" ]; then
+      #       echo "POSTHOG_PROJECT_TOKEN repository secret is required for desktop releases." >&2
+      #       echo "Add it under Settings → Secrets and variables → Actions." >&2
+      #       exit 1
+      #     fi
+      #     {
+      #       echo "VITE_POSTHOG_PROJECT_TOKEN=$POSTHOG_PROJECT_TOKEN"
+      #       echo "VITE_POSTHOG_HOST=https://us.i.posthog.com"
+      #       echo "VITE_POSTHOG_BUILD_CHANNEL=$ANALYTICS_BUILD_CHANNEL"
+      #       echo "VITE_POSTHOG_AUDIENCE=$ANALYTICS_AUDIENCE"
+      #       if [ "$POSTHOG_AI_ENABLED" = "1" ]; then
+      #         echo "CRADLE_OTEL_ENABLED=1"
+      #         echo "CRADLE_OTEL_TRACES_ENABLED=1"
+      #         echo "CRADLE_POSTHOG_AI_OBSERVABILITY_ENABLED=1"
+      #         echo "CRADLE_POSTHOG_AI_CAPTURE_MODE=$POSTHOG_AI_CAPTURE_MODE"
+      #         echo "CRADLE_POSTHOG_PROJECT_TOKEN=$POSTHOG_PROJECT_TOKEN"
+      #         echo "CRADLE_POSTHOG_HOST=https://us.i.posthog.com"
+      #       fi
+      #     } >> "$GITHUB_ENV"
+      #     echo "Product analytics: channel=$ANALYTICS_BUILD_CHANNEL audience=$ANALYTICS_AUDIENCE"
+      #     echo "PostHog AI observability: enabled=$POSTHOG_AI_ENABLED capture=$POSTHOG_AI_CAPTURE_MODE"
+
+      - name: Build relayd (darwin-arm64)
+        run: pnpm --filter @cradle/relayd build:desktop-resource -- --target=darwin-arm64
+
+      - name: Clean macOS build leftovers
+        shell: bash
+        run: |
+          sudo rm -rf apps/desktop/release || true
+          sudo rm -rf apps/desktop/dist || true
+          sudo rm -rf /tmp/electron-builder* || true
+
+      - name: Set desktop version
+        run: pnpm --filter @cradle/desktop run set-version ${{ needs.resolve.outputs.desktop_version }}
+
+      - name: Build & package macOS desktop
+        working-directory: apps/desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CRADLE_DESKTOP_UPDATE_URL: ${{ needs.resolve.outputs.update_url }}
+          CRADLE_DESKTOP_SPARKLE_APPCAST_URL: ${{ needs.resolve.outputs.sparkle_appcast_url }}
+          CRADLE_DESKTOP_SPARKLE_BUNDLE_VERSION: ${{ needs.resolve.outputs.sparkle_bundle_version }}
+          CRADLE_DESKTOP_SPARKLE_DISPLAY_VERSION: ${{ needs.resolve.outputs.display_version }}
+          SPARKLE_ED_PUBLIC_KEY: ${{ secrets.SPARKLE_ED_PUBLIC_KEY }}
+          CRADLE_ELECTRON_REBUILD_ARCH: arm64
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_OPTIONS: --max-old-space-size=4096
+        shell: bash
+        run: |
+          if [ -z "${SPARKLE_ED_PUBLIC_KEY:-}" ]; then
+            echo "SPARKLE_ED_PUBLIC_KEY repository secret is required for macOS Sparkle updates." >&2
+            exit 1
+          fi
+          pnpm dist:mac --arm64
+
+      - name: Verify macOS Sparkle versions
+        env:
+          EXPECTED_BUNDLE_VERSION: ${{ needs.resolve.outputs.sparkle_bundle_version }}
+          EXPECTED_DISPLAY_VERSION: ${{ needs.resolve.outputs.display_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          info_plist="apps/desktop/release/mac-arm64/Cradle.app/Contents/Info.plist"
+          bundle_version="$(plutil -extract CFBundleVersion raw -o - "$info_plist")"
+          display_version="$(plutil -extract CFBundleShortVersionString raw -o - "$info_plist")"
+
+          if [ "$bundle_version" != "$EXPECTED_BUNDLE_VERSION" ]; then
+            echo "Unexpected CFBundleVersion: expected $EXPECTED_BUNDLE_VERSION, got $bundle_version" >&2
+            exit 1
+          fi
+          if [ "$display_version" != "$EXPECTED_DISPLAY_VERSION" ]; then
+            echo "Unexpected CFBundleShortVersionString: expected $EXPECTED_DISPLAY_VERSION, got $display_version" >&2
+            exit 1
+          fi
+
+          echo "Sparkle comparison version: $bundle_version"
+          echo "Sparkle display version: $display_version"
+
+      - name: Verify macOS framework symlinks
+        shell: bash
+        run: |
+          node apps/desktop/scripts/fix-macos-framework-symlinks.mjs \
+            apps/desktop/release/mac-arm64/Cradle.app \
+            --check
+
+      - name: Verify ad-hoc codesign for Sparkle
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="apps/desktop/release/mac-arm64/Cradle.app"
+          codesign --verify --deep --strict "$app_path"
+          codesign -dv --verbose=2 "$app_path" 2>&1 | tee /tmp/cradle-codesign.txt
+          # Ad-hoc signatures report as Signature=adhoc / Authority=(absent)
+          if ! rg -q 'Signature=(adhoc|Authority=|flags=0x2\(adhoc\))|Authority=' /tmp/cradle-codesign.txt; then
+            echo "Unexpected codesign identity (expected ad-hoc or Developer ID):" >&2
+            cat /tmp/cradle-codesign.txt >&2
+          fi
+
+      - name: Build installer DMG
+        env:
+          DESKTOP_VERSION: ${{ needs.resolve.outputs.desktop_version }}
+          RELEASE_ARCH: arm64
+        shell: bash
+        run: |
+          set -euo pipefail
+          node installer/build-dmg.mjs \
+            --app apps/desktop/release/mac-${RELEASE_ARCH}/Cradle.app \
+            --output apps/desktop/release/Cradle.dmg
+
+      - name: Create macOS Sparkle updater zip
+        working-directory: apps/desktop
+        env:
+          DESKTOP_VERSION: ${{ needs.resolve.outputs.desktop_version }}
+          RELEASE_ARCH: arm64
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="release/mac-${RELEASE_ARCH}/Cradle.app"
+          # Sparkle's archive identity is the packaged app, so publish exactly one
+          # archive per build and keep the monotonically versioned name it records.
+          zip_path="release/Cradle-${DESKTOP_VERSION}-mac-${RELEASE_ARCH}.zip"
+
+          if [ ! -d "$app_path" ]; then
+            echo "Packaged app is missing: $app_path" >&2
+            exit 1
+          fi
+
+          rm -f "$zip_path"
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$app_path" "$zip_path"
+          /usr/bin/du -h "$zip_path"
+
+      - name: Prepare Sparkle archive directory
+        working-directory: apps/desktop
+        env:
+          DESKTOP_VERSION: ${{ needs.resolve.outputs.desktop_version }}
+          RELEASE_ARCH: arm64
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${SPARKLE_ED_PRIVATE_KEY:-}" ]; then
+            echo "SPARKLE_ED_PRIVATE_KEY repository secret is required for macOS Sparkle appcast generation." >&2
+            exit 1
+          fi
+
+          archive_dir="release/sparkle-archive"
+          zip_name="Cradle-${DESKTOP_VERSION}-mac-${RELEASE_ARCH}.zip"
+          if [ ! -f "release/${zip_name}" ]; then
+            echo "Sparkle zip missing: release/${zip_name}" >&2
+            exit 1
+          fi
+
+          # Official action treats every *.zip present before it runs as an update
+          # archive. Only put the canonical versioned zip here; the action fetches
+          # prior-release bases itself.
+          rm -rf "$archive_dir"
+          mkdir -p "$archive_dir"
+          cp "release/${zip_name}" "$archive_dir/"
+          ls -la "$archive_dir"
+
+      - name: Remove legacy Sparkle aliases from delta bases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          SPARKLE_TAG_PREFIX: ${{ needs.resolve.outputs.sparkle_tag_prefix }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Older releases contain both the canonical versioned archive and the
+          # old Cradle-mac-arm64.zip alias. The Sparkle action downloads every
+          # *.zip from its delta-base releases, so remove the duplicate before it
+          # scans the directory. This is a one-time migration for existing feeds;
+          # new releases no longer publish the alias.
+          previous_tags="$(gh release list --repo "$GH_REPO" --exclude-drafts --limit 20 --json tagName \
+            -q "[.[] | select(.tagName | startswith(\"$SPARKLE_TAG_PREFIX\"))][0:2][].tagName" 2>/dev/null || true)"
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            if gh release view "$tag" --repo "$GH_REPO" --json assets \
+              --jq '.assets[].name' | /usr/bin/grep -Fxq 'Cradle-mac-arm64.zip'; then
+              echo "Removing legacy Sparkle alias from $tag"
+              gh release delete-asset "$tag" Cradle-mac-arm64.zip --repo "$GH_REPO" --yes
+            fi
+          done <<< "$previous_tags"
+
+      - name: Generate Sparkle appcast + deltas
+        uses: Innei/electron-sparkle-updater/action@v1
+        with:
+          tag: ${{ needs.resolve.outputs.channel == 'bleeding-edge' && needs.resolve.outputs.bleeding_edge_feed_tag || needs.resolve.outputs.release_tag }}
+          archive-dir: ${{ github.workspace }}/apps/desktop/release/sparkle-archive
+          ed-private-key: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+          repo: ${{ github.repository }}
+          tag-prefix: ${{ needs.resolve.outputs.sparkle_tag_prefix }}
+          download-url-prefix: ${{ needs.resolve.outputs.release_download_url }}/
+          # Pull last 2 matching channel releases as delta bases. First-ever channel
+          # release simply yields a full-only appcast (no bases found).
+          fetch-delta-bases: 'true'
+          delta-bases: '2'
+          # Keep Cradle's multi-platform publish job as the single release publisher.
+          publish: 'false'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Collect Sparkle appcast assets
+        working-directory: apps/desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive_dir="release/sparkle-archive"
+          if [ ! -f "$archive_dir/appcast.xml" ]; then
+            echo "official Sparkle action did not produce appcast.xml" >&2
+            exit 1
+          fi
+
+          # Promote only this release's feed products. Prior-release zips fetched as
+          # delta bases stay in archive_dir and must not be re-uploaded.
+          cp "$archive_dir/appcast.xml" release/appcast.xml
+          find "$archive_dir" -maxdepth 1 -type f -name '*.delta' -exec cp {} release/ \;
+          ls -la release/appcast.xml
+          find release -maxdepth 1 -type f \( -name 'appcast.xml' -o -name '*.delta' \) -print | sort
+
+      - name: Upload artifacts
+        uses: ./.github/actions/desktop-upload-artifacts
+        with:
+          artifact-name: desktop-mac-arm64-${{ needs.resolve.outputs.desktop_version }}
+          retention-days: 7
+
+  build-windows:
+    name: Build Desktop (windows x64)
+    needs: [resolve]
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.checkout_ref }}
+
+      - name: Setup pnpm & Node.js
+        uses: ./.github/actions/setup
+        with:
+          node-version: 24
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Configure PostHog build env
+        env:
+          POSTHOG_PROJECT_TOKEN: ${{ secrets.POSTHOG_PROJECT_TOKEN }}
+          ANALYTICS_BUILD_CHANNEL: ${{ needs.resolve.outputs.analytics_build_channel }}
+          ANALYTICS_AUDIENCE: ${{ needs.resolve.outputs.analytics_audience }}
+          POSTHOG_AI_ENABLED: ${{ needs.resolve.outputs.posthog_ai_enabled }}
+          POSTHOG_AI_CAPTURE_MODE: ${{ needs.resolve.outputs.posthog_ai_capture_mode }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${POSTHOG_PROJECT_TOKEN:-}" ]; then
+            echo "POSTHOG_PROJECT_TOKEN repository secret is required for desktop releases." >&2
+            echo "Add it under Settings → Secrets and variables → Actions." >&2
+            exit 1
+          fi
+          {
+            echo "VITE_POSTHOG_PROJECT_TOKEN=$POSTHOG_PROJECT_TOKEN"
+            echo "VITE_POSTHOG_HOST=https://us.i.posthog.com"
+            echo "VITE_POSTHOG_BUILD_CHANNEL=$ANALYTICS_BUILD_CHANNEL"
+            echo "VITE_POSTHOG_AUDIENCE=$ANALYTICS_AUDIENCE"
+            if [ "$POSTHOG_AI_ENABLED" = "1" ]; then
+              echo "CRADLE_OTEL_ENABLED=1"
+              echo "CRADLE_OTEL_TRACES_ENABLED=1"
+              echo "CRADLE_POSTHOG_AI_OBSERVABILITY_ENABLED=1"
+              echo "CRADLE_POSTHOG_AI_CAPTURE_MODE=$POSTHOG_AI_CAPTURE_MODE"
+              echo "CRADLE_POSTHOG_PROJECT_TOKEN=$POSTHOG_PROJECT_TOKEN"
+              echo "CRADLE_POSTHOG_HOST=https://us.i.posthog.com"
+            fi
+          } >> "$GITHUB_ENV"
+          echo "Product analytics: channel=$ANALYTICS_BUILD_CHANNEL audience=$ANALYTICS_AUDIENCE"
+          echo "PostHog AI observability: enabled=$POSTHOG_AI_ENABLED capture=$POSTHOG_AI_CAPTURE_MODE"
+
+      - name: Build relayd (win32-x64)
+        run: pnpm --filter @cradle/relayd build:desktop-resource -- --target=win32-x64
+
+      - name: Set desktop version
+        run: pnpm --filter @cradle/desktop run set-version ${{ needs.resolve.outputs.desktop_version }}
+
+      - name: Build Windows desktop runtime and app bundles
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CRADLE_DESKTOP_UPDATE_URL: ${{ needs.resolve.outputs.update_url }}
+          CRADLE_DESKTOP_SPARKLE_APPCAST_URL: ${{ needs.resolve.outputs.sparkle_appcast_url }}
+          CRADLE_ELECTRON_REBUILD_ARCH: x64
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm --filter @cradle/desktop build
+
+      - name: Package unpacked Windows app
+        working-directory: apps/desktop
+        env:
+          CRADLE_DESKTOP_UPDATE_URL: ${{ needs.resolve.outputs.update_url }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm exec electron-builder --config electron-builder.mjs --win --x64 --dir --publish never
+
+      - name: Build Windows installer
+        working-directory: apps/desktop
+        env:
+          CRADLE_DESKTOP_UPDATE_URL: ${{ needs.resolve.outputs.update_url }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm exec electron-builder --config electron-builder.mjs --win nsis --x64 --publish never --config.compression=normal
+
+      - name: Upload artifacts
+        uses: ./.github/actions/desktop-upload-artifacts
+        with:
+          artifact-name: desktop-win-x64-${{ needs.resolve.outputs.desktop_version }}
+          retention-days: 7
+
+  build-linux:
+    name: Build Desktop (linux x64)
+    needs: [resolve]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.checkout_ref }}
+
+      - name: Setup pnpm & Node.js
+        uses: ./.github/actions/setup
+        with:
+          node-version: 24
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Install Linux packaging dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y fakeroot libarchive-tools rpm
+
+      - name: Configure PostHog build env
+        env:
+          POSTHOG_PROJECT_TOKEN: ${{ secrets.POSTHOG_PROJECT_TOKEN }}
+          ANALYTICS_BUILD_CHANNEL: ${{ needs.resolve.outputs.analytics_build_channel }}
+          ANALYTICS_AUDIENCE: ${{ needs.resolve.outputs.analytics_audience }}
+          POSTHOG_AI_ENABLED: ${{ needs.resolve.outputs.posthog_ai_enabled }}
+          POSTHOG_AI_CAPTURE_MODE: ${{ needs.resolve.outputs.posthog_ai_capture_mode }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${POSTHOG_PROJECT_TOKEN:-}" ]; then
+            echo "POSTHOG_PROJECT_TOKEN repository secret is required for desktop releases." >&2
+            echo "Add it under Settings → Secrets and variables → Actions." >&2
+            exit 1
+          fi
+          {
+            echo "VITE_POSTHOG_PROJECT_TOKEN=$POSTHOG_PROJECT_TOKEN"
+            echo "VITE_POSTHOG_HOST=https://us.i.posthog.com"
+            echo "VITE_POSTHOG_BUILD_CHANNEL=$ANALYTICS_BUILD_CHANNEL"
+            echo "VITE_POSTHOG_AUDIENCE=$ANALYTICS_AUDIENCE"
+            if [ "$POSTHOG_AI_ENABLED" = "1" ]; then
+              echo "CRADLE_OTEL_ENABLED=1"
+              echo "CRADLE_OTEL_TRACES_ENABLED=1"
+              echo "CRADLE_POSTHOG_AI_OBSERVABILITY_ENABLED=1"
+              echo "CRADLE_POSTHOG_AI_CAPTURE_MODE=$POSTHOG_AI_CAPTURE_MODE"
+              echo "CRADLE_POSTHOG_PROJECT_TOKEN=$POSTHOG_PROJECT_TOKEN"
+              echo "CRADLE_POSTHOG_HOST=https://us.i.posthog.com"
+            fi
+          } >> "$GITHUB_ENV"
+          echo "Product analytics: channel=$ANALYTICS_BUILD_CHANNEL audience=$ANALYTICS_AUDIENCE"
+          echo "PostHog AI observability: enabled=$POSTHOG_AI_ENABLED capture=$POSTHOG_AI_CAPTURE_MODE"
+
+      - name: Build relayd (linux-x64)
+        run: pnpm --filter @cradle/relayd build:desktop-resource -- --target=linux-x64
+
+      - name: Set desktop version
+        run: pnpm --filter @cradle/desktop run set-version ${{ needs.resolve.outputs.desktop_version }}
+
+      - name: Build Linux desktop runtime and app bundles
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CRADLE_DESKTOP_UPDATE_URL: ${{ needs.resolve.outputs.update_url }}
+          CRADLE_ELECTRON_REBUILD_ARCH: x64
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: pnpm --filter @cradle/desktop build
+
+      - name: Package Linux AppImage, deb, and rpm
+        working-directory: apps/desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CRADLE_DESKTOP_UPDATE_URL: ${{ needs.resolve.outputs.update_url }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm exec electron-builder --config electron-builder.mjs --linux AppImage deb rpm --x64 --publish never
+
+      - name: Generate Linux updater metadata
+        working-directory: apps/desktop
+        run: pnpm generate:linux-update-manifest
+
+      - name: Verify Linux release artifacts and updater metadata
+        working-directory: apps/desktop
+        run: pnpm verify:linux-release
+
+      - name: Upload artifacts
+        uses: ./.github/actions/desktop-upload-artifacts
+        with:
+          artifact-name: desktop-linux-x64-${{ needs.resolve.outputs.desktop_version }}
+          retention-days: 7
+
+  # Publish GitHub Release.
+  publish:
+    name: Publish GitHub Release
+    needs: [resolve, build-macos, build-windows, build-linux]
+    if: always() && needs.resolve.result == 'success' && needs.build-macos.result == 'success' && needs.build-windows.result == 'success' && needs.build-linux.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 21
+
+      - name: Write bleeding-edge release body
+        if: needs.resolve.outputs.channel == 'bleeding-edge'
+        shell: bash
+        run: |
+          {
+            echo "## Bleeding Edge Build"
+            echo ""
+            echo "Commit: \`${{ github.sha }}\`"
+            echo ""
+            echo "### Recent changes"
+            echo ""
+            git log --oneline -20 --no-merges --format='- %s (%h)' HEAD
+          } > release-body.md
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        shell: bash
+        env:
+          RELEASE_CHANNEL: ${{ needs.resolve.outputs.channel }}
+          DESKTOP_VERSION: ${{ needs.resolve.outputs.desktop_version }}
+          DISPLAY_VERSION: ${{ needs.resolve.outputs.display_version }}
+          RELEASE_DOWNLOAD_URL: ${{ needs.resolve.outputs.release_download_url }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+
+          shopt -s globstar nullglob
+          for file in artifacts/**/*.{dmg,zip,exe,blockmap,yml,xml,AppImage,deb,rpm,delta}; do
+            basename="$(basename "$file")"
+            if [[ "$basename" == "builder-debug.yml" ]]; then
+              continue
+            fi
+            target="release-assets/$basename"
+            if [ -e "$target" ]; then
+              echo "Duplicate release asset name: $basename" >&2
+              exit 1
+            fi
+            cp "$file" "$target"
+          done
+
+          node <<'NODE'
+          const fs = require('node:fs')
+          const path = require('node:path')
+          const crypto = require('node:crypto')
+
+          const artifactsRoot = 'artifacts'
+          const outputRoot = 'release-assets'
+          const releaseChannel = process.env.RELEASE_CHANNEL
+          const desktopVersion = process.env.DESKTOP_VERSION
+          const displayVersion = process.env.DISPLAY_VERSION
+          const releaseDownloadUrl = process.env.RELEASE_DOWNLOAD_URL
+
+          function readChangelog(locale) {
+            try {
+              const dir = path.join('apps', 'landing', 'changelog')
+              const candidates = [
+                path.join(dir, `${displayVersion}.${locale}.md`),
+                path.join(dir, `dev-${displayVersion}.${locale}.md`),
+              ]
+              const p = candidates.find(f => fs.existsSync(f))
+              if (!p) return null
+              const content = fs.readFileSync(p, 'utf8')
+              const match = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(content)
+              if (!match) return { title: null, date: null, body: content.trim() }
+              const meta = match[1]
+              const body = match[2].trim()
+              const get = (key) => {
+                const m = new RegExp(`^${key}:\\s*(.+)$`, 'm').exec(meta)
+                return m ? m[1].replace(/^['"]|['"]$/g, '') : null
+              }
+              return { title: get('title'), date: get('date'), body }
+            } catch {
+              return null
+            }
+          }
+
+          function generateReleaseBody() {
+            const en = readChangelog('en')
+            if (!en || !en.body) return null
+
+            const templatePath = path.join('.github', 'release-body.template.md')
+            if (!fs.existsSync(templatePath)) return null
+            let template = fs.readFileSync(templatePath, 'utf8')
+
+            const title = en.title || `Cradle ${displayVersion}`
+            const assets = fs.readdirSync(outputRoot)
+            const downloadLinks = []
+            const dmg = assets.find(f => f.endsWith('.dmg'))
+            const exe = assets.find(f => f.endsWith('.exe'))
+            const appImage = assets.find(f => f.endsWith('.AppImage'))
+            const deb = assets.find(f => f.endsWith('.deb'))
+            const rpm = assets.find(f => f.endsWith('.rpm'))
+            if (dmg) downloadLinks.push(`[macOS (arm64)](${releaseDownloadUrl}/${encodeURIComponent(dmg)})`)
+            if (exe) downloadLinks.push(`[Windows (x64)](${releaseDownloadUrl}/${encodeURIComponent(exe)})`)
+            if (appImage) downloadLinks.push(`[Linux AppImage (x64)](${releaseDownloadUrl}/${encodeURIComponent(appImage)})`)
+            if (deb) downloadLinks.push(`[Linux deb (x64)](${releaseDownloadUrl}/${encodeURIComponent(deb)})`)
+            if (rpm) downloadLinks.push(`[Linux rpm (x64)](${releaseDownloadUrl}/${encodeURIComponent(rpm)})`)
+
+            return template
+              .replace(/\{\{title\}\}/g, title)
+              .replace(/\{\{version\}\}/g, displayVersion)
+              .replace(/\{\{date\}\}/g, en.date || '')
+              .replace(/\{\{body\}\}/g, en.body)
+              .replace(/\{\{downloads\}\}/g, downloadLinks.join(' · ') || 'No downloads available')
+          }
+
+          function walk(dir, files = []) {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              const entryPath = path.join(dir, entry.name)
+              if (entry.isDirectory()) {
+                walk(entryPath, files)
+              }
+              else if (entry.isFile() && /^latest(?:-[^.]+)?\.yml$/.test(entry.name)) {
+                files.push(entryPath)
+              }
+            }
+            return files
+          }
+
+          function readScalar(value) {
+            return value.replace(/^['"]|['"]$/g, '')
+          }
+
+          function parseManifest(file) {
+            const manifest = { files: [] }
+            let currentFile = null
+
+            for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+              if (!line.trim()) {
+                continue
+              }
+
+              const topLevel = line.match(/^([A-Za-z0-9_-]+):(?:\s*(.*))?$/)
+              if (topLevel) {
+                const [, key, value = ''] = topLevel
+                if (key !== 'files') {
+                  manifest[key] = readScalar(value)
+                }
+                currentFile = null
+                continue
+              }
+
+              const fileStart = line.match(/^\s*-\s+([A-Za-z0-9_-]+):\s*(.*)$/)
+              if (fileStart) {
+                currentFile = {}
+                manifest.files.push(currentFile)
+                currentFile[fileStart[1]] = readScalar(fileStart[2])
+                continue
+              }
+
+              const fileProperty = line.match(/^\s+([A-Za-z0-9_-]+):\s*(.*)$/)
+              if (fileProperty && currentFile) {
+                currentFile[fileProperty[1]] = readScalar(fileProperty[2])
+              }
+            }
+
+            return manifest
+          }
+
+          function writeManifest(file, manifest, artifactBaseUrl = null) {
+            const lines = []
+            if (manifest.version) {
+              lines.push(`version: ${manifest.version}`)
+            }
+            lines.push('files:')
+            for (const artifact of manifest.files) {
+              const projected = {
+                ...artifact,
+                url: artifactBaseUrl ? `${artifactBaseUrl}/${path.basename(artifact.url)}` : artifact.url,
+              }
+              lines.push(`  - url: ${projected.url}`)
+              for (const [key, value] of Object.entries(projected)) {
+                if (key !== 'url') {
+                  lines.push(`    ${key}: ${value}`)
+                }
+              }
+            }
+            if (manifest.path && artifactBaseUrl) {
+              manifest = {
+                ...manifest,
+                path: `${artifactBaseUrl}/${path.basename(manifest.path)}`,
+              }
+            }
+            for (const key of ['path', 'sha512', 'releaseName', 'releaseNotes', 'releaseDate']) {
+              if (manifest[key]) {
+                lines.push(`${key}: ${manifest[key]}`)
+              }
+            }
+            fs.writeFileSync(file, `${lines.join('\n')}\n`, 'utf8')
+          }
+
+          function assertSparkleAppcastPresent() {
+            const appcastPath = path.join(outputRoot, 'appcast.xml')
+            if (!fs.existsSync(appcastPath)) {
+              throw new Error('appcast.xml is required in release assets for macOS Sparkle updates')
+            }
+            console.log('Found Sparkle appcast.xml')
+          }
+
+          const manifestsByName = new Map()
+          for (const file of walk(artifactsRoot)) {
+            const name = path.basename(file)
+            if (!manifestsByName.has(name)) {
+              manifestsByName.set(name, [])
+            }
+            manifestsByName.get(name).push(file)
+          }
+
+          for (const [name, files] of manifestsByName) {
+            const manifests = files.map(parseManifest)
+            const merged = { ...manifests[0], files: [] }
+            const seenUrls = new Set()
+            for (const manifest of manifests) {
+              for (const artifact of manifest.files) {
+                if (artifact.url && !seenUrls.has(artifact.url)) {
+                  seenUrls.add(artifact.url)
+                  merged.files.push(artifact)
+                }
+              }
+            }
+            writeManifest(
+              path.join(outputRoot, name),
+              merged,
+              (releaseChannel === 'dev' || releaseChannel === 'bleeding-edge') ? releaseDownloadUrl : null,
+            )
+          }
+
+          assertSparkleAppcastPresent()
+
+          function writeLatestYml() {
+            const exeName = fs.readdirSync(outputRoot).find(f => f.endsWith('-setup.exe'))
+            if (!exeName) {
+              console.log('No *-setup.exe found, skipping latest.yml generation')
+              return
+            }
+
+            const exePath = path.join(outputRoot, exeName)
+            const exeBytes = fs.readFileSync(exePath)
+            const sha512 = crypto.createHash('sha512').update(exeBytes).digest('base64')
+            const size = fs.statSync(exePath).size
+            const baseUrl = releaseDownloadUrl.endsWith('/') ? releaseDownloadUrl : `${releaseDownloadUrl}/`
+
+            const lines = [
+              `version: ${desktopVersion}`,
+              'files:',
+              `  - url: ${baseUrl}${exeName}`,
+              `    sha512: ${sha512}`,
+              `    size: ${size}`,
+              `path: ${baseUrl}${exeName}`,
+              `sha512: ${sha512}`,
+              `releaseDate: ${new Date().toISOString()}`,
+            ]
+
+            fs.writeFileSync(path.join(outputRoot, 'latest.yml'), `${lines.join('\n')}\n`, 'utf8')
+            console.log(`Generated latest.yml for ${exeName}`)
+          }
+
+          writeLatestYml()
+
+          const releaseBody = releaseChannel === 'bleeding-edge' && fs.existsSync('release-body.md')
+            ? fs.readFileSync('release-body.md', 'utf8')
+            : generateReleaseBody() || `Cradle ${displayVersion}`
+          fs.writeFileSync('release-body.md', releaseBody, 'utf8')
+          NODE
+
+          if [ "$RELEASE_CHANNEL" = "dev" ] || [ "$RELEASE_CHANNEL" = "bleeding-edge" ]; then
+            mkdir -p feed-assets
+            if [ -f release-assets/appcast.xml ]; then
+              cp release-assets/appcast.xml feed-assets/
+            fi
+            if [ -f release-assets/latest.yml ]; then
+              cp release-assets/latest.yml feed-assets/
+            fi
+            if [ -f release-assets/latest-linux.yml ]; then
+              cp release-assets/latest-linux.yml feed-assets/
+            fi
+            # Versioned mac zips for the feed channel.
+            find release-assets -maxdepth 1 -type f \( -name 'Cradle-*-mac-*.zip' -o -name '*.delta' \) -exec cp {} feed-assets/ \;
+            find feed-assets -maxdepth 1 -type f -print | sort
+          fi
+
+          find release-assets -maxdepth 1 -type f -print | sort
+
+      - name: Create version release
+        if: needs.resolve.outputs.channel != 'bleeding-edge'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.resolve.outputs.release_tag }}
+          name: '${{ needs.resolve.outputs.release_tag }} (${{ needs.resolve.outputs.channel }})'
+          prerelease: ${{ needs.resolve.outputs.channel == 'dev' }}
+          make_latest: ${{ needs.resolve.outputs.channel == 'release' }}
+          body_path: release-body.md
+          files: |
+            release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Clear dev feed release assets
+        if: needs.resolve.outputs.channel == 'dev'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          DEV_FEED_TAG: ${{ needs.resolve.outputs.dev_feed_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_id="$(gh api "repos/${GH_REPO}/releases/tags/${DEV_FEED_TAG}" --jq '.id' 2>/dev/null || true)"
+          if [ -z "$release_id" ]; then
+            exit 0
+          fi
+
+          gh api --paginate "repos/${GH_REPO}/releases/${release_id}/assets" --jq '.[].id' | while read -r asset_id; do
+            if [ -n "$asset_id" ]; then
+              gh api --method DELETE "repos/${GH_REPO}/releases/assets/${asset_id}"
+            fi
+          done
+
+      - name: Update dev feed release
+        if: needs.resolve.outputs.channel == 'dev'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.resolve.outputs.dev_feed_tag }}
+          target_commitish: ${{ github.sha }}
+          name: Feed dev
+          body: 'Rolling desktop dev update feed for ${{ needs.resolve.outputs.release_tag }}.'
+          prerelease: true
+          make_latest: false
+          files: |
+            feed-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Clear bleeding-edge feed release assets
+        if: needs.resolve.outputs.channel == 'bleeding-edge'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          BLEEDING_EDGE_FEED_TAG: ${{ needs.resolve.outputs.bleeding_edge_feed_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_id="$(gh api "repos/${GH_REPO}/releases/tags/${BLEEDING_EDGE_FEED_TAG}" --jq '.id' 2>/dev/null || true)"
+          if [ -z "$release_id" ]; then
+            exit 0
+          fi
+
+          gh api --paginate "repos/${GH_REPO}/releases/${release_id}/assets" --jq '.[].id' | while read -r asset_id; do
+            if [ -n "$asset_id" ]; then
+              gh api --method DELETE "repos/${GH_REPO}/releases/assets/${asset_id}"
+            fi
+          done
+
+      - name: Update bleeding-edge feed release
+        if: needs.resolve.outputs.channel == 'bleeding-edge'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.resolve.outputs.bleeding_edge_feed_tag }}
+          target_commitish: ${{ github.sha }}
+          name: Feed bleeding edge
+          body: 'Rolling desktop bleeding-edge update feed (commit ${{ github.sha }}).'
+          prerelease: true
+          make_latest: false
+          files: |
+            release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
