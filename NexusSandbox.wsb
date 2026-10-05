@@ -1,0 +1,20 @@
+<Configuration>
+  <VGpu>Default</VGpu>
+  <Networking>Default</Networking>
+  <MappedFolders>
+    <MappedFolder>
+      <HostFolder>C:\Users\NiranX\Documents\antigravity\Nexus Desktop\Nexus-desktop-</HostFolder>
+      <SandboxFolder>C:\NexusDesktop</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+    <MappedFolder>
+      <HostFolder>C:\Users\NiranX\Documents\antigravity\Nexus Desktop\sandbox-workspace</HostFolder>
+      <SandboxFolder>C:\SandboxWorkspace</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
+    </MappedFolder>
+  </MappedFolders>
+  <LogonCommand>
+    <Command>powershell.exe -ExecutionPolicy Bypass -File C:\NexusDesktop\scripts\init-windows-sandbox.ps1</Command>
+  </LogonCommand>
+  <MemoryInMB>8192</MemoryInMB>
+</Configuration>
