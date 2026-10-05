@@ -1,0 +1,425 @@
+import { closeFocusedSplitPane, closeSplitPaneById } from '~/features/split-view/split-commands'
+import { readSplitWorkspace, useSplitWorkspaceStore } from '~/features/split-view/store/split-workspace-store'
+import { getI18n } from '~/i18n/instance'
+import { router } from '~/router'
+import { useSettingsOverlayStore } from '~/store/settings-overlay'
+
+import { readActiveSurface, readActiveSurfaceId } from './active-surface'
+import {
+  clearRouteSurfaceSyncSuppressionForSurface,
+  suppressRouteSurfaceSync,
+} from './route-surface-sync-key'
+import type { AppSurface, SurfaceDraft, SurfaceRoute } from './surface-identity'
+import {
+  chatSurfaceId,
+  createHomeSurfaceDraft,
+  diffSurfaceId,
+  HOME_SURFACE,
+  kanbanSurfaceId,
+  pluginSurfaceId,
+  pullRequestsSurfaceId,
+  sortSurfaces,
+  workspaceDiffsSurfaceId,
+  workspaceSurfaceId,
+  workSurfaceId,
+} from './surface-identity'
+import { surfaceRouteNavigateOptions } from './surface-route-codec'
+import { readSurface, useSurfaceStore } from './surface-store'
+
+export function navigateToSurface(surface: AppSurface, options: { replace?: boolean } = {}): void {
+  useSurfaceStore.getState().syncSurface(surface)
+  void router.navigate(surfaceRouteNavigateOptions(surface.route, options))
+}
+
+function openSurface(surface: SurfaceDraft, options: { replace?: boolean } = {}): void {
+  clearRouteSurfaceSyncSuppressionForSurface(surface.id)
+  if (options.replace) {
+    useSurfaceStore.getState().replaceSurface(readActiveSurfaceId(), surface)
+  }
+  else {
+    useSurfaceStore.getState().syncSurface(surface)
+  }
+  void router.navigate(surfaceRouteNavigateOptions(surface.route, options))
+}
+
+export function openHome(options: { replace?: boolean } = {}): void {
+  openSurface(createHomeSurfaceDraft(), options)
+}
+
+function routeBelongsToRemovedWorkspace(
+  route: SurfaceRoute,
+  input: { workspaceId: string, removedSessionIds: ReadonlySet<string>, removedWorkIds: ReadonlySet<string> },
+): boolean {
+  switch (route.to) {
+    case '/workspaces/$workspaceId':
+    case '/workspaces/$workspaceId/diffs':
+      return route.params.workspaceId === input.workspaceId
+    case '/work/new':
+      return route.search?.workspaceId === input.workspaceId
+    case '/chat/new':
+      return route.search?.workspaceId === input.workspaceId
+    case '/chat/$sessionId':
+      return input.removedSessionIds.has(route.params.sessionId)
+    case '/work/$workId':
+      return input.removedWorkIds.has(route.params.workId)
+    default:
+      return false
+  }
+}
+
+/**
+ * A workspace delete invalidates more than the visible route: chat and Work
+ * tabs, split panes, and their persisted layouts may all point at resources
+ * the server just removed. Prune those projections from the owning stores
+ * using the server's deletion result rather than a partial sidebar snapshot.
+ */
+export function removeWorkspaceOwnedSurfaces(input: {
+  workspaceId: string
+  removedSessionIds: readonly string[]
+  removedWorkIds: readonly string[]
+}): void {
+  const resourceIds = {
+    workspaceId: input.workspaceId,
+    removedSessionIds: new Set(input.removedSessionIds),
+    removedWorkIds: new Set(input.removedWorkIds),
+  }
+  const activeSurfaceId = readActiveSurfaceId()
+  const activeSplitWorkspace = activeSurfaceId ? readSplitWorkspace(activeSurfaceId) : undefined
+  const focusedPane = activeSplitWorkspace?.panes[activeSplitWorkspace.focusedPaneId]
+  const focusedPaneWasRemoved = focusedPane
+    ? routeBelongsToRemovedWorkspace(focusedPane.route, resourceIds)
+    : false
+
+  const surfaceStore = useSurfaceStore.getState()
+  const removedSurfaceIds = surfaceStore.surfaces
+    .filter(surface => routeBelongsToRemovedWorkspace(surface.route, resourceIds))
+    .map(surface => surface.id)
+  const activeSurfaceWasRemoved = activeSurfaceId !== null && removedSurfaceIds.includes(activeSurfaceId)
+
+  for (const surfaceId of removedSurfaceIds) {
+    surfaceStore.closeSurface(surfaceId)
+  }
+
+  for (const [surfaceId, workspace] of Object.entries(useSplitWorkspaceStore.getState().workspaces)) {
+    for (const pane of Object.values(workspace.panes)) {
+      if (pane.id === workspace.primaryPaneId || !routeBelongsToRemovedWorkspace(pane.route, resourceIds)) {
+        continue
+      }
+      if (!closeSplitPaneById(surfaceId, pane.id)) {
+        useSplitWorkspaceStore.getState().forgetPane(surfaceId, pane.id)
+      }
+    }
+  }
+
+  if (activeSurfaceWasRemoved || focusedPaneWasRemoved) {
+    openHome({ replace: true })
+  }
+}
+
+export function openNewChat(options: {
+  replace?: boolean
+  issueId?: string
+  workspaceId?: string
+  sessionGroupId?: string
+} = {}): void {
+  openSurface({
+    id: 'new-chat',
+    kind: 'new-chat',
+    title: getI18n().t('search:command.newChat.label'),
+    route: {
+      to: '/chat/new',
+      search: {
+        issueId: options.issueId,
+        workspaceId: options.workspaceId,
+        sessionGroupId: options.sessionGroupId,
+      },
+    },
+    closable: true,
+  }, options)
+}
+
+export function openNewWork(options: {
+  replace?: boolean
+  workspaceId?: string
+  issueId?: string
+} = {}): void {
+  openSurface({
+    id: 'new-work',
+    kind: 'new-work',
+    title: getI18n().t('work:surface.new'),
+    route: {
+      to: '/work/new',
+      search: {
+        workspaceId: options.workspaceId,
+        issueId: options.issueId,
+      },
+    },
+    closable: true,
+  }, options)
+}
+
+export function openWork(workId: string, options: { replace?: boolean } = {}): void {
+  openSurface({
+    id: workSurfaceId(workId),
+    kind: 'work',
+    title: getI18n().t('work:surface.work'),
+    route: { to: '/work/$workId', params: { workId } },
+    closable: true,
+  }, options)
+}
+
+export function openPullRequests(options: { replace?: boolean, pr?: string } = {}): void {
+  openSurface({
+    id: pullRequestsSurfaceId(),
+    kind: 'pull-requests',
+    title: getI18n().t('pull-requests:surface.title'),
+    route: {
+      to: '/pull-requests',
+      search: { pr: options.pr },
+    },
+    closable: true,
+  }, options)
+}
+
+export function openChatSession(sessionId: string, options: { replace?: boolean } = {}): void {
+  openSurface({
+    id: chatSurfaceId(sessionId),
+    kind: 'chat',
+    title: 'Chat',
+    route: { to: '/chat/$sessionId', params: { sessionId } },
+    closable: true,
+  }, options)
+}
+
+export function openDiff(options: { replace?: boolean } = {}): void {
+  openSurface({
+    id: diffSurfaceId(),
+    kind: 'diff',
+    title: 'Cradle Diffs',
+    route: { to: '/diff' },
+    closable: true,
+  }, options)
+}
+
+export function openWorkspaceDetail(workspaceId: string, options: { replace?: boolean } = {}): void {
+  openSurface({
+    id: workspaceSurfaceId(workspaceId),
+    kind: 'workspace',
+    title: 'Workspace',
+    route: { to: '/workspaces/$workspaceId', params: { workspaceId } },
+    closable: true,
+  }, options)
+}
+
+export function openWorkspaceDiffs(input: {
+  workspaceId: string
+  repositoryPath?: string
+  path?: string
+  reviewId?: string
+}, options: { replace?: boolean } = {}): void {
+  openSurface({
+    id: workspaceDiffsSurfaceId(input.workspaceId),
+    kind: 'workspace-diffs',
+    title: 'Cradle Diffs',
+    route: {
+      to: '/workspaces/$workspaceId/diffs',
+      params: { workspaceId: input.workspaceId },
+      search: {
+        repo: input.repositoryPath && input.repositoryPath !== '.' ? input.repositoryPath : undefined,
+        path: input.path,
+        review: input.reviewId,
+      },
+    },
+    closable: true,
+  }, options)
+}
+
+export function openKanbanBoard(input: {
+  boardId: string
+  issueId?: string
+  milestoneId?: string
+}, options: { replace?: boolean } = {}): void {
+  openSurface({
+    id: kanbanSurfaceId(input.boardId),
+    kind: 'kanban',
+    title: getI18n().t('search:command.kanban.label'),
+    route: {
+      to: '/kanban/$boardId',
+      params: { boardId: input.boardId },
+      search: {
+        issue: input.issueId,
+        milestoneId: input.milestoneId,
+      },
+    },
+    closable: true,
+  }, options)
+}
+
+export function openPluginPanel(input: {
+  routeSegment: string
+  localId: string
+}, options: { replace?: boolean } = {}): void {
+  openSurface({
+    id: pluginSurfaceId(input.routeSegment, input.localId),
+    kind: 'plugin',
+    title: getI18n().t('settings:plugins.panel.fallbackTitle'),
+    route: {
+      to: '/plugins/$routeSegment/$localId',
+      params: {
+        routeSegment: input.routeSegment,
+        localId: input.localId,
+      },
+    },
+    closable: true,
+  }, options)
+}
+
+export function openSettingsSection(section: string, options: { replace?: boolean } = {}): void {
+  const activeSurface = readActiveSurface()
+  const settingsStore = useSettingsOverlayStore.getState()
+
+  if (activeSurface?.kind !== 'settings') {
+    const returnSurfaceId = activeSurface ? readSurface(activeSurface.id)?.id : null
+    settingsStore.setSettingsReturnSurfaceId(returnSurfaceId ?? HOME_SURFACE.id)
+  }
+  settingsStore.setSettingsSection(section)
+
+  void router.navigate(surfaceRouteNavigateOptions(
+    { to: '/settings/$section', params: { section } },
+    options,
+  ))
+}
+
+export function openAwaits(options: { replace?: boolean } = {}): void {
+  openSurface({
+    id: 'awaits',
+    kind: 'awaits',
+    title: 'Awaits',
+    route: { to: '/awaits' },
+    closable: true,
+  }, options)
+}
+
+export function openPluginCenter(options: { replace?: boolean } = {}): void {
+  openSurface({
+    id: 'plugin-center',
+    kind: 'plugin-center',
+    title: getI18n().t('settings:plugins.center.title'),
+    route: { to: '/plugins' },
+    closable: true,
+  }, options)
+}
+
+export function openAutomation(options: { replace?: boolean } = {}): void {
+  openSurface({
+    id: 'automation',
+    kind: 'automation',
+    title: 'Automations',
+    route: { to: '/automation' },
+    closable: true,
+  }, options)
+}
+
+export function openUsage(options: { replace?: boolean } = {}): void {
+  openSurface({
+    id: 'usage',
+    kind: 'usage',
+    title: getI18n().t('search:command.usage.label'),
+    route: { to: '/usage' },
+    closable: true,
+  }, options)
+}
+
+function readFallbackSurface(
+  previousSurfaces: readonly AppSurface[],
+  nextSurfaces: readonly AppSurface[],
+  closedSurfaceId: string,
+): AppSurface {
+  const orderedPrevious = sortSurfaces(previousSurfaces)
+  const orderedNext = sortSurfaces(nextSurfaces)
+  const closedIndex = orderedPrevious.findIndex(surface => surface.id === closedSurfaceId)
+  return orderedNext[Math.min(Math.max(closedIndex, 0), orderedNext.length - 1)]
+    ?? orderedNext.at(-1)
+    ?? HOME_SURFACE
+}
+
+export function closeSurfaceById(surfaceId: string): void {
+  if (surfaceId === 'settings' && readActiveSurface()?.kind === 'settings') {
+    const settingsStore = useSettingsOverlayStore.getState()
+    const returnSurface = readSurface(settingsStore.settingsReturnSurfaceId ?? '') ?? HOME_SURFACE
+    settingsStore.setSettingsReturnSurfaceId(null)
+    navigateToSurface(returnSurface, { replace: true })
+    return
+  }
+
+  const previousSurfaces = useSurfaceStore.getState().surfaces
+  const closedSurface = readSurface(surfaceId)
+  const activeSurfaceId = readActiveSurfaceId()
+  if (activeSurfaceId === surfaceId) {
+    suppressRouteSurfaceSync(surfaceId)
+  }
+
+  const surfaceStore = useSurfaceStore.getState()
+  if (closedSurface?.closable) {
+    surfaceStore.rememberClosedSurface(closedSurface)
+  }
+  surfaceStore.closeSurface(surfaceId)
+
+  if (activeSurfaceId !== surfaceId) {
+    return
+  }
+
+  const nextSurface = readFallbackSurface(
+    previousSurfaces,
+    useSurfaceStore.getState().surfaces,
+    surfaceId,
+  )
+  navigateToSurface(nextSurface, { replace: true })
+}
+
+export function closeActiveSurface(): boolean {
+  const activeSurfaceId = readActiveSurfaceId()
+  if (!activeSurfaceId) {
+    return false
+  }
+  // VSCode-style Cmd+W: close the focused split pane first, only closing the
+  // whole tab once the surface is back down to its single primary pane.
+  if (closeFocusedSplitPane(activeSurfaceId)) {
+    return true
+  }
+  if (!readActiveSurface()?.closable) {
+    return false
+  }
+  closeSurfaceById(activeSurfaceId)
+  return true
+}
+
+export function reopenLastClosedSurface(): boolean {
+  const surface = useSurfaceStore.getState().lastClosedSurface
+  if (!surface) {
+    return false
+  }
+  navigateToSurface(surface)
+  return true
+}
+
+export function activateSurface(surfaceId: string): void {
+  const surface = readSurface(surfaceId)
+  if (!surface) {
+    return
+  }
+  navigateToSurface(surface)
+}
+
+export function activateAdjacentSurface(direction: 1 | -1): void {
+  const state = useSurfaceStore.getState()
+  const surfaces = [...state.surfaces].sort((left, right) => left.order - right.order)
+  const activeSurfaceId = readActiveSurface()?.id ?? HOME_SURFACE.id
+  if (surfaces.length <= 1) {
+    return
+  }
+
+  const currentIndex = Math.max(0, surfaces.findIndex(surface => surface.id === activeSurfaceId))
+  const nextIndex = (currentIndex + direction + surfaces.length) % surfaces.length
+  activateSurface(surfaces[nextIndex]!.id)
+}
