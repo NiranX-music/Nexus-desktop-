@@ -1,0 +1,371 @@
+import type { RegisteredMcpServer } from '../../../../plugins/mcp-registry'
+import { getRegisteredMcpServers } from '../../../../plugins/mcp-registry'
+import { AGENT_TOOLS_MCP_SERVER_NAME } from '../../../agent-tools/server'
+import type {
+  ChatThinkingEffort,
+  RuntimeSettings,
+} from '../../../chat-runtime/runtime-provider-types'
+import { readCodexLikeRuntimeSettings } from '../../../chat-runtime/runtime-settings'
+import { parseCodexNativeConfig } from '../../../provider-contracts/codex-native-config'
+import type { CodexAuthMode, CodexConfig } from '../../../provider-contracts/provider-base'
+import type { CodexAppServerAuthResolution } from '../app-server/chatgpt-auth'
+import {
+  CODEX_BEDROCK_API_KEY_ENV,
+  CODEX_BEDROCK_REGION_ENV,
+  CODEX_PERSONAL_ACCESS_TOKEN_ENV,
+} from '../app-server/chatgpt-auth'
+import type { CollaborationMode } from '../app-server-protocol/CollaborationMode'
+import type { ReasoningEffort } from '../app-server-protocol/ReasoningEffort'
+import type { SandboxPolicy } from '../app-server-protocol/v2/SandboxPolicy'
+import type { ThreadForkParams } from '../app-server-protocol/v2/ThreadForkParams'
+import { toSandboxPolicy } from './sandbox-policy'
+
+export const CRADLE_CODEX_MODEL_PROVIDER = 'cradle-openai-compatible'
+export const CODEX_AMAZON_BEDROCK_MODEL_PROVIDER = 'amazon-bedrock'
+export const CRADLE_CODEX_API_KEY_ENV = 'CRADLE_CODEX_API_KEY'
+export const CODEX_API_KEY_ENV = 'CODEX_API_KEY'
+export const OPENAI_API_KEY_ENV = 'OPENAI_API_KEY'
+const CRADLE_CODEX_MCP_HEADER_ENV_PREFIX = 'CRADLE_CODEX_MCP_HEADER'
+
+export function resolveCodexExternalModelProviderBaseUrl(
+  config: CodexConfig,
+): string | null {
+  const baseUrl = config.baseUrl?.trim()
+  return baseUrl || null
+}
+
+export function resolveCodexAuthMode(
+  config: CodexConfig,
+  auth: CodexAppServerAuthResolution,
+): CodexAuthMode {
+  switch (auth.kind) {
+    case 'apiKey':
+      return 'apikey'
+    case 'chatgptAuthTokens':
+      return 'chatgptAuthTokens'
+    case 'personalAccessToken':
+      return 'personalAccessToken'
+    case 'bedrockApiKey':
+      return 'bedrockApiKey'
+    case 'none':
+      return config.authMode ?? 'apikey'
+  }
+}
+
+export function codexConfigRequiresApiKey(
+  config: CodexConfig,
+  auth: CodexAppServerAuthResolution,
+): boolean {
+  return resolveCodexExternalModelProviderBaseUrl(config) !== null
+    && resolveCodexAuthMode(config, auth) === 'apikey'
+    && !codexAuthHasApiKey(auth)
+}
+
+export function codexAuthHasApiKey(auth: CodexAppServerAuthResolution): boolean {
+  return auth.kind === 'apiKey'
+}
+
+export function buildCodexExternalModelProviderConfig(
+  baseUrl: string,
+  authMode: CodexAuthMode,
+): NonNullable<ThreadForkParams['config']> {
+  return {
+    model_provider: CRADLE_CODEX_MODEL_PROVIDER,
+    model_providers: {
+      [CRADLE_CODEX_MODEL_PROVIDER]: {
+        name: 'Cradle OpenAI Compatible',
+        base_url: baseUrl,
+        ...(authMode === 'apikey' ? { env_key: CRADLE_CODEX_API_KEY_ENV } : {}),
+        wire_api: 'responses',
+        requires_openai_auth: true,
+      },
+    },
+  }
+}
+
+export function buildCodexBedrockModelProviderConfig(region: string): NonNullable<ThreadForkParams['config']> {
+  return {
+    model_provider: CODEX_AMAZON_BEDROCK_MODEL_PROVIDER,
+    model_providers: {
+      [CODEX_AMAZON_BEDROCK_MODEL_PROVIDER]: {
+        aws: {
+          region,
+        },
+      },
+    },
+  }
+}
+
+export function buildCodexAuthEnvironment(auth: CodexAppServerAuthResolution): Record<string, string> {
+  switch (auth.kind) {
+    case 'apiKey':
+      return {
+        [CRADLE_CODEX_API_KEY_ENV]: auth.apiKey,
+        [CODEX_API_KEY_ENV]: auth.apiKey,
+        [OPENAI_API_KEY_ENV]: auth.apiKey,
+      }
+    case 'personalAccessToken':
+      return { [CODEX_PERSONAL_ACCESS_TOKEN_ENV]: auth.personalAccessToken }
+    case 'bedrockApiKey':
+      return {
+        [CODEX_BEDROCK_API_KEY_ENV]: auth.bedrockApiKey,
+        [CODEX_BEDROCK_REGION_ENV]: auth.region,
+      }
+    case 'chatgptAuthTokens':
+    case 'none':
+      return {}
+  }
+}
+
+export function resolveCodexSkillExtraRoots(
+  config: CodexConfig,
+  workspacePath: string,
+  resolveSkillPaths: (workspacePath: string) => string[],
+): string[] {
+  return config.skillPaths.length > 0
+    ? config.skillPaths
+    : resolveSkillPaths(workspacePath)
+}
+
+export function readCodexReasoningEffort(
+  override: ChatThinkingEffort | undefined,
+  configured: CodexConfig['reasoningEffort'],
+): ReasoningEffort {
+  switch (override) {
+    case 'none':
+    case 'minimal':
+    case 'low':
+    case 'medium':
+    case 'high':
+    case 'xhigh':
+    case 'max':
+    case 'ultra':
+      return override
+    default:
+      return isCodexReasoningEffort(configured) ? configured : 'high'
+  }
+}
+
+/**
+ * Vendored Codex ≥0.147 no longer accepts `untrusted` in thread config
+ * ("approval_policy = untrusted is no longer supported"). Stored profiles may
+ * still carry the legacy value; project it to the nearest supported policy at
+ * the wire boundary instead of failing thread/start.
+ */
+export function toSupportedCodexApprovalPolicy(
+  policy: CodexConfig['approvalPolicy'],
+): 'on-request' | 'never' {
+  return policy === 'never' ? 'never' : 'on-request'
+}
+
+export function buildCodexConfig(
+  config: CodexConfig,
+  _workspacePath: string,
+  _resolveSkillPaths: (workspacePath: string) => string[],
+  effectiveModel: string | null | undefined,
+  auth: CodexAppServerAuthResolution,
+): NonNullable<ThreadForkParams['config']> {
+  const codexConfig: NonNullable<ThreadForkParams['config']> = {
+    network_access: 'enabled',
+    show_raw_agent_reasoning: true,
+    disable_response_storage: true,
+    tools: {
+      update_plan: {
+        enabled: true,
+      },
+    },
+    ...parseCodexNativeConfig(config.codex ?? {}),
+  }
+  const mcpServers = buildCodexMcpServersConfig()
+  codexConfig.approval_policy = toSupportedCodexApprovalPolicy(config.approvalPolicy)
+  codexConfig.sandbox_mode = config.sandboxMode
+  if (Object.keys(mcpServers).length > 0) {
+    codexConfig.mcp_servers = mcpServers
+  }
+  const authMode = resolveCodexAuthMode(config, auth)
+  const externalBaseUrl = resolveCodexExternalModelProviderBaseUrl(config)
+  if (externalBaseUrl) {
+    Object.assign(codexConfig, buildCodexExternalModelProviderConfig(externalBaseUrl, authMode))
+  }
+  if (auth.kind === 'bedrockApiKey') {
+    Object.assign(codexConfig, buildCodexBedrockModelProviderConfig(auth.region))
+  }
+  if (effectiveModel) {
+    codexConfig.model = effectiveModel
+  }
+  return codexConfig
+}
+
+export function projectCodexRuntimeAccessMode(
+  accessMode: 'approval-required' | 'approve-for-me' | 'full-access',
+  input: {
+    writableRoots: string[]
+    additionalDirectories: string[]
+  },
+): {
+  approvalPolicy: CodexConfig['approvalPolicy']
+  approvalsReviewer: NonNullable<ThreadForkParams['approvalsReviewer']>
+  sandbox: CodexConfig['sandboxMode']
+  sandboxPolicy: SandboxPolicy
+} {
+  if (accessMode !== 'full-access') {
+    // Codex ≥0.147 dropped `untrusted`. "Approval required" now maps to the
+    // supported strictest combo: workspace-write sandbox with on-request
+    // approvals — escalations (e.g. writes outside the workspace) surface as
+    // real approval requests instead of failing thread/start.
+    return {
+      approvalPolicy: 'on-request',
+      approvalsReviewer: accessMode === 'approve-for-me' ? 'auto_review' : 'user',
+      sandbox: 'workspace-write',
+      sandboxPolicy: toSandboxPolicy('workspace-write', input.writableRoots, input.additionalDirectories),
+    }
+  }
+  return {
+    approvalPolicy: 'never',
+    approvalsReviewer: 'user',
+    sandbox: 'danger-full-access',
+    sandboxPolicy: toSandboxPolicy('danger-full-access', input.writableRoots, input.additionalDirectories),
+  }
+}
+
+export function buildCodexCollaborationMode(
+  settings: RuntimeSettings,
+  input: { model: string, effort: ReasoningEffort },
+): CollaborationMode {
+  const codexSettings = readCodexLikeRuntimeSettings(settings)
+  return {
+    mode: codexSettings.interactionMode,
+    settings: {
+      model: input.model,
+      reasoning_effort: input.effort,
+      developer_instructions: null,
+    },
+  }
+}
+
+export type CodexMcpServerConfig
+  = | { command: string, args: string[], env?: Record<string, string> }
+    | { url: string, env_http_headers?: Record<string, string> }
+
+export function buildCodexMcpServersConfig(
+  cradleMcpEnvironment?: Record<string, string>,
+): Record<string, CodexMcpServerConfig> {
+  const chatSessionId = cradleMcpEnvironment?.CRADLE_CHAT_SESSION_ID
+  return Object.fromEntries(
+    Object.entries(getRegisteredMcpServers(chatSessionId ? { chatSessionId } : undefined)).map(([name, config]) => [
+      name,
+      projectCodexMcpServer(
+        name,
+        config,
+        name === AGENT_TOOLS_MCP_SERVER_NAME ? cradleMcpEnvironment : undefined,
+      ),
+    ]),
+  )
+}
+
+const CRADLE_MCP_INVOCATION_ENV_NAMES = [
+  'CRADLE_CHAT_SESSION_ID',
+  'CRADLE_WORKSPACE_ID',
+  'CRADLE_WORKSPACE_PATH',
+  'CRADLE_AGENT_ID',
+  'CRADLE_AGENT_HOME',
+] as const
+
+/**
+ * Codex starts stdio MCP servers with their configured environment. The
+ * built-in Cradle MCP therefore needs an explicit projection of the active
+ * runtime invocation; forwarding the complete app-server environment would
+ * disclose provider credentials to that child process.
+ */
+export function bindCodexCradleMcpInvocation(
+  config: NonNullable<ThreadForkParams['config']>,
+  appServerEnvironment: Record<string, string | undefined>,
+): NonNullable<ThreadForkParams['config']> {
+  const invocationEnvironment = Object.fromEntries(
+    CRADLE_MCP_INVOCATION_ENV_NAMES.flatMap((name) => {
+      const value = appServerEnvironment[name]
+      return value ? [[name, value]] : []
+    }),
+  )
+  const mcpServers = buildCodexMcpServersConfig(invocationEnvironment)
+  const nextConfig: NonNullable<ThreadForkParams['config']> = {
+    ...config,
+    shell_environment_policy: {
+      inherit: 'all',
+      set: invocationEnvironment,
+    },
+  }
+  if (Object.keys(mcpServers).length > 0) {
+    nextConfig.mcp_servers = mcpServers
+  }
+  else {
+    delete nextConfig.mcp_servers
+  }
+  return nextConfig
+}
+
+export function buildCodexMcpServersEnvironment(): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const [serverName, config] of Object.entries(getRegisteredMcpServers())) {
+    if (config.transport !== 'streamable-http') {
+      continue
+    }
+    for (const [headerName, headerValue] of Object.entries(config.headers)) {
+      env[buildCodexMcpHeaderEnvName(serverName, headerName)] = headerValue
+    }
+  }
+  return env
+}
+
+function projectCodexMcpServer(
+  name: string,
+  config: RegisteredMcpServer,
+  runtimeEnvironment?: Record<string, string>,
+): CodexMcpServerConfig {
+  if (config.transport === 'stdio') {
+    const server: CodexMcpServerConfig = {
+      command: config.command,
+      args: config.args,
+    }
+    const env = { ...config.env, ...runtimeEnvironment }
+    if (Object.keys(env).length > 0) {
+      server.env = env
+    }
+    return server
+  }
+
+  const envHttpHeaders = Object.fromEntries(
+    Object.keys(config.headers).map(headerName => [
+      headerName,
+      buildCodexMcpHeaderEnvName(name, headerName),
+    ]),
+  )
+  return {
+    url: config.url,
+    ...(Object.keys(envHttpHeaders).length > 0 ? { env_http_headers: envHttpHeaders } : {}),
+  }
+}
+
+function buildCodexMcpHeaderEnvName(serverName: string, headerName: string): string {
+  return [
+    CRADLE_CODEX_MCP_HEADER_ENV_PREFIX,
+    normalizeEnvToken(serverName),
+    normalizeEnvToken(headerName),
+  ].join('_')
+}
+
+function normalizeEnvToken(value: string): string {
+  const normalized = value.toUpperCase().replaceAll(/[^A-Z0-9]+/g, '_').replaceAll(/^_+|_+$/g, '')
+  return normalized || 'VALUE'
+}
+
+function isCodexReasoningEffort(value: unknown): value is ReasoningEffort {
+  return value === 'none'
+    || value === 'minimal'
+    || value === 'low'
+    || value === 'medium'
+    || value === 'high'
+    || value === 'xhigh'
+    || value === 'max'
+    || value === 'ultra'
+}
