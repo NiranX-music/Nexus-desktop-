@@ -1,0 +1,1415 @@
+import { randomUUID } from 'node:crypto'
+import { promises as fsp } from 'node:fs'
+
+import type {
+  AvailableCommand,
+  ClientConnection,
+  ClientContext,
+  CompleteElicitationNotification,
+  ContentBlock,
+  CreateElicitationRequest,
+  CreateElicitationResponse,
+  ForkSessionResponse,
+  InitializeResponse,
+  ListSessionsResponse,
+  LoadSessionResponse,
+  McpServer,
+  NewSessionResponse,
+  PromptResponse,
+  RequestPermissionRequest,
+  RequestPermissionResponse,
+  ResumeSessionResponse,
+  SessionConfigOption,
+  SessionModeState,
+  SessionNotification,
+  SessionUpdate,
+  SetSessionConfigOptionRequest,
+  SetSessionConfigOptionResponse,
+  StopReason,
+} from '@agentclientprotocol/sdk'
+import {
+  client,
+  methods,
+  ndJsonStream,
+  PROTOCOL_VERSION,
+  RequestError,
+} from '@agentclientprotocol/sdk'
+import {
+  createHttpStream,
+  MemoryAcpCookieStore,
+} from '@agentclientprotocol/sdk/experimental/http-client'
+import { createWebSocketStream } from '@agentclientprotocol/sdk/experimental/ws-client'
+import type { UIMessageChunk } from 'ai'
+import { WebSocket } from 'ws'
+
+import packageJson from '../../../../package.json'
+import { getRegisteredMcpServers } from '../../../plugins/mcp-registry'
+import type { ProviderAuthMethod, ProviderKind, RuntimeKind } from '../../chat-runtime/runtime-provider-types'
+import { ProviderErrors, ProviderRuntimeError } from '../../chat-runtime/runtime-provider-types'
+import type { TokenUsage } from '../../chat-runtime-engine/ai-sdk-engine'
+import { providerChunk } from '../kit/chunk-mapper'
+import { createBuiltinToolCallInputPayload } from '../tools/tool-call-payload'
+import { projectAcpAuthMethods } from './auth'
+import type { AcpConnectionRecord } from './config'
+import { ACP_RUNTIME_KIND } from './metadata'
+import type { AcpProcessHost } from './process-manager'
+import { AcpTerminalHost } from './terminal-host'
+import { AcpChunkMapper } from './timeline-mapper'
+import { buildAcpToolInput } from './tools/mapper'
+
+const DEFAULT_REQUEST_TIMEOUTS = {
+  metadataMs: 30_000,
+  authenticateMs: 300_000,
+  promptMs: 600_000,
+} as const
+
+export interface AcpRequestTimeouts {
+  metadataMs: number
+  authenticateMs: number
+  promptMs: number
+}
+
+export interface AcpConnectionManagerOptions {
+  readSecret?: (secretRef: string) => string
+  requestTimeouts?: Partial<AcpRequestTimeouts>
+}
+
+export interface AcpSessionState {
+  title: string | null
+  modes: SessionModeState | null
+  models: AcpSessionModelState | null
+  configOptions: SessionConfigOption[]
+  availableCommands: AvailableCommand[]
+  plans: AcpPlanState[]
+  contextUsage: { used: number, size: number, cost?: { amount: number, currency: string } | null } | null
+}
+
+/**
+ * Legacy `models` session field (UNSTABLE in protocol v1, dropped from the
+ * current schema). Agents that predate `configOptions` — e.g. Gemini CLI —
+ * still return it from session lifecycle responses and honor
+ * `session/set_model`. The field is absent from SDK types but reaches the
+ * client verbatim on the wire, so we normalize it ourselves.
+ */
+export interface AcpSessionModelState {
+  availableModels: Array<{ modelId: string, name: string, description?: string | null }>
+  currentModelId: string
+}
+
+export interface AcpPlanState {
+  id: string
+  content: string | null
+  uri: string | null
+  entries: Array<{ content: string, status: 'pending' | 'in_progress' | 'completed' }>
+}
+
+export interface AcpPromptRuntimeContext {
+  chatSessionId: string
+  runId: string
+  providerKind: ProviderKind
+  runtimeKind: RuntimeKind
+}
+
+export interface AcpPermissionRequest {
+  agentId: string
+  sessionId: string
+  providerMethod: string
+  providerRequestId: string
+  toolCallId: string
+  toolTitle: string
+  options: Array<{ optionId: string, name: string, kind: string }>
+  runtimeContext?: AcpPromptRuntimeContext
+}
+
+export interface AcpPermissionResponse {
+  outcome: 'selected' | 'cancelled'
+  optionId?: string
+}
+
+export type AcpPermissionHandler = (request: AcpPermissionRequest) => Promise<AcpPermissionResponse>
+
+export interface AcpElicitationRequest {
+  agentId: string
+  params: CreateElicitationRequest
+  runtimeContext?: AcpPromptRuntimeContext
+}
+
+export type AcpElicitationHandler = (request: AcpElicitationRequest) => Promise<CreateElicitationResponse>
+
+export interface AcpElicitationCompleteRequest {
+  agentId: string
+  params: CompleteElicitationNotification
+}
+
+export type AcpElicitationCompleteHandler = (request: AcpElicitationCompleteRequest) => Promise<void>
+
+export function listRegisteredAcpMcpServers(chatSessionId?: string): McpServer[] {
+  return Object.entries(getRegisteredMcpServers(
+    chatSessionId ? { chatSessionId } : undefined,
+  )).map(([name, config]) => config.transport === 'stdio'
+    ? {
+        name,
+        command: config.command,
+        args: config.args,
+        env: Object.entries(config.env).map(([envName, value]) => ({ name: envName, value })),
+      }
+    : {
+        type: 'http',
+        name,
+        url: config.url,
+        headers: Object.entries(config.headers).map(([headerName, value]) => ({ name: headerName, value })),
+      })
+}
+
+class ChunkQueue {
+  private buffered: UIMessageChunk[] = []
+  private waiters: Array<{
+    resolve: (value: UIMessageChunk | null) => void
+    reject: (error: Error) => void
+  }> = []
+
+  private closed = false
+  private failure: Error | null = null
+
+  push(chunk: UIMessageChunk): void {
+    if (this.closed) {
+      return
+    }
+    const waiter = this.waiters.shift()
+    if (waiter) {
+      waiter.resolve(chunk)
+      return
+    }
+    this.buffered.push(chunk)
+  }
+
+  close(): void {
+    if (this.closed) {
+      return
+    }
+    this.closed = true
+    while (this.waiters.length > 0) {
+      this.waiters.shift()!.resolve(null)
+    }
+  }
+
+  fail(error: Error): void {
+    if (this.closed) {
+      return
+    }
+    this.closed = true
+    this.failure = error
+    while (this.waiters.length > 0) {
+      this.waiters.shift()!.reject(error)
+    }
+  }
+
+  async next(): Promise<UIMessageChunk | null> {
+    if (this.buffered.length > 0) {
+      return this.buffered.shift()!
+    }
+    if (this.failure) {
+      throw this.failure
+    }
+    if (this.closed) {
+      return null
+    }
+    return new Promise<UIMessageChunk | null>((resolve, reject) => {
+      this.waiters.push({ resolve, reject })
+    })
+  }
+}
+
+interface SessionChannel {
+  mapper: AcpChunkMapper
+  queue: ChunkQueue
+  promptAbortController: AbortController
+  closedBy: { kind: 'cancelled' } | { kind: 'disconnected', error: Error } | null
+}
+
+interface ConnectionEntry {
+  agentId: string
+  connectionType: AcpConnectionRecord['connectionType']
+  configurationTarget?: AcpConnectionRecord['configurationTarget']
+  connection: ClientConnection
+  agent: ClientContext
+  initResult: InitializeResponse | null
+  sessionStates: Map<string, AcpSessionState>
+  channels: Map<string, SessionChannel>
+  restoringSessionLoads: Set<string>
+  authenticatedMethodId: string | null
+}
+
+export class AcpConnectionManager {
+  private readonly connections = new Map<string, ConnectionEntry>()
+  private readonly pendingConnects = new Map<string, Promise<InitializeResponse>>()
+  private readonly sessionTitleHandlers = new Set<(acpSessionId: string, title: string) => void>()
+  private readonly usageBySessionKey = new Map<string, TokenUsage | null>()
+  private readonly promptRuntimeContexts = new Map<string, AcpPromptRuntimeContext>()
+  private readonly remoteCookieStores = new Map<string, MemoryAcpCookieStore>()
+  private readonly readSecret: (secretRef: string) => string
+  private readonly requestTimeouts: AcpRequestTimeouts
+  private permissionHandler: AcpPermissionHandler | null = null
+  private elicitationHandler: AcpElicitationHandler | null = null
+  private elicitationCompleteHandler: AcpElicitationCompleteHandler | null = null
+
+  constructor(
+    private readonly processManager: AcpProcessHost,
+    options: AcpConnectionManagerOptions = {},
+    private readonly terminalHost = new AcpTerminalHost(),
+  ) {
+    this.readSecret = options.readSecret ?? (() => {
+      throw new Error('ACP remote headers require a Secrets-owned credential resolver')
+    })
+    this.requestTimeouts = {
+      ...DEFAULT_REQUEST_TIMEOUTS,
+      ...options.requestTimeouts,
+    }
+  }
+
+  setPermissionHandler(handler: AcpPermissionHandler): void {
+    this.permissionHandler = handler
+  }
+
+  setElicitationHandler(handler: AcpElicitationHandler): void {
+    this.elicitationHandler = handler
+  }
+
+  setElicitationCompleteHandler(handler: AcpElicitationCompleteHandler): void {
+    this.elicitationCompleteHandler = handler
+  }
+
+  onSessionTitle(handler: (acpSessionId: string, title: string) => void): () => void {
+    this.sessionTitleHandlers.add(handler)
+    return () => {
+      this.sessionTitleHandlers.delete(handler)
+    }
+  }
+
+  async connect(agentId: string, record: AcpConnectionRecord): Promise<InitializeResponse> {
+    if (this.connections.has(agentId)) {
+      throw new Error(`Agent ${agentId} is already connected`)
+    }
+
+    const pending = this.pendingConnects.get(agentId)
+    if (pending) {
+      return pending
+    }
+
+    const promise = this.openConnection(agentId, record).finally(() => {
+      this.pendingConnects.delete(agentId)
+    })
+    this.pendingConnects.set(agentId, promise)
+    return promise
+  }
+
+  async newSession(agentId: string, cwd: string, chatSessionId?: string): Promise<NewSessionResponse & AcpSessionState> {
+    const conn = this.getConnection(agentId)
+    const response = await this.requestWithDeadline({
+      conn,
+      operation: methods.agent.session.new,
+      timeoutMs: this.requestTimeouts.metadataMs,
+      request: signal => conn.agent.request(methods.agent.session.new, {
+        cwd,
+        mcpServers: listRegisteredAcpMcpServers(chatSessionId),
+      }, { cancellationSignal: signal }),
+    })
+    const sessionState = readAcpSessionState(response)
+    this.cacheSessionState(conn, response.sessionId, sessionState)
+    return { ...response, ...sessionState }
+  }
+
+  supportsLoadSession(agentId: string): boolean {
+    return !!this.getConnection(agentId).initResult?.agentCapabilities?.loadSession
+  }
+
+  supportsResumeSession(agentId: string): boolean {
+    return !!this.getConnection(agentId).initResult?.agentCapabilities?.sessionCapabilities?.resume
+  }
+
+  getAuthMethods(agentId: string): ProviderAuthMethod[] {
+    const conn = this.getConnection(agentId)
+    return projectAcpAuthMethods(conn.initResult?.authMethods ?? [])
+  }
+
+  async loadSession(agentId: string, sessionId: string, cwd: string, chatSessionId?: string): Promise<LoadSessionResponse & AcpSessionState> {
+    const conn = this.getConnection(agentId)
+    if (!this.supportsLoadSession(agentId)) {
+      throw new Error(`Agent ${agentId} does not support session/load`)
+    }
+
+    conn.restoringSessionLoads.add(sessionId)
+    try {
+      const response = await this.requestWithDeadline({
+        conn,
+        operation: methods.agent.session.load,
+        sessionId,
+        timeoutMs: this.requestTimeouts.metadataMs,
+        request: signal => conn.agent.request(methods.agent.session.load, {
+          sessionId,
+          cwd,
+          mcpServers: listRegisteredAcpMcpServers(chatSessionId),
+        }, { cancellationSignal: signal }),
+      })
+      const sessionState = readAcpSessionState(response)
+      this.cacheSessionState(conn, sessionId, sessionState)
+      return { ...response, ...sessionState }
+    }
+    finally {
+      conn.restoringSessionLoads.delete(sessionId)
+    }
+  }
+
+  async resumeSession(agentId: string, sessionId: string, cwd: string, chatSessionId?: string): Promise<ResumeSessionResponse & AcpSessionState> {
+    const conn = this.getConnection(agentId)
+    if (!this.supportsResumeSession(agentId)) {
+      throw new Error(`Agent ${agentId} does not support session/resume`)
+    }
+
+    const response = await this.requestWithDeadline({
+      conn,
+      operation: methods.agent.session.resume,
+      sessionId,
+      timeoutMs: this.requestTimeouts.metadataMs,
+      request: signal => conn.agent.request(methods.agent.session.resume, {
+        sessionId,
+        cwd,
+        mcpServers: listRegisteredAcpMcpServers(chatSessionId),
+      }, { cancellationSignal: signal }),
+    })
+    const sessionState = readAcpSessionState(response)
+    this.cacheSessionState(conn, sessionId, sessionState)
+    return { ...response, ...sessionState }
+  }
+
+  getSessionState(agentId: string, sessionId: string): AcpSessionState | null {
+    return this.connections.get(agentId)?.sessionStates.get(sessionId) ?? null
+  }
+
+  async setSessionModel(agentId: string, sessionId: string, modelId: string): Promise<void> {
+    const conn = this.getConnection(agentId)
+    const state = conn.sessionStates.get(sessionId)
+    if (!state) {
+      throw new Error(`ACP session ${sessionId} does not have cached session configuration`)
+    }
+    const modelOption = state.configOptions.find(isModelConfigOption)
+    if (modelOption) {
+      if (!hasConfigValue(modelOption, modelId)) {
+        throw new Error(`ACP session ${sessionId} does not expose model ${modelId} as a session config option`)
+      }
+      const response = await this.requestWithDeadline({
+        conn,
+        operation: methods.agent.session.setConfigOption,
+        sessionId,
+        timeoutMs: this.requestTimeouts.metadataMs,
+        request: signal => this.requestSessionConfigOption(conn.agent, {
+          sessionId,
+          configId: modelOption.id,
+          value: modelId,
+        }, signal),
+      })
+      state.configOptions = response.configOptions
+      return
+    }
+
+    if (!state.models?.availableModels.some(model => model.modelId === modelId)) {
+      throw new Error(`ACP session ${sessionId} does not expose model ${modelId}`)
+    }
+    // Legacy agents expose models through the pre-configOptions `models` field
+    // and honor `session/set_model`; the method no longer exists in SDK 1.4
+    // typings, so it goes through the generic request path verbatim.
+    await this.requestWithDeadline({
+      conn,
+      operation: 'session/set_model',
+      sessionId,
+      timeoutMs: this.requestTimeouts.metadataMs,
+      request: signal => conn.agent.request('session/set_model', { sessionId, modelId }, { cancellationSignal: signal }),
+    })
+    state.models.currentModelId = modelId
+  }
+
+  async setSessionConfigOption(agentId: string, sessionId: string, configId: string, value: string | boolean): Promise<void> {
+    const conn = this.getConnection(agentId)
+    const params: SetSessionConfigOptionRequest = { sessionId, configId, ...formatSessionConfigOptionValue(value) }
+    const response = await this.requestWithDeadline({
+      conn,
+      operation: methods.agent.session.setConfigOption,
+      sessionId,
+      timeoutMs: this.requestTimeouts.metadataMs,
+      request: signal => this.requestSessionConfigOption(conn.agent, params, signal),
+    })
+    const state = conn.sessionStates.get(sessionId)
+    if (state && response?.configOptions) {
+      state.configOptions = response.configOptions
+    }
+  }
+
+  async setSessionMode(agentId: string, sessionId: string, modeId: string): Promise<void> {
+    const conn = this.getConnection(agentId)
+    const state = conn.sessionStates.get(sessionId)
+    if (!state?.modes?.availableModes.some(mode => mode.id === modeId)) {
+      throw new Error(`ACP session ${sessionId} does not expose mode ${modeId}`)
+    }
+    await this.requestWithDeadline({
+      conn,
+      operation: methods.agent.session.setMode,
+      sessionId,
+      timeoutMs: this.requestTimeouts.metadataMs,
+      request: signal => conn.agent.request(methods.agent.session.setMode, {
+        sessionId,
+        modeId,
+      }, { cancellationSignal: signal }),
+    })
+    state.modes.currentModeId = modeId
+  }
+
+  supportsSessionFork(agentId: string): boolean {
+    return !!this.getConnection(agentId).initResult?.agentCapabilities?.sessionCapabilities?.fork
+  }
+
+  async forkSession(agentId: string, sessionId: string, cwd: string, chatSessionId?: string): Promise<ForkSessionResponse & AcpSessionState> {
+    const conn = this.getConnection(agentId)
+    const response = await this.requestWithDeadline({
+      conn,
+      operation: methods.agent.session.fork,
+      sessionId,
+      timeoutMs: this.requestTimeouts.metadataMs,
+      request: signal => conn.agent.request(methods.agent.session.fork, {
+        sessionId,
+        cwd,
+        mcpServers: listRegisteredAcpMcpServers(chatSessionId),
+      }, { cancellationSignal: signal }),
+    })
+    const state = readAcpSessionState(response)
+    this.cacheSessionState(conn, response.sessionId, state)
+    return { ...response, ...state }
+  }
+
+  async listSessions(agentId: string, cwd?: string, cursor?: string | null): Promise<ListSessionsResponse> {
+    const conn = this.getConnection(agentId)
+    if (!conn.initResult?.agentCapabilities?.sessionCapabilities?.list) {
+      return { sessions: [] }
+    }
+    return await this.requestWithDeadline({
+      conn,
+      operation: methods.agent.session.list,
+      timeoutMs: this.requestTimeouts.metadataMs,
+      request: signal => conn.agent.request(methods.agent.session.list, { cwd, cursor }, { cancellationSignal: signal }),
+    })
+  }
+
+  async deleteSession(agentId: string, sessionId: string): Promise<void> {
+    const conn = this.getConnection(agentId)
+    const capabilities = conn.initResult?.agentCapabilities?.sessionCapabilities
+    if (capabilities?.delete) {
+      await this.requestWithDeadline({
+        conn,
+        operation: methods.agent.session.delete,
+        sessionId,
+        timeoutMs: this.requestTimeouts.metadataMs,
+        request: signal => conn.agent.request(methods.agent.session.delete, { sessionId }, { cancellationSignal: signal }),
+      })
+    }
+    else if (capabilities?.close) {
+      await this.closeSession(agentId, sessionId)
+      return
+    }
+    conn.sessionStates.delete(sessionId)
+  }
+
+  async closeSession(agentId: string, sessionId: string): Promise<void> {
+    const conn = this.getConnection(agentId)
+    if (conn.initResult?.agentCapabilities?.sessionCapabilities?.close) {
+      await this.requestWithDeadline({
+        conn,
+        operation: methods.agent.session.close,
+        sessionId,
+        timeoutMs: this.requestTimeouts.metadataMs,
+        request: signal => conn.agent.request(methods.agent.session.close, { sessionId }, { cancellationSignal: signal }),
+      })
+    }
+    conn.sessionStates.delete(sessionId)
+  }
+
+  async disposeNativeSession(sessionId: string): Promise<void> {
+    for (const [agentId, conn] of this.connections) {
+      if (!conn.sessionStates.has(sessionId)) { continue }
+      try {
+        await this.deleteSession(agentId, sessionId)
+      }
+      catch {
+        try {
+          await this.closeSession(agentId, sessionId)
+        }
+        catch {
+          conn.sessionStates.delete(sessionId)
+        }
+      }
+      return
+    }
+  }
+
+  async* prompt(
+    agentId: string,
+    sessionId: string,
+    message: ContentBlock[] | string,
+    runtimeContext?: AcpPromptRuntimeContext,
+  ): AsyncGenerator<UIMessageChunk, void, void> {
+    const conn = this.getConnection(agentId)
+    if (conn.channels.has(sessionId)) {
+      throw new ProviderRuntimeError(ProviderErrors.requestFailed(
+        ACP_RUNTIME_KIND,
+        methods.agent.session.prompt,
+        `ACP connection ${agentId} already has an active prompt for session ${sessionId}`,
+      ))
+    }
+
+    const mapper = new AcpChunkMapper()
+    const queue = new ChunkQueue()
+    const promptAbortController = new AbortController()
+    const channel: SessionChannel = { mapper, queue, promptAbortController, closedBy: null }
+    conn.channels.set(sessionId, channel)
+
+    const usageKey = toUsageKey(agentId, sessionId)
+    this.usageBySessionKey.delete(usageKey)
+    if (runtimeContext) {
+      this.promptRuntimeContexts.set(usageKey, runtimeContext)
+    }
+
+    let promptError: Error | null = null
+
+    const promptDone = this.requestWithDeadline({
+      conn,
+      operation: methods.agent.session.prompt,
+      sessionId,
+      timeoutMs: this.requestTimeouts.promptMs,
+      abortController: promptAbortController,
+      request: signal => conn.agent.request(methods.agent.session.prompt, {
+        sessionId,
+        prompt: typeof message === 'string' ? [{ type: 'text', text: message }] : message,
+      }, { cancellationSignal: signal }),
+    })
+      .then((result) => {
+        if (channel.closedBy) {
+          return
+        }
+        this.usageBySessionKey.set(usageKey, toTokenUsage(result))
+        for (const event of mapper.flush()) {
+          queue.push(event)
+        }
+        queue.push(providerChunk.finish(mapAcpStopReason(result.stopReason)))
+        queue.close()
+      })
+      .catch((error: unknown) => {
+        promptError = error instanceof Error ? error : new Error(String(error))
+        if (channel.closedBy) {
+          return
+        }
+        for (const event of mapper.flush()) {
+          queue.push(event)
+        }
+        queue.fail(promptError)
+      })
+      .finally(() => {
+        if (conn.channels.get(sessionId) === channel) {
+          conn.channels.delete(sessionId)
+        }
+      })
+
+    try {
+      while (true) {
+        const chunk = await queue.next()
+        if (chunk === null) {
+          break
+        }
+        yield chunk
+      }
+
+      if (channel.closedBy?.kind === 'cancelled') {
+        this.usageBySessionKey.delete(usageKey)
+        return
+      }
+
+      if (channel.closedBy?.kind === 'disconnected') {
+        this.usageBySessionKey.delete(usageKey)
+        throw channel.closedBy.error
+      }
+
+      await promptDone
+      if (promptError) {
+        throw promptError
+      }
+    }
+    catch (error) {
+      if (!channel.closedBy) {
+        await promptDone.catch(() => {})
+      }
+      throw error
+    }
+    finally {
+      if (runtimeContext && this.promptRuntimeContexts.get(usageKey) === runtimeContext) {
+        this.promptRuntimeContexts.delete(usageKey)
+      }
+    }
+  }
+
+  getLastUsage(agentId: string, sessionId: string): TokenUsage | null {
+    return this.usageBySessionKey.get(toUsageKey(agentId, sessionId)) ?? null
+  }
+
+  async cancel(agentId: string, sessionId: string): Promise<void> {
+    const conn = this.getConnection(agentId)
+    const channel = conn.channels.get(sessionId)
+    this.closeChannel(conn, sessionId, { kind: 'cancelled' })
+    channel?.promptAbortController.abort()
+    this.usageBySessionKey.delete(toUsageKey(agentId, sessionId))
+    await conn.agent.notify(methods.agent.session.cancel, { sessionId })
+  }
+
+  async disconnect(agentId: string): Promise<void> {
+    const conn = this.connections.get(agentId)
+    if (conn) {
+      this.failConnectionChannels(conn, new Error(`ACP agent disconnected: ${agentId}`))
+      this.connections.delete(agentId)
+      conn.connection.close()
+    }
+    for (const key of [...this.usageBySessionKey.keys()]) {
+      if (key.startsWith(`${agentId}:`)) {
+        this.usageBySessionKey.delete(key)
+      }
+    }
+    await this.processManager.stop(agentId)
+    this.remoteCookieStores.get(agentId)?.clear()
+    this.remoteCookieStores.delete(agentId)
+  }
+
+  isConnected(agentId: string): boolean {
+    return this.connections.has(agentId)
+  }
+
+  getMetrics() {
+    return this.processManager.getMetrics()
+  }
+
+  listTerminals(sessionId: string) {
+    return this.terminalHost.list(sessionId)
+  }
+
+  async terminateTerminal(sessionId: string, terminalId: string): Promise<void> {
+    await this.terminalHost.kill(sessionId, terminalId)
+  }
+
+  private async openConnection(agentId: string, record: AcpConnectionRecord): Promise<InitializeResponse> {
+    const entry = await this.openInitializedConnection(agentId, record)
+    try {
+      const selectedMethodId = record.authMethodId
+      if (selectedMethodId) {
+        this.requireSelectedAuthMethod(entry, selectedMethodId)
+
+        try {
+          await this.requestWithDeadline({
+            conn: entry,
+            operation: methods.agent.authenticate,
+            timeoutMs: this.requestTimeouts.authenticateMs,
+            mapAuthRequired: false,
+            request: signal => entry.agent.request(
+              methods.agent.authenticate,
+              { methodId: selectedMethodId },
+              { cancellationSignal: signal },
+            ),
+          })
+        }
+        catch (error) {
+          throw new ProviderRuntimeError(ProviderErrors.authFailed(ACP_RUNTIME_KIND), { cause: error })
+        }
+        entry.authenticatedMethodId = selectedMethodId
+      }
+
+      this.publishConnection(entry)
+      return entry.initResult!
+    }
+    catch (error) {
+      await this.closeUnpublishedConnection(entry)
+      throw error
+    }
+  }
+
+  private async openInitializedConnection(
+    agentId: string,
+    record: AcpConnectionRecord,
+  ): Promise<ConnectionEntry> {
+    let connection: ClientConnection | null = null
+    try {
+      const clientApp = client({ name: 'Cradle Server' })
+        .onRequest(methods.client.session.requestPermission, async ({ params }) => this.handlePermissionRequest(agentId, params))
+        .onNotification(methods.client.session.update, async ({ params }) => {
+          this.handleSessionUpdate(agentId, params)
+        })
+        .onRequest(methods.client.fs.readTextFile, async ({ params }) => {
+          await this.requestClientFileReadApproval(agentId, params.sessionId, params.path)
+          return this.readClientTextFile(params.path, params.line, params.limit)
+        })
+        .onRequest(methods.client.fs.writeTextFile, async ({ params }) => {
+          await this.requestClientFileWriteApproval(agentId, params.sessionId, params.path)
+          await fsp.writeFile(params.path, params.content, 'utf-8')
+          return {}
+        })
+        .onRequest(methods.client.elicitation.create, async ({ params }) => {
+          if (!this.elicitationHandler) { return { action: 'decline' } }
+          const sessionId = 'sessionId' in params && typeof params.sessionId === 'string'
+            ? params.sessionId
+            : null
+          const runtimeContext = sessionId
+            ? this.promptRuntimeContexts.get(toUsageKey(agentId, sessionId))
+            : undefined
+          return await this.elicitationHandler({ agentId, params, runtimeContext })
+        })
+        .onNotification(methods.client.elicitation.complete, async ({ params }) => {
+          await this.elicitationCompleteHandler?.({ agentId, params })
+        })
+        .onRequest(methods.client.terminal.create, async ({ params }) => {
+          await this.requestClientTerminalApproval(agentId, params.sessionId, params.command, params.args ?? [], params.cwd)
+          return this.terminalHost.create(params)
+        })
+        .onRequest(methods.client.terminal.output, async ({ params }) => this.terminalHost.output(params.sessionId, params.terminalId))
+        .onRequest(methods.client.terminal.waitForExit, async ({ params }) => this.terminalHost.wait(params.sessionId, params.terminalId))
+        .onRequest(methods.client.terminal.kill, async ({ params }) => this.terminalHost.kill(params.sessionId, params.terminalId))
+        .onRequest(methods.client.terminal.release, async ({ params }) => this.terminalHost.release(params.sessionId, params.terminalId))
+
+      if (record.connectionType === 'stdio') {
+        const args = JSON.parse(record.args) as string[]
+        const env = JSON.parse(record.env) as Record<string, string>
+        const procEntry = this.processManager.spawn({
+          agentId,
+          cmd: record.cmd,
+          args,
+          env,
+          distributionType: record.distributionType,
+          installPath: record.installPath,
+        })
+        connection = clientApp.connect(ndJsonStream(procEntry.stdinWeb, procEntry.stdoutWeb))
+      }
+      else {
+        const headers = this.resolveRemoteHeaders(record.headerSecretRefs)
+        const cookieStore = this.remoteCookieStores.get(agentId) ?? new MemoryAcpCookieStore()
+        this.remoteCookieStores.set(agentId, cookieStore)
+        const stream = record.connectionType === 'http'
+          ? createHttpStream(record.endpointUrl, { headers, cookieStore })
+          : createWebSocketStream(record.endpointUrl, { headers, cookieStore, WebSocket })
+        connection = clientApp.connect(stream)
+      }
+
+      const entry: ConnectionEntry = {
+        agentId,
+        connectionType: record.connectionType,
+        configurationTarget: record.configurationTarget,
+        connection,
+        agent: connection.agent,
+        initResult: null,
+        sessionStates: new Map(),
+        channels: new Map(),
+        restoringSessionLoads: new Set(),
+        authenticatedMethodId: null,
+      }
+      const initResult = await this.requestWithDeadline({
+        conn: entry,
+        operation: methods.agent.initialize,
+        timeoutMs: this.requestTimeouts.metadataMs,
+        mapAuthRequired: false,
+        request: signal => entry.agent.request(methods.agent.initialize, {
+          protocolVersion: PROTOCOL_VERSION,
+          clientInfo: { name: 'Cradle Server', version: packageJson.version },
+          clientCapabilities: {
+            fs: {
+              readTextFile: true,
+              writeTextFile: true,
+            },
+            plan: {},
+            elicitation: { form: {}, url: {} },
+            session: { configOptions: { boolean: {} } },
+            terminal: true,
+          },
+        }, { cancellationSignal: signal }),
+      })
+      entry.initResult = initResult
+
+      if (initResult.protocolVersion !== PROTOCOL_VERSION) {
+        throw new ProviderRuntimeError(ProviderErrors.requestFailed(
+          ACP_RUNTIME_KIND,
+          methods.agent.initialize,
+          `ACP protocol version mismatch: requested ${PROTOCOL_VERSION}, received ${initResult.protocolVersion}`,
+        ))
+      }
+
+      return entry
+    }
+    catch (error) {
+      connection?.close(error)
+      await this.processManager.stop(agentId)
+      throw error
+    }
+  }
+
+  private publishConnection(entry: ConnectionEntry): void {
+    this.connections.set(entry.agentId, entry)
+    entry.connection.closed.then(() => {
+      const current = this.connections.get(entry.agentId)
+      if (current !== entry) {
+        return
+      }
+      const diagnostics = this.processManager.getDiagnostics?.(entry.agentId) ?? []
+      const diagnosticDetail = diagnostics.length > 0
+        ? ` Last stderr: ${diagnostics.slice(-3).join(' | ')}`
+        : ''
+      const error = new Error(`ACP agent disconnected: ${entry.agentId}.${diagnosticDetail}`)
+      this.failConnectionChannels(entry, error)
+      this.connections.delete(entry.agentId)
+      void this.processManager.stop(entry.agentId)
+    })
+  }
+
+  private requireSelectedAuthMethod(
+    entry: ConnectionEntry,
+    methodId: string,
+  ): ProviderAuthMethod {
+    const advertisedMethods = this.projectAuthMethods(entry)
+    const method = advertisedMethods.find(candidate => candidate.id === methodId)
+    const invalid = !method || method.status !== 'supported'
+
+    if (invalid || !method) {
+      throw new ProviderRuntimeError(ProviderErrors.authRequired(
+        ACP_RUNTIME_KIND,
+        advertisedMethods,
+        entry.configurationTarget,
+      ))
+    }
+
+    return method
+  }
+
+  private resolveRemoteHeaders(secretRefs: Record<string, string>): Record<string, string> {
+    try {
+      return Object.fromEntries(Object.entries(secretRefs).map(([name, ref]) => [name, this.readSecret(ref)]))
+    }
+    catch (error) {
+      throw new ProviderRuntimeError(ProviderErrors.authFailed(ACP_RUNTIME_KIND), { cause: error })
+    }
+  }
+
+  private projectAuthMethods(entry: ConnectionEntry): ProviderAuthMethod[] {
+    return projectAcpAuthMethods(entry.initResult?.authMethods ?? [])
+  }
+
+  private async closeUnpublishedConnection(entry: ConnectionEntry): Promise<void> {
+    entry.connection.close()
+    await this.processManager.stop(entry.agentId)
+  }
+
+  private async requestWithDeadline<T>(input: {
+    conn: ConnectionEntry
+    operation: string
+    timeoutMs: number
+    sessionId?: string
+    abortController?: AbortController
+    mapAuthRequired?: boolean
+    request: (signal: AbortSignal) => Promise<T>
+  }): Promise<T> {
+    const abortController = input.abortController ?? new AbortController()
+    const timeoutError = new ProviderRuntimeError(ProviderErrors.requestFailed(
+      ACP_RUNTIME_KIND,
+      input.operation,
+      `ACP ${input.operation} timed out after ${input.timeoutMs}ms`,
+    ))
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    const requestPromise = Promise.resolve().then(() => input.request(abortController.signal))
+    void requestPromise.catch(() => {})
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(reject, input.timeoutMs, timeoutError)
+    })
+
+    try {
+      return await Promise.race([requestPromise, timeoutPromise])
+    }
+    catch (error) {
+      if (error === timeoutError) {
+        abortController.abort(timeoutError)
+        if (input.sessionId) {
+          await settleBestEffort(
+            input.conn.agent.notify(methods.agent.session.cancel, { sessionId: input.sessionId }),
+            50,
+          )
+        }
+        await this.invalidateConnection(input.conn, timeoutError)
+        throw timeoutError
+      }
+      if (error instanceof ProviderRuntimeError) {
+        throw error
+      }
+      if (error instanceof RequestError && error.code === -32000 && input.mapAuthRequired !== false) {
+        input.conn.authenticatedMethodId = null
+        throw new ProviderRuntimeError(
+          ProviderErrors.authRequired(
+            ACP_RUNTIME_KIND,
+            this.projectAuthMethods(input.conn),
+            input.conn.configurationTarget,
+          ),
+          { cause: sanitizedRequestError(error) },
+        )
+      }
+      const detail = error instanceof RequestError
+        ? `ACP ${input.operation} failed with JSON-RPC code ${error.code}`
+        : `ACP ${input.operation} failed`
+      throw new ProviderRuntimeError(
+        ProviderErrors.requestFailed(ACP_RUNTIME_KIND, input.operation, detail),
+        { cause: error instanceof RequestError ? sanitizedRequestError(error) : sanitizedUnknownError(input.operation) },
+      )
+    }
+    finally {
+      if (timeout) {
+        clearTimeout(timeout)
+      }
+    }
+  }
+
+  private async invalidateConnection(conn: ConnectionEntry, error: Error): Promise<void> {
+    if (this.connections.get(conn.agentId) === conn) {
+      this.connections.delete(conn.agentId)
+    }
+    this.failConnectionChannels(conn, error)
+    conn.connection.close(error)
+    await this.processManager.stop(conn.agentId)
+  }
+
+  private getConnection(agentId: string): ConnectionEntry {
+    const conn = this.connections.get(agentId)
+    if (!conn) {
+      throw new Error(`Agent ${agentId} is not connected`)
+    }
+    return conn
+  }
+
+  private closeChannel(conn: ConnectionEntry, sessionId: string, reason: SessionChannel['closedBy']): void {
+    if (!reason) {
+      return
+    }
+
+    const channel = conn.channels.get(sessionId)
+    if (!channel || channel.closedBy) {
+      return
+    }
+
+    channel.closedBy = reason
+    conn.channels.delete(sessionId)
+
+    if (reason.kind === 'cancelled') {
+      channel.queue.close()
+      return
+    }
+
+    channel.queue.fail(reason.error)
+  }
+
+  private failConnectionChannels(conn: ConnectionEntry, error: Error): void {
+    for (const sessionId of [...conn.channels.keys()]) {
+      this.closeChannel(conn, sessionId, { kind: 'disconnected', error })
+    }
+  }
+
+  private cacheSessionState(
+    conn: ConnectionEntry,
+    sessionId: string,
+    response: AcpSessionState,
+  ): void {
+    conn.sessionStates.set(sessionId, response)
+  }
+
+  private async handlePermissionRequest(
+    agentId: string,
+    params: RequestPermissionRequest,
+  ): Promise<RequestPermissionResponse> {
+    if (!this.permissionHandler) {
+      return { outcome: { outcome: 'cancelled' } }
+    }
+
+    const request: AcpPermissionRequest = {
+      agentId,
+      sessionId: params.sessionId,
+      providerMethod: 'requestPermission',
+      providerRequestId: `server-request-acp-${randomUUID()}`,
+      toolCallId: params.toolCall.toolCallId,
+      toolTitle: params.toolCall.title ?? 'Unknown operation',
+      options: params.options.map(option => ({
+        optionId: option.optionId,
+        name: option.name,
+        kind: option.kind,
+      })),
+    }
+    const runtimeContext = this.promptRuntimeContexts.get(toUsageKey(agentId, params.sessionId))
+    if (runtimeContext) {
+      request.runtimeContext = runtimeContext
+    }
+
+    const channel = this.connections.get(agentId)?.channels.get(params.sessionId)
+    channel?.queue.push(providerChunk.toolInputAvailable({
+      toolCallId: request.toolCallId,
+      toolName: request.toolTitle,
+      input: buildAcpToolInput(params.toolCall, request.toolTitle, request.options.map(option => ({
+        optionId: option.optionId,
+        label: option.name,
+        kind: option.kind as 'allow_once' | 'allow_always' | 'reject_once' | 'reject_always',
+      }))),
+    }))
+    channel?.queue.push(providerChunk.toolApprovalRequest(request.toolCallId, request.providerRequestId))
+
+    const response = await this.permissionHandler(request)
+    if (response.outcome === 'cancelled') {
+      return { outcome: { outcome: 'cancelled' } }
+    }
+
+    return {
+      outcome: {
+        outcome: 'selected',
+        optionId: response.optionId ?? '',
+      },
+    }
+  }
+
+  private handleSessionUpdate(agentId: string, params: SessionNotification): void {
+    const conn = this.connections.get(agentId)
+    const state = conn?.sessionStates.get(params.sessionId)
+    if (params.update.sessionUpdate === 'session_info_update') {
+      if (params.update.title) {
+        if (state) {
+          state.title = params.update.title
+        }
+        for (const handler of [...this.sessionTitleHandlers]) {
+          try {
+            handler(params.sessionId, params.update.title)
+          }
+          catch {
+            // handlers must not break ACP session processing
+          }
+        }
+      }
+      return
+    }
+
+    if (params.update.sessionUpdate === 'config_option_update') {
+      if (state) {
+        state.configOptions = params.update.configOptions
+      }
+      return
+    }
+
+    if (state && this.applySessionStateUpdate(state, params.update)) {
+      return
+    }
+
+    if (conn?.restoringSessionLoads.has(params.sessionId)) {
+      return
+    }
+
+    const channel = conn?.channels.get(params.sessionId)
+    if (!channel) {
+      return
+    }
+
+    for (const event of channel.mapper.convert(params.update)) {
+      channel.queue.push(event)
+    }
+  }
+
+  private applySessionStateUpdate(state: AcpSessionState, update: SessionUpdate): boolean {
+    switch (update.sessionUpdate) {
+      case 'available_commands_update':
+        state.availableCommands = update.availableCommands
+        return true
+      case 'current_mode_update':
+        if (state.modes) { state.modes.currentModeId = update.currentModeId }
+        return true
+      case 'usage_update':
+        state.contextUsage = { used: update.used, size: update.size, cost: update.cost }
+        return true
+      case 'plan':
+        state.plans = [{ id: 'default', content: null, uri: null, entries: update.entries }]
+        return true
+      case 'plan_update': {
+        const plan = update.plan.type === 'items'
+          ? { id: update.plan.planId, content: null, uri: null, entries: update.plan.entries }
+          : update.plan.type === 'markdown'
+            ? { id: update.plan.planId, content: update.plan.content, uri: null, entries: [] }
+            : { id: update.plan.planId, content: null, uri: update.plan.uri, entries: [] }
+        state.plans = [...state.plans.filter(item => item.id !== plan.id), plan]
+        return true
+      }
+      case 'plan_removed':
+        state.plans = state.plans.filter(plan => plan.id !== update.planId)
+        return true
+      case 'user_message_chunk':
+        return true
+      default:
+        return false
+    }
+  }
+
+  private async readClientTextFile(
+    path: string,
+    line: number | null | undefined,
+    limit: number | null | undefined,
+  ): Promise<{ content: string }> {
+    const content = await fsp.readFile(path, 'utf-8')
+    if (line === undefined || line === null) {
+      return { content }
+    }
+
+    const start = Math.max(0, line - 1)
+    const lines = content.split('\n')
+    const end = limit === undefined || limit === null ? undefined : start + Math.max(0, limit)
+    return { content: lines.slice(start, end).join('\n') }
+  }
+
+  private requestSessionConfigOption(
+    agent: ClientContext,
+    params: SetSessionConfigOptionRequest,
+    cancellationSignal: AbortSignal,
+  ): Promise<SetSessionConfigOptionResponse> {
+    return agent.request<SetSessionConfigOptionResponse, SetSessionConfigOptionRequest>(
+      methods.agent.session.setConfigOption,
+      params,
+      { cancellationSignal },
+    )
+  }
+
+  private async requestClientFileWriteApproval(agentId: string, sessionId: string, targetPath: string): Promise<void> {
+    if (!this.permissionHandler) {
+      throw new Error('ACP file write requires an approval handler before writing client filesystem paths')
+    }
+
+    const request: AcpPermissionRequest = {
+      agentId,
+      sessionId,
+      providerMethod: 'client.writeTextFile',
+      providerRequestId: `server-request-acp-${randomUUID()}`,
+      toolCallId: `acp-file-write-${randomUUID()}`,
+      toolTitle: [
+        'ACP agent requested a non-Cradle-owned filesystem write.',
+        `Target path: ${targetPath}`,
+        'Owner boundary: client filesystem outside Cradle-owned data.',
+      ].join(' '),
+      options: [
+        { optionId: 'allow_file_write_once', name: 'Allow write once', kind: 'allow_once' },
+        { optionId: 'reject_file_write_once', name: 'Deny write', kind: 'reject_once' },
+      ],
+    }
+    const runtimeContext = this.promptRuntimeContexts.get(toUsageKey(agentId, sessionId))
+    if (runtimeContext) {
+      request.runtimeContext = runtimeContext
+    }
+
+    this.emitClientApprovalRequest(request, {
+      apiName: 'write_text_file',
+      kind: 'file-diff',
+      args: { path: targetPath, operation: 'write' },
+    })
+
+    const response = await this.permissionHandler(request)
+
+    if (response.outcome !== 'selected' || response.optionId !== 'allow_file_write_once') {
+      throw new Error('User denied ACP client filesystem write')
+    }
+  }
+
+  private async requestClientFileReadApproval(agentId: string, sessionId: string, targetPath: string): Promise<void> {
+    if (!this.permissionHandler) {
+      throw new Error('ACP file read requires an approval handler before reading client filesystem paths')
+    }
+    const request: AcpPermissionRequest = {
+      agentId,
+      sessionId,
+      providerMethod: 'client.readTextFile',
+      providerRequestId: `server-request-acp-${randomUUID()}`,
+      toolCallId: `acp-file-read-${randomUUID()}`,
+      toolTitle: `ACP agent requested client filesystem read: ${targetPath}`,
+      options: [
+        { optionId: 'allow_file_read_once', name: 'Allow read once', kind: 'allow_once' },
+        { optionId: 'reject_file_read_once', name: 'Deny read', kind: 'reject_once' },
+      ],
+    }
+    const runtimeContext = this.promptRuntimeContexts.get(toUsageKey(agentId, sessionId))
+    if (runtimeContext) { request.runtimeContext = runtimeContext }
+    this.emitClientApprovalRequest(request, {
+      apiName: 'read_text_file',
+      kind: 'file-read',
+      args: { path: targetPath, operation: 'read' },
+    })
+    const response = await this.permissionHandler(request)
+    if (response.outcome !== 'selected' || response.optionId !== 'allow_file_read_once') {
+      throw new Error('User denied ACP client filesystem read')
+    }
+  }
+
+  private async requestClientTerminalApproval(
+    agentId: string,
+    sessionId: string,
+    command: string,
+    args: string[],
+    cwd: string | null | undefined,
+  ): Promise<void> {
+    if (!this.permissionHandler) { throw new Error('ACP terminal execution requires an approval handler') }
+    const request: AcpPermissionRequest = {
+      agentId,
+      sessionId,
+      providerMethod: 'terminal/create',
+      providerRequestId: `server-request-acp-${randomUUID()}`,
+      toolCallId: `acp-terminal-${randomUUID()}`,
+      toolTitle: `Run ${[command, ...args].join(' ')}${cwd ? ` in ${cwd}` : ''}`,
+      options: [
+        { optionId: 'allow_terminal_once', name: 'Run once', kind: 'allow_once' },
+        { optionId: 'reject_terminal_once', name: 'Deny', kind: 'reject_once' },
+      ],
+    }
+    const runtimeContext = this.promptRuntimeContexts.get(toUsageKey(agentId, sessionId))
+    if (runtimeContext) { request.runtimeContext = runtimeContext }
+    this.emitClientApprovalRequest(request, {
+      apiName: 'terminal_create',
+      kind: 'terminal',
+      args: { command, args, cwd: cwd ?? null },
+    })
+    const response = await this.permissionHandler(request)
+    if (response.outcome !== 'selected' || response.optionId !== 'allow_terminal_once') {
+      throw new Error('User denied ACP terminal execution')
+    }
+  }
+
+  private emitClientApprovalRequest(
+    request: AcpPermissionRequest,
+    tool: { apiName: string, kind: 'file-diff' | 'file-read' | 'terminal', args: unknown },
+  ): void {
+    const channel = this.connections.get(request.agentId)?.channels.get(request.sessionId)
+    if (!channel) { return }
+    channel.queue.push(providerChunk.toolInputStart(request.toolCallId, request.toolTitle))
+    channel.queue.push(providerChunk.toolInputAvailable({
+      toolCallId: request.toolCallId,
+      toolName: request.toolTitle,
+      input: createBuiltinToolCallInputPayload({
+        identifier: 'acp',
+        apiName: tool.apiName,
+        kind: tool.kind,
+        args: tool.args,
+        approvalOptions: request.options.map(option => ({
+          optionId: option.optionId,
+          label: option.name,
+          kind: option.kind as 'allow_once' | 'allow_always' | 'reject_once' | 'reject_always',
+        })),
+      }),
+    }))
+    channel.queue.push(providerChunk.toolApprovalRequest(request.toolCallId, request.providerRequestId))
+  }
+}
+
+function toUsageKey(agentId: string, sessionId: string): string {
+  return `${agentId}:${sessionId}`
+}
+
+function toTokenUsage(response: PromptResponse | null): TokenUsage | null {
+  const usage = readUsage(response)
+  if (!usage) {
+    return null
+  }
+  return {
+    promptTokens: usage.inputTokens ?? 0,
+    completionTokens: usage.outputTokens ?? 0,
+    totalTokens: usage.totalTokens ?? 0,
+  }
+}
+
+function mapAcpStopReason(reason: StopReason): Extract<UIMessageChunk, { type: 'finish' }>['finishReason'] {
+  switch (reason) {
+    case 'end_turn':
+      return 'stop'
+    case 'max_tokens':
+      return 'length'
+    case 'max_turn_requests':
+      return 'other'
+    case 'refusal':
+      return 'content-filter'
+    case 'cancelled':
+      return 'other'
+  }
+}
+
+function readUsage(response: PromptResponse | null): {
+  inputTokens?: number | null
+  outputTokens?: number | null
+  totalTokens?: number | null
+} | null {
+  return response?.usage ?? null
+}
+
+interface AcpSessionResponseFields {
+  modes?: SessionModeState | null
+  models?: AcpSessionModelState | null
+  configOptions?: SessionConfigOption[] | null
+}
+
+function readAcpSessionState(response: AcpSessionResponseFields): AcpSessionState {
+  return {
+    title: null,
+    modes: response.modes ?? null,
+    models: readAcpSessionModelState(response.models),
+    configOptions: response.configOptions ?? [],
+    availableCommands: [],
+    plans: [],
+    contextUsage: null,
+  }
+}
+
+function readAcpSessionModelState(models: AcpSessionModelState | null | undefined): AcpSessionModelState | null {
+  if (!models || !Array.isArray(models.availableModels) || typeof models.currentModelId !== 'string') {
+    return null
+  }
+  return models
+}
+
+type AcpSelectConfigOption = Extract<SessionConfigOption, { type: 'select' }>
+
+function isModelConfigOption(option: SessionConfigOption): option is AcpSelectConfigOption {
+  return option.type === 'select' && option.category === 'model'
+}
+
+function hasConfigValue(option: AcpSelectConfigOption, value: string): boolean {
+  return option.options.some(entry => 'options' in entry
+    ? entry.options.some(item => item.value === value)
+    : entry.value === value)
+}
+
+function formatSessionConfigOptionValue(value: string | boolean): { type: 'boolean', value: boolean } | { value: string } {
+  return typeof value === 'boolean'
+    ? { type: 'boolean', value }
+    : { value }
+}
+
+async function settleBestEffort(operation: Promise<unknown>, timeoutMs: number): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      operation.catch(() => {}),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, timeoutMs)
+      }),
+    ])
+  }
+  finally {
+    if (timeout) {
+      clearTimeout(timeout)
+    }
+  }
+}
+
+function sanitizedRequestError(error: RequestError): RequestError {
+  return new RequestError(error.code, `ACP JSON-RPC request failed with code ${error.code}`)
+}
+
+function sanitizedUnknownError(operation: string): Error {
+  return new Error(`ACP ${operation} failed without a JSON-RPC error code`)
+}
