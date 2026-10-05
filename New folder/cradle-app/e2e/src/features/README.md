@@ -1,0 +1,75 @@
+<!-- Once this directory changes, update this README.md -->
+
+# E2E Feature Inventory
+
+This directory owns the executable user-journey inventory. The broader module and state-combination audit lives in [`../../COVERAGE.md`](../../COVERAGE.md). Retired scenarios live in `e2e/_archive/features/` and are not part of the active suite.
+
+The active suite contains 86 scenarios: 24 `@P0` smoke journeys and 62 `@P1` deeper journeys. Every scenario is tagged `@essence`, one priority, one runtime owner, and one stable `@CRADLE-*` ID.
+
+| Feature | Stable IDs | Journey boundary |
+| --- | --- | --- |
+| `agent-identity.feature` | `CRADLE-AGENT-ID-001` | Agent identity create and delete |
+| `agent-runtimes.feature` | `CRADLE-ACP-001` | Local ACP launch-config validation, canonical create/update persistence across reload, and deletion |
+| `assets.feature` | `CRADLE-ASSET-001` | Issue description image upload, Cradle asset persistence, rendered content, and reload recovery |
+| `automation.feature` | `CRADLE-AUTO-001`–`002` | Real Agent completion and cancellation across triage, artifacts, reload, and linked Sessions |
+| `await.feature` | `CRADLE-AWAIT-001`–`002` | Persistent JavaScript Await resume plus cancelled/expired terminal-state rejection across a Server crash |
+| `chat.feature` | `CRADLE-CHAT-001`–`007`, `009`–`014` | Claude multi-turn, stop, failure recovery, reload, queue management, application-process recovery, reasoning, session lifecycle, parallel tool blocks with incremental tool input, redacted thinking, and mid-stream disconnect recovery |
+| `claude-agent.feature` | `CRADLE-AGENT-001`, `002`, `004` | Real Claude Agent approval allow/deny and Read tool loop |
+| `claude-agent-tools.feature` | `CRADLE-AGENT-005`–`010` | Tool matrix over canonical kinds plus persisted Artifact create/update, panel rendering, and reload recovery |
+| `codex.feature` | `CRADLE-CODEX-001`–`004`, `009` | Real Codex app-server single/multi-turn, rollback, transient `btw` isolation across reload and the next main turn, and title generation through an independent provider during an active turn |
+| `codex-tools.feature` | `CRADLE-CODEX-005`–`008` | Real Codex local tool execution: shell command round-trip, `update_plan` execution with result crossing back, apply_patch file change, and sandbox-escape approval |
+| `composer.feature` | `CRADLE-COMP-003` | Bang command execution and persisted output |
+| `context.feature` | `CRADLE-CONTEXT-001` | `@mention` filesystem context carried into the provider request |
+| `diff.feature` | `CRADLE-DIFF-001` | Real uncommitted diff review and external refresh |
+| `external-session-import.feature` | `CRADLE-IMPORT-001` | Read-only Claude history discovery, Cradle-owned import, reload persistence, and duplicate prevention |
+| `first-run.feature` | `CRADLE-FIRST-RUN-001` | Clean-install onboarding through first Claude reply |
+| `git.feature` | `CRADLE-GIT-001`, `002` | Header branch state, picker, create, and switch |
+| `issue-agent.feature` | `CRADLE-ISSUE-AGENT-001`–`004` | Delegation completion/rerun, active-run cancellation, isolated Work, and retained cancellation audit state |
+| `issue-bulk-actions.feature` | `CRADLE-ISSUE-BULK-001` | Multi-select priority and status updates, selection cleanup, and reload persistence |
+| `issue-hierarchy.feature` | `CRADLE-ISSUE-HIERARCHY-001` | Parent-created sub-issue persistence, bidirectional navigation, board projection, and deletion cleanup |
+| `issue-relations.feature` | `CRADLE-ISSUE-RELATION-001` | Directed blocker creation, reload persistence, inverse navigation, and removal from either Issue |
+| `issue-search.feature` | `CRADLE-SEARCH-002` | Issue search navigation, rename invalidation, new-title discovery, and detail persistence across reload |
+| `mcp-servers.feature` | `CRADLE-MCP-001` | Local MCP validation, secret-safe create/update persistence, disable, and confirmed deletion across reload |
+| `plugins.feature` | `CRADLE-PLUGIN-001` | npm source preview/install, explicit trust, visible Web panel activation, disable, re-enable, and reload persistence |
+| `personal-plugins.feature` | `CRADLE-PLUGIN-002` | Real Agent-authored build, immutable personal install, originating-chat review, failed-update preservation, checksum-bound re-review, Web activation, and reload persistence |
+| `provider.feature` | `CRADLE-PROVIDER-001`–`003` | Anthropic profile create, use, disable, and delete, including active-run cancellation and queued continuation removal |
+| `search.feature` | `CRADLE-SEARCH-001`, `003` | Session result navigation and command execution |
+| `session-archive.feature` | `CRADLE-SESSION-ARCHIVE-001` | Session archive mutation, archived-list search and reload persistence, restoration, and complete conversation recovery |
+| `session-export.feature` | `CRADLE-SESSION-EXPORT-001` | Imported Session ZIP download, deterministic identity, and complete JSON/Markdown contents across reload |
+| `session-groups.feature` | `CRADLE-SESSION-GROUP-001` | Session-backed group creation, rename, expanded-state and membership persistence, then non-destructive group deletion across reload |
+| `settings.feature` | `CRADLE-SETTINGS-001`, `CRADLE-SERVER-001` | Theme persistence plus Server Endpoint validation, health probing, custom connection reload, and default recovery |
+| `skills.feature` | `CRADLE-SKILL-001` | Workspace Skill creation, explicit Claude Agent invocation, reload persistence, deletion, and retained Session evidence |
+| `storage.feature` | `CRADLE-STORAGE-001` | Active-session protection plus transcript purge and full deletion across reload |
+| `stream-vocabulary.feature` | `CRADLE-CHAT-011`–`013` | Stream wire vocabulary: parallel tool_use blocks, chunked tool input, redacted thinking + ping, mid-stream disconnect |
+| `tabs.feature` | `CRADLE-TAB-001` | Two live chats switch, reload, and close without content bleed |
+| `terminal.feature` | `CRADLE-PTY-001`, `002` | Workspace PTY and multi-session input routing |
+| `usage.feature` | `CRADLE-USAGE-001` | Exact usage aggregation, remembered range, CSV export, and reload after a real Agent run |
+| `work.feature` | `CRADLE-WORK-001`–`003`, `CRADLE-WS-004`–`005` | Isolated Work, managed worktree, provider failure/stop recovery, real file mutation, persisted primary thread, and destructive Workspace cleanup |
+| `workspace-editor.feature` | `CRADLE-WORKSPACE-EDITOR-001` | Workspace file-tree open, in-app edit/save, real filesystem write, and editor restoration across reload |
+| `workspace-migration.feature` | `CRADLE-WS-006` | Dry-run preview and atomic Issue, Kanban, and Automation ownership migration across reload |
+| `workspace-kanban.feature` | `CRADLE-WS-001`–`003`, `CRADLE-KANBAN-001`–`003`, `CRADLE-CHAT-008` | Workspace directory flow, overview, lifecycle, board, issue, and search |
+
+## Tags
+
+- `@essence`: the curated active suite.
+- `@P0`: release-blocking smoke journey with high fan-out or destructive state risk.
+- `@P1`: deeper state branch in the active suite.
+- `@first-run`: scenario starts without setup persistence.
+- `@CRADLE-*`: stable scenario identity used by reports and focused runs.
+- `@runtime-claude`, `@runtime-codex`, `@runtime-none`: the single execution lane that owns the scenario.
+- `@serial`: native runtime host traffic for the scenario must remain serial inside its lane.
+
+Feature prose describes observable user behavior. Provider scripts, exact request matching, temporary repositories, and other deterministic setup belong in support helpers rather than in Gherkin.
+
+## Dedicated process suites
+
+| Suite | Stable IDs | Journey boundary | Command |
+| --- | --- | --- | --- |
+| [`fabric-two-node.spec.ts`](../fabric/fabric-two-node.spec.ts) | `CRADLE-FABRIC-001` | Real relayd, two independent Cradle Server databases, UI pairing, bidirectional Workspace, Chat, Node-owned Work/worktree routing, remote tool approval and continuation in both directions, cross-controller Session discovery, and reconnect recovery | `pnpm e2e:fabric` |
+| [`fabric-two-node.spec.ts`](../fabric/fabric-two-node.spec.ts) + [`mobile/maestro`](../../mobile/maestro) | `CRADLE-FABRIC-002` | Release iOS app enrollment, two-Node Controller grants, Node-scoped Workspace caches, native Node switching and Chat SSE, one-grant removal, and whole-Controller revocation | `pnpm e2e:fabric:mobile:ios` |
+
+Fabric uses a dedicated Playwright configuration because its acceptance
+boundary requires three long-lived backend processes and two browser contexts.
+The Mobile suite adds a signed Release app and an ephemeral iOS Simulator driven
+by Maestro. Both run as separate PR jobs rather than changing the Cucumber
+scenario count or priority tags above.
