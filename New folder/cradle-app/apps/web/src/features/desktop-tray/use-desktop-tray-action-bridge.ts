@@ -1,0 +1,161 @@
+import type { QueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
+import { useCallback, useEffect } from 'react'
+
+import { getChatSessionsBySessionIdMessagesQueryKey } from '~/api-gen/@tanstack/react-query.gen'
+import { runtimeUiSlotStatesQueryKey } from '~/features/chat/capabilities/chat-capabilities'
+import { runtimeSettingsQueryKey } from '~/features/chat/commands/runtime-settings-command'
+import { refreshSessionProjections } from '~/features/session/api/session-projection'
+import { WORKSPACES_QUERY_KEY } from '~/features/workspace/use-workspace'
+import { usePluginStore } from '~/lib/plugin-store'
+import {
+  openAutomation,
+  openAwaits,
+  openChatSession,
+  openHome,
+  openNewChat,
+  openPluginPanel,
+  openSettingsSection,
+  openUsage,
+  openWorkspaceDetail,
+} from '~/navigation/navigation-commands'
+import { useSettingsOverlayStore } from '~/store/settings-overlay'
+
+import type { TrayActionRequest } from './types'
+
+interface DesktopTrayActionBridgeOptions {
+  onOpenGlobalSearch: () => void
+}
+
+function readChatSessionIdFromPayload(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') {
+    return null
+  }
+  const { sessionId } = payload as { sessionId?: unknown }
+  if (typeof sessionId !== 'string' || sessionId.length === 0) {
+    return null
+  }
+  return sessionId
+}
+
+function readWorkspaceIdFromPayload(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') {
+    return null
+  }
+  const { workspaceId } = payload as { workspaceId?: unknown }
+  if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
+    return null
+  }
+  return workspaceId
+}
+
+function openChatFromPayload(payload: unknown): boolean {
+  const sessionId = readChatSessionIdFromPayload(payload)
+  if (!sessionId) {
+    return false
+  }
+  openChatSession(sessionId)
+  return true
+}
+
+function refreshChatSessionQueries(queryClient: QueryClient, sessionId: string): void {
+  void queryClient.invalidateQueries({
+    queryKey: getChatSessionsBySessionIdMessagesQueryKey({ path: { sessionId } }),
+  })
+  void refreshSessionProjections(queryClient, sessionId)
+  void queryClient.invalidateQueries({ queryKey: runtimeUiSlotStatesQueryKey(sessionId) })
+  void queryClient.invalidateQueries({ queryKey: runtimeSettingsQueryKey(sessionId) })
+}
+
+function openSettingsRouteSection(section: string): void {
+  const settingsStore = useSettingsOverlayStore.getState()
+  settingsStore.setSettingsSection(section)
+  openSettingsSection(section)
+}
+
+function openFirstPluginPanel(): boolean {
+  const firstPanel = usePluginStore.getState().panels[0]
+  if (!firstPanel) {
+    return false
+  }
+  openPluginPanel({
+    routeSegment: firstPanel.routeSegment,
+    localId: firstPanel.localId,
+  })
+  return true
+}
+
+export function useDesktopTrayActionBridge({ onOpenGlobalSearch }: DesktopTrayActionBridgeOptions): void {
+  const queryClient = useQueryClient()
+  const handleRequest = useCallback((rawRequest: unknown) => {
+    const request = rawRequest as TrayActionRequest
+
+    switch (request.actionId) {
+      case 'open-chat':
+        openChatFromPayload(request.payload)
+        return
+      case 'chat-session-updated': {
+        const sessionId = readChatSessionIdFromPayload(request.payload)
+        if (sessionId) {
+          refreshChatSessionQueries(queryClient, sessionId)
+        }
+        return
+      }
+      case 'new-chat':
+        openNewChat()
+        return
+      case 'global-search':
+        onOpenGlobalSearch()
+        return
+      case 'open-awaits':
+        openAwaits()
+        return
+      case 'open-automation':
+        openAutomation()
+        return
+      case 'open-workspaces':
+        openHome()
+        return
+      case 'open-workspace': {
+        const workspaceId = readWorkspaceIdFromPayload(request.payload)
+        if (workspaceId) {
+          // CLI may have just registered the workspace; refresh list so sidebar
+          // / search see it even when detail is opened by id alone.
+          void queryClient.invalidateQueries({ queryKey: WORKSPACES_QUERY_KEY })
+          openWorkspaceDetail(workspaceId)
+        }
+        return
+      }
+      case 'open-agents':
+        openSettingsRouteSection('agents')
+        return
+      case 'open-providers':
+        openSettingsRouteSection('providers')
+        return
+      case 'open-usage':
+        openUsage()
+        return
+      case 'open-plugins':
+        if (!openFirstPluginPanel()) {
+          openSettingsRouteSection('skills')
+        }
+        return
+      case 'open-desktop-settings':
+        openSettingsRouteSection('desktop')
+
+      case 'open-app':
+      case 'quit':
+    }
+  }, [onOpenGlobalSearch, queryClient])
+
+  useEffect(() => {
+    const unsubscribe = window.cradle?.desktopTray?.onActionRequested(handleRequest)
+
+    void window.cradle?.desktopTray?.consumePendingActionRequests?.().then((requests) => {
+      for (const request of requests as TrayActionRequest[]) {
+        handleRequest(request)
+      }
+    })
+    return unsubscribe ?? undefined
+  }, [handleRequest])
+}
