@@ -1,0 +1,43 @@
+name: 'Setup pnpm & Node.js'
+description: 'Install pnpm, set up Node.js, and install dependencies with cache'
+
+inputs:
+  node-version:
+    description: Node.js version to use
+    default: 24
+  install-deps:
+    description: Whether to run pnpm install
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v4
+
+    - name: Setup Node.js
+      if: runner.os != 'Windows'
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: pnpm
+
+    # Windows + enableGlobalVirtualStore is flaky under restored pnpm store caches:
+    # electron postinstall hits EPERM realpathSync on D:\.pnpm-store\v11\links\@\electron\...
+    - name: Setup Node.js (Windows, no store cache)
+      if: runner.os == 'Windows'
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install dependencies
+      if: inputs.install-deps == 'true' && runner.os != 'Windows'
+      run: pnpm install --frozen-lockfile --prefer-offline
+      shell: bash
+
+    - name: Install dependencies (Windows)
+      if: inputs.install-deps == 'true' && runner.os == 'Windows'
+      # Keep GVS for local worktrees; disable it on Windows CI where store
+      # junctions + electron install.js resolve are unreliable.
+      run: pnpm install --frozen-lockfile --prefer-offline --config.enable-global-virtual-store=false
+      shell: bash
