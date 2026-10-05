@@ -1,0 +1,199 @@
+name: Daily E2E
+
+on:
+  # Run every day at 02:00 UTC (10:00 CST)
+  schedule:
+    - cron: '0 2 * * *'
+  # Allow manual triggering
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: E2E priority suite to execute in every runtime lane
+        required: true
+        type: choice
+        options: [full, smoke]
+        default: full
+      source_ref:
+        description: Git ref from wibus-wee/cradle-app to test
+        required: false
+        default: ''
+      ref:
+        description: Git ref in this repository to test (branch, tag, or SHA)
+        required: false
+        default: main
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: e2e-daily
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: Daily E2E ${{ matrix.lane }} (${{ github.event.inputs.suite == 'smoke' && 'P0' || 'full' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: claude-local
+            runtimeExpression: '@runtime-claude or @runtime-none'
+            parallel: '2'
+            provisionCodex: 'false'
+          - lane: codex
+            runtimeExpression: '@runtime-codex'
+            parallel: '1'
+            provisionCodex: 'true'
+
+    steps:
+      # ── Checkout & Setup ──────────────────────────────────────────────────
+      - name: Checkout Cradle source
+        uses: actions/checkout@v4
+        with:
+          repository: wibus-wee/cradle-app
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          ref: ${{ github.event.inputs.source_ref || github.event.inputs.ref || 'main' }}
+
+      - uses: ./.github/actions/setup
+        with:
+          node-version: 22
+
+      - name: Setup E2E runtime
+        uses: ./.github/actions/e2e-setup
+        with:
+          provision-codex: ${{ matrix.provisionCodex }}
+
+      - name: Run E2E tests
+        id: e2e
+        continue-on-error: true
+        uses: ./.github/actions/e2e-run
+        with:
+          tags: ${{ format('({0}) and ({1})', github.event.inputs.suite == 'smoke' && '@P0' || '@P0 or @P1', matrix.runtimeExpression) }}
+          log-sync: '1'
+          fail-on-zero-scenarios: 'true'
+          parallel: ${{ matrix.parallel }}
+
+      - name: Summarize E2E result
+        if: always()
+        env:
+          E2E_OUTCOME: ${{ steps.e2e.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TAGS_FILTER: ${{ format('({0}) and ({1})', github.event.inputs.suite == 'smoke' && '@P0' || '@P0 or @P1', matrix.runtimeExpression) }}
+        run: node e2e/scripts/summarize-run.cjs
+
+      # ── Upload Artifacts ──────────────────────────────────────────────────
+      - name: Upload E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-${{ matrix.lane }}-artifacts-${{ github.run_id }}
+          path: |
+            e2e/artifacts/ARTIFACTS.md
+            e2e/artifacts/failure-index.json
+            e2e/artifacts/cucumber-summary.txt
+            e2e/artifacts/cucumber-output.log
+            e2e/artifacts/cucumber-messages.ndjson
+            e2e/artifacts/cucumber-junit.xml
+            e2e/artifacts/e2e-summary.json
+            e2e/artifacts/e2e-summary.md
+            e2e/artifacts/e2e-performance.json
+            e2e/artifacts/e2e-performance.md
+            e2e/artifacts/scenarios/**/failure.png
+            e2e/artifacts/scenarios/**/failure.webm
+            e2e/artifacts/scenarios/**/trace.zip
+            e2e/artifacts/scenarios/**/console.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      # ── Create GitHub Issue on Failure ────────────────────────────────────
+      - name: Create failure issue
+        if: steps.e2e.outcome == 'failure'
+        uses: actions/github-script@v7
+        env:
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ARTIFACTS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ARTIFACT_NAME: e2e-${{ matrix.lane }}-artifacts-${{ github.run_id }}
+          BRANCH: ${{ github.ref_name }}
+          LANE: ${{ matrix.lane }}
+          TAGS_FILTER: ${{ format('({0}) and ({1})', github.event.inputs.suite == 'smoke' && '@P0' || '@P0 or @P1', matrix.runtimeExpression) }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { readJson, buildDailyFailureIssueBody } = require('./e2e/scripts/format-failure-issue.cjs')
+
+            const runUrl = process.env.RUN_URL
+            const artifactsUrl = process.env.ARTIFACTS_URL
+            const artifactName = process.env.ARTIFACT_NAME
+            const branch = process.env.BRANCH
+            const lane = process.env.LANE
+            const tagsFilter = process.env.TAGS_FILTER
+            const today = new Date().toISOString().split('T')[0]
+            const runId = process.env.RUN_ID
+
+            const summary = readJson('e2e/artifacts/e2e-summary.json', {
+              totalScenarios: 0,
+              passedScenarios: 0,
+              failedScenarios: [],
+              nonPassedScenarios: [],
+              resultLine: 'no parsed scenario data',
+              markdown: '_No summary file was generated. Check the raw run logs._',
+            })
+            const failureIndex = readJson('e2e/artifacts/failure-index.json', [])
+
+            const cleanBody = buildDailyFailureIssueBody({
+              today,
+              branch,
+              tagsFilter,
+              runId,
+              runUrl,
+              artifactsUrl,
+              artifactName,
+              summary,
+              failureIndex,
+            })
+
+            const existingIssues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'daily-e2e-failure',
+            })
+
+            const issueTitle = `❌ Daily E2E Failed [${lane}] — ${today}`
+            const todayIssue = existingIssues.data.find(i => i.title === issueTitle)
+
+            if (todayIssue) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: todayIssue.number,
+                body: `### Re-run failed (${new Date().toISOString()})\n\n${cleanBody}`,
+              })
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: todayIssue.number,
+                assignees: ['wibus-wee'],
+              })
+              console.log(`Appended to existing issue #${todayIssue.number}`)
+            } else {
+              const { data: issue } = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: issueTitle,
+                body: cleanBody,
+                labels: ['daily-e2e-failure', 'bug'],
+                assignees: ['wibus-wee'],
+              })
+              console.log(`Created issue #${issue.number}: ${issue.html_url}`)
+            }
+
+      # ── Fail the workflow if E2E failed ───────────────────────────────────
+      - name: Propagate E2E failure
+        if: steps.e2e.outcome == 'failure'
+        run: exit 1
