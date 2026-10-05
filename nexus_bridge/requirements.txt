@@ -1,0 +1,8 @@
+# Nexus Desktop Bridge Daemon Dependencies
+# Minimal runtime: 0 mandatory external packages (urllib & subprocess are standard library)
+# Optional packages for full desktop OS automation, mouse/keyboard piloting, and TTS:
+
+python-dotenv>=1.0.0
+pyautogui>=0.9.54
+pyttsx3>=2.90
+Pillow>=10.0.0
