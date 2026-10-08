@@ -34,10 +34,18 @@ from datetime import datetime
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 BINARIES_DIR = os.path.join(ROOT_DIR, "landing-site", "binaries")
-DIST_EXE_SOURCE = os.path.join(ROOT_DIR, "Nexus-desktop-", "dist", "nexus-ai-2.1.1-setup.exe")
+RELEASE_BINARIES_DIR = os.path.join(ROOT_DIR, "release_binaries")
+import glob
+exe_candidates = sorted(
+    glob.glob(os.path.join(ROOT_DIR, "Nexus-desktop-", "dist", "nexus-ai-*-setup.exe")),
+    key=os.path.getmtime,
+    reverse=True
+)
+DIST_EXE_SOURCE = exe_candidates[0] if exe_candidates else os.path.join(ROOT_DIR, "Nexus-desktop-", "dist", "nexus-ai-2.2.0-setup.exe")
 ICON_SOURCE = os.path.join(ROOT_DIR, "Nexus-desktop-", "build", "icon.png")
 
 os.makedirs(BINARIES_DIR, exist_ok=True)
+os.makedirs(RELEASE_BINARIES_DIR, exist_ok=True)
 
 
 def calculate_sha256(filepath: str) -> str:
@@ -55,11 +63,16 @@ def calculate_sha256(filepath: str) -> str:
 def package_windows():
     print("[1/4] Packaging Windows Desktop Installer...")
     target_exe = os.path.join(BINARIES_DIR, "nexus-setup.exe")
+    target_release_exe = os.path.join(RELEASE_BINARIES_DIR, "nexus-setup.exe")
     if os.path.exists(DIST_EXE_SOURCE):
         src_size = os.path.getsize(DIST_EXE_SOURCE)
+        print(f"  -> Source executable: {os.path.basename(DIST_EXE_SOURCE)} ({src_size / (1024*1024):.1f} MB)")
         if not os.path.exists(target_exe) or os.path.getsize(target_exe) != src_size:
-            print(f"  -> Copying {src_size / (1024*1024):.1f} MB compiled installer to {target_exe}...")
+            print(f"  -> Copying compiled installer to {target_exe}...")
             shutil.copy2(DIST_EXE_SOURCE, target_exe)
+        if not os.path.exists(target_release_exe) or os.path.getsize(target_release_exe) != src_size:
+            print(f"  -> Copying compiled installer to {target_release_exe}...")
+            shutil.copy2(DIST_EXE_SOURCE, target_release_exe)
         sha = calculate_sha256(target_exe)
         print(f"  [OK] nexus-setup.exe ready ({os.path.getsize(target_exe):,} bytes, SHA-256: {sha[:16]}...)")
     else:

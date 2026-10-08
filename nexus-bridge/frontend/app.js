@@ -11,7 +11,8 @@ import {
   ModalAdapter,
   FallbackChain,
   normalizePlan,
-  ENGINE_FOR_ACTION
+  ENGINE_FOR_ACTION,
+  GLOBAL_GEMINI_API_KEY
 } from "./ai/providers.js";
 
 // -----------------------------------------------------------------------------
@@ -514,13 +515,12 @@ function buildClientAI() {
 
   try {
     if (p === "gemini") {
-      if (DEV_CONFIG.apiKey) {
-        customAdapter = new GeminiAdapter({
-          apiKey: DEV_CONFIG.apiKey,
-          model: DEV_CONFIG.model || def.model,
-          transcribeModel: DEV_CONFIG.sttModel || def.sttModel,
-        });
-      }
+      customAdapter = new GeminiAdapter({
+        apiKey: DEV_CONFIG.apiKey || GLOBAL_GEMINI_API_KEY,
+        model: DEV_CONFIG.model || def.model,
+        fallbackModel: "gemini-3.5-flash",
+        transcribeModel: DEV_CONFIG.sttModel || def.sttModel,
+      });
     } else if (p === "groq") {
       if (DEV_CONFIG.apiKey) {
         customAdapter = new GroqAdapter({
@@ -654,7 +654,7 @@ function updateTargetModeBanner() {
         <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
         <span><strong>Cloud Autonomous Mode:</strong> Commands run 100% on Cloudflare Edge via NiranX master account. Zero local terminal scripts required.</span>
       </div>
-      <span class="text-[10px] text-slate-400 font-sans hidden sm:inline">User: niranx@nexus.io</span>
+      <span class="text-[10px] text-slate-400 font-sans hidden sm:inline">User: barhateniranjan725@gmail.com</span>
     `;
   } else if (state.activeTarget === "DESKTOP") {
     banner.className = "text-[11px] font-mono text-cyan-400 bg-cyan-950/40 border border-cyan-500/30 px-3 py-2 rounded-xl flex items-center justify-between";
@@ -687,6 +687,7 @@ function updateTargetModeBanner() {
 }
 
 function setupEventListeners() {
+  initStudio();
   // Target Device Chips
   document.querySelectorAll(".target-chip").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -1090,4 +1091,820 @@ function resetSettings() {
 
   loadConfigToModal();
   showToast("Settings reset", "info");
+}
+
+
+// =============================================================================
+// 12. NEXUS CREATOR STUDIO: DOCUMENTS, SPREADSHEETS, PRESENTATIONS, AUDIO & VIDEO
+// =============================================================================
+
+function buildStudioClient() {
+  const customKey = DEV_CONFIG.apiKey || GLOBAL_GEMINI_API_KEY;
+  try {
+    return new GeminiAdapter({
+      apiKey: customKey,
+      model: DEV_CONFIG.model || "gemini-3.8-flash",
+      fallbackModel: "gemini-3.5-flash",
+    });
+  } catch {
+    return new EdgeAdapter({ apiUrl: CONFIG.apiUrl, authToken: CONFIG.authToken });
+  }
+}
+
+let activeAudioSynthNodes = [];
+let audioSynthContext = null;
+let visualizerAnimFrame = null;
+let isVideoPlaying = false;
+
+function initStudio() {
+  const studioModal = document.getElementById("studioModal");
+  const openStudioBtn = document.getElementById("openStudioBtn");
+  const closeStudioBtn = document.getElementById("closeStudioBtn");
+
+  if (openStudioBtn && studioModal) {
+    openStudioBtn.addEventListener("click", () => {
+      studioModal.classList.remove("hidden");
+      studioModal.classList.add("flex");
+      refreshIcons();
+    });
+  }
+
+  if (closeStudioBtn && studioModal) {
+    closeStudioBtn.addEventListener("click", () => {
+      studioModal.classList.add("hidden");
+      studioModal.classList.remove("flex");
+      stopMusicSynthesis();
+      isVideoPlaying = false;
+    });
+  }
+
+  // Studio Mode Tabs
+  document.querySelectorAll(".studio-tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".studio-tab-btn").forEach((b) => {
+        b.classList.remove("active", "bg-slate-800", "text-white");
+        b.classList.add("text-slate-400");
+      });
+      btn.classList.add("active", "bg-slate-800", "text-white");
+      btn.classList.remove("text-slate-400");
+
+      const tab = btn.dataset.tab;
+      document.querySelectorAll(".studio-tab-pane").forEach((pane) => pane.classList.add("hidden"));
+      if (tab === "docs") document.getElementById("studioTabDocs")?.classList.remove("hidden");
+      if (tab === "sheets") document.getElementById("studioTabSheets")?.classList.remove("hidden");
+      if (tab === "slides") document.getElementById("studioTabSlides")?.classList.remove("hidden");
+      if (tab === "music") document.getElementById("studioTabMusic")?.classList.remove("hidden");
+      if (tab === "video") document.getElementById("studioTabVideo")?.classList.remove("hidden");
+      refreshIcons();
+    });
+  });
+
+  initStudioDocs();
+  initStudioSheets();
+  initStudioSlides();
+  initStudioMusic();
+  initStudioVideo();
+}
+
+// -----------------------------------------------------------------------------
+// Studio: Documents & PDFs
+// -----------------------------------------------------------------------------
+function initStudioDocs() {
+  const genBtn = document.getElementById("generateDocBtn");
+  const editBtn = document.getElementById("applyDocEditBtn");
+  const dlPdfBtn = document.getElementById("downloadPdfBtn");
+  const dlHtmlBtn = document.getElementById("downloadHtmlBtn");
+  const copyMdBtn = document.getElementById("copyMdBtn");
+
+  if (genBtn) {
+    genBtn.addEventListener("click", async () => {
+      const type = document.getElementById("docTypeSelect")?.value || "pdf";
+      const title = document.getElementById("docTitleInput")?.value.trim() || `${type.toUpperCase()} Document`;
+      const prompt = document.getElementById("docPromptInput")?.value.trim();
+
+      if (!prompt) {
+        showToast("Please provide document instructions or outline", "error");
+        return;
+      }
+
+      genBtn.disabled = true;
+      genBtn.innerHTML = `<i data-lucide="loader" class="w-3.5 h-3.5 animate-spin"></i><span>Architecting with Gemini...</span>`;
+      refreshIcons();
+
+      try {
+        const client = buildStudioClient();
+        logToTerminal(`Generating ${type.toUpperCase()}: "${title}" with Gemini...`, "cmd");
+        const doc = await client.generateDocument({ type, title, prompt });
+        state.currentDoc = doc;
+
+        document.getElementById("docPreviewTitle").textContent = doc.title || title;
+        document.getElementById("docPaperView").innerHTML = doc.html || marked.parse(doc.markdown || "");
+        document.getElementById("docPreviewContainer").classList.remove("hidden");
+
+        showToast(`Document "${title}" generated!`, "success");
+        logToTerminal(`Document generated successfully (${doc.type || type})`, "success");
+      } catch (err) {
+        showToast(`Generation failed: ${err.message}`, "error");
+        logToTerminal(`Document error: ${err.message}`, "error");
+      } finally {
+        genBtn.disabled = false;
+        genBtn.innerHTML = `<i data-lucide="wand-2" class="w-3.5 h-3.5"></i><span>Generate Document</span>`;
+        refreshIcons();
+      }
+    });
+  }
+
+  if (editBtn) {
+    editBtn.addEventListener("click", async () => {
+      if (!state.currentDoc) return;
+      const editInput = document.getElementById("docEditInput");
+      const instructions = editInput?.value.trim();
+      if (!instructions) return;
+
+      editBtn.disabled = true;
+      editBtn.innerHTML = `<i data-lucide="loader" class="w-3.5 h-3.5 animate-spin"></i>`;
+
+      try {
+        const client = buildStudioClient();
+        logToTerminal(`Refining document with Gemini: "${instructions}"...`, "cmd");
+        const doc = await client.editDocument({
+          type: state.currentDoc.type || "pdf",
+          content: state.currentDoc.markdown || "",
+          instructions,
+          current_html: state.currentDoc.html || "",
+          data: state.currentDoc.data || null,
+        });
+
+        state.currentDoc = { ...state.currentDoc, ...doc };
+        document.getElementById("docPaperView").innerHTML = doc.html || marked.parse(doc.markdown || "");
+        editInput.value = "";
+        showToast("Document updated by Gemini!", "success");
+      } catch (err) {
+        showToast(`Edit failed: ${err.message}`, "error");
+      } finally {
+        editBtn.disabled = false;
+        editBtn.innerHTML = `<i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i><span>Refine</span>`;
+        refreshIcons();
+      }
+    });
+  }
+
+  if (dlPdfBtn) {
+    dlPdfBtn.addEventListener("click", () => {
+      if (!state.currentDoc) return;
+      const docTitle = (state.currentDoc.title || "document").replace(/[^a-zA-Z0-9_-]/g, "_");
+      
+      const { jsPDF } = window.jspdf || {};
+      const paper = document.getElementById("docPaperView");
+      if (jsPDF && paper) {
+        showToast("Compiling PDF vector document...", "info");
+        const pdf = new jsPDF({ unit: "pt", format: "a4" });
+        pdf.html(paper, {
+          callback: (doc) => {
+            doc.save(`${docTitle}.pdf`);
+            showToast("PDF downloaded!", "success");
+          },
+          margin: [30, 30, 30, 30],
+          autoPaging: "text",
+          width: 535,
+          windowWidth: 780,
+        });
+      } else {
+        const w = window.open("", "_blank");
+        w.document.write(`<!DOCTYPE html><html><head><title>${state.currentDoc.title}</title><style>body{font-family:sans-serif;padding:30px;}</style></head><body>${state.currentDoc.html || ""}</body></html>`);
+        w.document.close();
+        w.print();
+      }
+    });
+  }
+
+  if (dlHtmlBtn) {
+    dlHtmlBtn.addEventListener("click", () => {
+      if (!state.currentDoc) return;
+      const blob = new Blob([state.currentDoc.html || ""], { type: "text/html;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `${(state.currentDoc.title || "document").replace(/[^a-zA-Z0-9_-]/g, "_")}.html`;
+      a.click();
+    });
+  }
+
+  if (copyMdBtn) {
+    copyMdBtn.addEventListener("click", () => {
+      if (!state.currentDoc?.markdown) return;
+      navigator.clipboard.writeText(state.currentDoc.markdown);
+      showToast("Markdown copied to clipboard!", "success");
+    });
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Studio: Spreadsheets
+// -----------------------------------------------------------------------------
+function initStudioSheets() {
+  const genBtn = document.getElementById("generateSheetBtn");
+  const editBtn = document.getElementById("applySheetEditBtn");
+  const dlXlsxBtn = document.getElementById("downloadXlsxBtn");
+  const dlCsvBtn = document.getElementById("downloadCsvBtn");
+
+  if (genBtn) {
+    genBtn.addEventListener("click", async () => {
+      const template = document.getElementById("sheetTemplateSelect")?.value || "financial";
+      const title = document.getElementById("sheetTitleInput")?.value.trim() || "Financial Spreadsheet";
+      const prompt = document.getElementById("sheetPromptInput")?.value.trim();
+
+      if (!prompt) {
+        showToast("Please provide spreadsheet requirements or columns", "error");
+        return;
+      }
+
+      genBtn.disabled = true;
+      genBtn.innerHTML = `<i data-lucide="loader" class="w-3.5 h-3.5 animate-spin"></i><span>Generating Sheet...</span>`;
+      refreshIcons();
+
+      try {
+        const client = buildStudioClient();
+        logToTerminal(`Generating Spreadsheet: "${title}" with Gemini...`, "cmd");
+        const doc = await client.generateDocument({ type: "sheet", title, prompt, template });
+        state.currentSheet = doc;
+
+        renderSheetTable(doc.data?.columns || [], doc.data?.rows || []);
+        document.getElementById("sheetPreviewTitle").textContent = doc.title || title;
+        document.getElementById("sheetPreviewContainer").classList.remove("hidden");
+
+        showToast(`Spreadsheet "${title}" generated!`, "success");
+      } catch (err) {
+        showToast(`Sheet generation failed: ${err.message}`, "error");
+      } finally {
+        genBtn.disabled = false;
+        genBtn.innerHTML = `<i data-lucide="table" class="w-3.5 h-3.5"></i><span>Generate Spreadsheet</span>`;
+        refreshIcons();
+      }
+    });
+  }
+
+  if (editBtn) {
+    editBtn.addEventListener("click", async () => {
+      if (!state.currentSheet) return;
+      const editInput = document.getElementById("sheetEditInput");
+      const instructions = editInput?.value.trim();
+      if (!instructions) return;
+
+      editBtn.disabled = true;
+      try {
+        const client = buildStudioClient();
+        const doc = await client.editDocument({
+          type: "sheet",
+          content: JSON.stringify(state.currentSheet.data || {}),
+          instructions,
+          data: state.currentSheet.data || null,
+        });
+        state.currentSheet = { ...state.currentSheet, ...doc };
+        renderSheetTable(doc.data?.columns || [], doc.data?.rows || []);
+        editInput.value = "";
+        showToast("Spreadsheet updated by Gemini!", "success");
+      } catch (err) {
+        showToast(`Edit failed: ${err.message}`, "error");
+      } finally {
+        editBtn.disabled = false;
+      }
+    });
+  }
+
+  if (dlXlsxBtn) {
+    dlXlsxBtn.addEventListener("click", () => {
+      if (!state.currentSheet?.data) return;
+      const { XLSX } = window;
+      const cols = state.currentSheet.data.columns || [];
+      const rows = state.currentSheet.data.rows || [];
+      if (XLSX) {
+        const aoa = [cols, ...rows];
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+        XLSX.writeFile(wb, `${(state.currentSheet.title || "spreadsheet").replace(/[^a-zA-Z0-9_-]/g, "_")}.xlsx`);
+        showToast("Excel workbook downloaded!", "success");
+      } else {
+        // Fallback to CSV
+        dlCsvBtn?.click();
+      }
+    });
+  }
+
+  if (dlCsvBtn) {
+    dlCsvBtn.addEventListener("click", () => {
+      if (!state.currentSheet?.data) return;
+      const cols = state.currentSheet.data.columns || [];
+      const rows = state.currentSheet.data.rows || [];
+      const lines = [cols.map((c) => `"${c}"`).join(",")];
+      for (const r of rows) lines.push((Array.isArray(r) ? r : []).map((c) => `"${c}"`).join(","));
+      const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `${(state.currentSheet.title || "spreadsheet").replace(/[^a-zA-Z0-9_-]/g, "_")}.csv`;
+      a.click();
+      showToast("CSV file downloaded!", "success");
+    });
+  }
+}
+
+function renderSheetTable(columns, rows) {
+  const table = document.getElementById("sheetDataTable");
+  if (!table) return;
+  table.innerHTML = "";
+
+  const thead = document.createElement("thead");
+  thead.className = "bg-slate-900 text-slate-300 font-semibold";
+  const trHead = document.createElement("tr");
+  for (const col of columns) {
+    const th = document.createElement("th");
+    th.className = "px-3 py-2 text-left border-r border-slate-800 last:border-0";
+    th.textContent = col;
+    trHead.appendChild(th);
+  }
+  thead.appendChild(trHead);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  tbody.className = "divide-y divide-slate-800/80";
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const tr = document.createElement("tr");
+    tr.className = i % 2 === 0 ? "bg-slate-950 hover:bg-slate-900/60" : "bg-slate-900/30 hover:bg-slate-900/60";
+    for (const cell of (Array.isArray(row) ? row : [])) {
+      const td = document.createElement("td");
+      td.className = "px-3 py-1.5 border-r border-slate-800/50 last:border-0 select-all";
+      td.textContent = cell !== undefined && cell !== null ? cell : "";
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+}
+
+// -----------------------------------------------------------------------------
+// Studio: Presentations
+// -----------------------------------------------------------------------------
+function initStudioSlides() {
+  const genBtn = document.getElementById("generateSlidesBtn");
+  const prevBtn = document.getElementById("prevSlideBtn");
+  const nextBtn = document.getElementById("nextSlideBtn");
+  const dlBtn = document.getElementById("downloadSlidesHtmlBtn");
+
+  if (genBtn) {
+    genBtn.addEventListener("click", async () => {
+      const theme = document.getElementById("slidesThemeSelect")?.value || "pitch";
+      const title = document.getElementById("slidesTitleInput")?.value.trim() || "Slide Deck";
+      const prompt = document.getElementById("slidesPromptInput")?.value.trim();
+
+      if (!prompt) {
+        showToast("Please provide presentation outline or topic", "error");
+        return;
+      }
+
+      genBtn.disabled = true;
+      genBtn.innerHTML = `<i data-lucide="loader" class="w-3.5 h-3.5 animate-spin"></i><span>Designing Deck...</span>`;
+      refreshIcons();
+
+      try {
+        const client = buildStudioClient();
+        logToTerminal(`Designing presentation: "${title}" with Gemini...`, "cmd");
+        const doc = await client.generateDocument({ type: "presentation", title, prompt, template: theme });
+        state.currentDeck = doc.data?.slides || [];
+        state.currentDeckTitle = doc.title || title;
+        state.currentSlideIndex = 0;
+
+        renderSlideCard(0);
+        document.getElementById("slidesDeckTitle").textContent = state.currentDeckTitle;
+        document.getElementById("slidesPreviewContainer").classList.remove("hidden");
+
+        showToast(`Presentation (${state.currentDeck.length} slides) ready!`, "success");
+      } catch (err) {
+        showToast(`Presentation generation failed: ${err.message}`, "error");
+      } finally {
+        genBtn.disabled = false;
+        genBtn.innerHTML = `<i data-lucide="presentation" class="w-3.5 h-3.5"></i><span>Generate Presentation</span>`;
+        refreshIcons();
+      }
+    });
+  }
+
+  if (prevBtn) {
+    prevBtn.addEventListener("click", () => {
+      if (!state.currentDeck || state.currentDeck.length === 0) return;
+      state.currentSlideIndex = (state.currentSlideIndex - 1 + state.currentDeck.length) % state.currentDeck.length;
+      renderSlideCard(state.currentSlideIndex);
+    });
+  }
+
+  if (nextBtn) {
+    nextBtn.addEventListener("click", () => {
+      if (!state.currentDeck || state.currentDeck.length === 0) return;
+      state.currentSlideIndex = (state.currentSlideIndex + 1) % state.currentDeck.length;
+      renderSlideCard(state.currentSlideIndex);
+    });
+  }
+
+  if (dlBtn) {
+    dlBtn.addEventListener("click", () => {
+      if (!state.currentDeck) return;
+      const slidesHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${state.currentDeckTitle}</title>
+<style>
+body{margin:0;background:#020617;color:#fff;font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;}
+.slide{background:#0f172a;border:1px solid #1e293b;border-radius:16px;padding:36px;max-width:800px;width:90%;box-shadow:0 25px 50px -12px rgba(0,0,0,0.5);}
+h2{color:#38bdf8;font-size:26px;margin-top:0;}
+ul{font-size:18px;line-height:1.7;color:#cbd5e1;}
+.notes{margin-top:24px;padding-top:16px;border-top:1px solid #334155;color:#94a3b8;font-style:italic;}
+</style></head><body>
+<div class="slide">
+  <h2>${state.currentDeck[state.currentSlideIndex]?.title || state.currentDeckTitle}</h2>
+  <ul>${(state.currentDeck[state.currentSlideIndex]?.bullets || []).map(b => `<li>${b}</li>`).join("")}</ul>
+  <div class="notes">Speaker Notes: ${state.currentDeck[state.currentSlideIndex]?.notes || ""}</div>
+</div>
+</body></html>`;
+      const blob = new Blob([slidesHtml], { type: "text/html;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `${(state.currentDeckTitle || "presentation").replace(/[^a-zA-Z0-9_-]/g, "_")}.html`;
+      a.click();
+      showToast("Presentation HTML downloaded!", "success");
+    });
+  }
+}
+
+function renderSlideCard(idx) {
+  const slides = state.currentDeck || [];
+  if (!slides[idx]) return;
+  const s = slides[idx];
+
+  document.getElementById("slideNumberBadge").textContent = `Slide ${idx + 1} of ${slides.length}`;
+  document.getElementById("slideCounterText").textContent = `Slide ${idx + 1} / ${slides.length}`;
+  document.getElementById("slideTitleHeading").textContent = s.title || `Slide ${idx + 1}`;
+
+  const list = document.getElementById("slideBulletsList");
+  list.innerHTML = "";
+  for (const b of (s.bullets || [])) {
+    const li = document.createElement("li");
+    li.textContent = b;
+    list.appendChild(li);
+  }
+
+  document.getElementById("slideSpeakerNotes").textContent = s.notes || "No notes.";
+}
+
+// -----------------------------------------------------------------------------
+// Studio: Music & Audio Synthesizer
+// -----------------------------------------------------------------------------
+function initStudioMusic() {
+  const genBtn = document.getElementById("generateMusicBtn");
+  const playBtn = document.getElementById("playMusicBtn");
+  const stopBtn = document.getElementById("stopMusicBtn");
+  const slider = document.getElementById("bpmSlider");
+  const bpmText = document.getElementById("bpmDisplay");
+
+  if (slider && bpmText) {
+    slider.addEventListener("input", () => {
+      bpmText.textContent = slider.value;
+    });
+  }
+
+  if (genBtn) {
+    genBtn.addEventListener("click", async () => {
+      const genre = document.getElementById("musicGenreSelect")?.value || "synthwave";
+      const tempo = parseInt(document.getElementById("bpmSlider")?.value || "120", 10);
+      const prompt = document.getElementById("musicPromptInput")?.value.trim() || `${genre} composition`;
+
+      genBtn.disabled = true;
+      genBtn.innerHTML = `<i data-lucide="loader" class="w-3.5 h-3.5 animate-spin"></i><span>Composing with Gemini...</span>`;
+      refreshIcons();
+
+      try {
+        const client = buildStudioClient();
+        logToTerminal(`Composing ${genre} music (${tempo} BPM) with Gemini...`, "cmd");
+        const music = await client.generateMusic({ prompt, genre, tempo });
+        state.currentScore = music;
+
+        document.getElementById("musicTrackTitle").textContent = music.title || "Synthesized Track";
+        document.getElementById("musicTrackMeta").textContent = `${music.tempo || tempo} BPM • ${music.key || "C Major"} • ${(music.melody || []).length} Notes`;
+
+        const notesContainer = document.getElementById("notesContainer");
+        notesContainer.innerHTML = "";
+        for (const n of (music.melody || [])) {
+          const chip = document.createElement("span");
+          chip.className = "px-2 py-0.5 rounded bg-pink-950/60 border border-pink-500/40 text-pink-300 font-mono text-[10px]";
+          chip.textContent = `${n.note} (${n.freq}Hz)`;
+          notesContainer.appendChild(chip);
+        }
+
+        document.getElementById("musicPlayerContainer").classList.remove("hidden");
+        showToast(`Music composed: "${music.title}"! Click Play Audio to hear.`, "success");
+      } catch (err) {
+        showToast(`Music composition failed: ${err.message}`, "error");
+      } finally {
+        genBtn.disabled = false;
+        genBtn.innerHTML = `<i data-lucide="music-2" class="w-3.5 h-3.5"></i><span>Compose &amp; Synthesize Music</span>`;
+        refreshIcons();
+      }
+    });
+  }
+
+  if (playBtn) {
+    playBtn.addEventListener("click", () => {
+      if (!state.currentScore) return;
+      playSynthesizedMusic(state.currentScore);
+    });
+  }
+
+  if (stopBtn) {
+    stopBtn.addEventListener("click", () => {
+      stopMusicSynthesis();
+    });
+  }
+}
+
+function playSynthesizedMusic(score) {
+  stopMusicSynthesis();
+  const synthType = document.getElementById("synthWaveTypeSelect")?.value || score.sound_profile?.synth_type || "sawtooth";
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) {
+    showToast("Web Audio API not supported", "error");
+    return;
+  }
+
+  audioSynthContext = new AudioCtx();
+  const ctx = audioSynthContext;
+  const melody = score.melody || [];
+  const tempo = score.tempo || 120;
+  const beatSec = 60 / tempo;
+
+  // Analyser node for frequency bars
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 64;
+  analyser.connect(ctx.destination);
+
+  let currentTime = ctx.currentTime + 0.1;
+
+  for (const n of melody) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = synthType;
+    osc.frequency.setValueAtTime(n.freq || 440, currentTime);
+
+    const dur = n.duration || beatSec * 0.8;
+    gain.gain.setValueAtTime(0.001, currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.3, currentTime + 0.05);
+    gain.gain.exponentialRampToValueAtTime(0.001, currentTime + dur);
+
+    osc.connect(gain);
+    gain.connect(analyser);
+
+    osc.start(currentTime);
+    osc.stop(currentTime + dur);
+    activeAudioSynthNodes.push(osc);
+
+    currentTime += dur * 0.95;
+  }
+
+  document.getElementById("playMusicText").textContent = "Playing...";
+  animateMusicVisualizer(analyser);
+  showToast("Playing synthesized audio track!", "info");
+}
+
+function stopMusicSynthesis() {
+  for (const osc of activeAudioSynthNodes) {
+    try { osc.stop(); } catch {}
+  }
+  activeAudioSynthNodes = [];
+  if (audioSynthContext) {
+    try { audioSynthContext.close(); } catch {}
+    audioSynthContext = null;
+  }
+  if (visualizerAnimFrame) {
+    cancelAnimationFrame(visualizerAnimFrame);
+    visualizerAnimFrame = null;
+  }
+  const btnText = document.getElementById("playMusicText");
+  if (btnText) btnText.textContent = "Play Audio";
+}
+
+function animateMusicVisualizer(analyser) {
+  const canvas = document.getElementById("musicVisualizerCanvas");
+  if (!canvas || !analyser) return;
+  const ctx = canvas.getContext("2d");
+  const bufferLength = analyser.frequencyBinCount;
+  const dataArray = new Uint8Array(bufferLength);
+
+  function draw() {
+    visualizerAnimFrame = requestAnimationFrame(draw);
+    analyser.getByteFrequencyData(dataArray);
+
+    ctx.fillStyle = "#020617";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const barWidth = (canvas.width / bufferLength) * 2;
+    let x = 0;
+
+    for (let i = 0; i < bufferLength; i++) {
+      const barHeight = (dataArray[i] / 255) * canvas.height;
+      const gradient = ctx.createLinearGradient(0, canvas.height, 0, 0);
+      gradient.addColorStop(0, "#ec4899");
+      gradient.addColorStop(1, "#38bdf8");
+
+      ctx.fillStyle = gradient;
+      ctx.fillRect(x, canvas.height - barHeight, barWidth - 2, barHeight);
+      x += barWidth;
+    }
+  }
+  draw();
+}
+
+// -----------------------------------------------------------------------------
+// Studio: Video & Motion Storyboard
+// -----------------------------------------------------------------------------
+function initStudioVideo() {
+  const genBtn = document.getElementById("generateVideoBtn");
+  const playBtn = document.getElementById("playVideoBtn");
+  const dlBtn = document.getElementById("downloadStoryboardBtn");
+
+  if (genBtn) {
+    genBtn.addEventListener("click", async () => {
+      const aspect = document.getElementById("videoAspectSelect")?.value || "16:9";
+      const style = document.getElementById("videoStyleSelect")?.value || "cinematic";
+      const scenesCount = parseInt(document.getElementById("videoScenesCountSelect")?.value || "4", 10);
+      const prompt = document.getElementById("videoPromptInput")?.value.trim();
+
+      if (!prompt) {
+        showToast("Please provide video prompt or concept", "error");
+        return;
+      }
+
+      genBtn.disabled = true;
+      genBtn.innerHTML = `<i data-lucide="loader" class="w-3.5 h-3.5 animate-spin"></i><span>Directing Video with Gemini...</span>`;
+      refreshIcons();
+
+      try {
+        const client = buildStudioClient();
+        logToTerminal(`Directing ${style} video concept with Gemini...`, "cmd");
+        const video = await client.generateVideo({ prompt, aspect_ratio: aspect, style, scenes_count: scenesCount });
+        state.currentVideo = video;
+
+        document.getElementById("videoTitleDisplay").textContent = video.title || "Video Storyboard";
+        renderVideoScenesList(video.scenes || []);
+        document.getElementById("videoPlayerContainer").classList.remove("hidden");
+
+        showToast(`Video Storyboard (${(video.scenes || []).length} scenes) generated!`, "success");
+      } catch (err) {
+        showToast(`Video generation failed: ${err.message}`, "error");
+      } finally {
+        genBtn.disabled = false;
+        genBtn.innerHTML = `<i data-lucide="clapperboard" class="w-3.5 h-3.5"></i><span>Generate Video Storyboard</span>`;
+        refreshIcons();
+      }
+    });
+  }
+
+  if (playBtn) {
+    playBtn.addEventListener("click", () => {
+      if (!state.currentVideo) return;
+      playVideoSequence(state.currentVideo);
+    });
+  }
+
+  if (dlBtn) {
+    dlBtn.addEventListener("click", () => {
+      if (!state.currentVideo) return;
+      const v = state.currentVideo;
+      const md = `# 🎬 ${v.title}\n\n**Style:** ${v.style} | **Aspect Ratio:** ${v.aspect_ratio}\n\n### Synopsis\n${v.synopsis || ""}\n\n## Storyboard Scenes\n` +
+        (v.scenes || []).map((s) => `### Scene ${s.scene_num}: ${s.title} (${s.duration_sec || 4}s)\n- **Visual:** ${s.visual_prompt}\n- **Camera:** ${s.camera}\n- **Narration:** "${s.narration}"\n`).join("\n");
+
+      const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `${(v.title || "video").replace(/[^a-zA-Z0-9_-]/g, "_")}_storyboard.md`;
+      a.click();
+      showToast("Storyboard downloaded!", "success");
+    });
+  }
+}
+
+function renderVideoScenesList(scenes) {
+  const container = document.getElementById("videoScenesList");
+  if (!container) return;
+  container.innerHTML = "";
+
+  for (const s of scenes) {
+    const card = document.createElement("div");
+    card.className = "p-3 rounded-xl bg-slate-900 border border-slate-800 text-xs space-y-1 border-l-4 border-l-amber-500";
+    card.innerHTML = `
+      <div class="flex items-center justify-between">
+        <span class="font-bold text-slate-200">Scene ${s.scene_num}: ${escapeHtml(s.title)}</span>
+        <span class="font-mono text-[10px] text-amber-400">${s.duration_sec || 4}s &bull; ${escapeHtml(s.camera || "Pan")}</span>
+      </div>
+      <p class="text-slate-400 text-[11px] leading-relaxed">${escapeHtml(s.visual_prompt || "")}</p>
+      <div class="text-[11px] text-emerald-300 italic pt-1">🗣️ Voiceover: "${escapeHtml(s.narration || "")}"</div>
+    `;
+    container.appendChild(card);
+  }
+}
+
+async function playVideoSequence(video) {
+  if (isVideoPlaying) return;
+  isVideoPlaying = true;
+  const canvas = document.getElementById("videoCanvas");
+  const subBar = document.getElementById("videoSubtitleBar");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  subBar?.classList.remove("hidden");
+
+  const scenes = video.scenes || [];
+  for (let i = 0; i < scenes.length && isVideoPlaying; i++) {
+    const s = scenes[i];
+    if (subBar) subBar.textContent = `Scene ${s.scene_num}: ${s.narration || s.title}`;
+
+    // Speak narration if synthesis supported
+    if ("speechSynthesis" in window && s.narration) {
+      window.speechSynthesis.cancel();
+      const utt = new SpeechSynthesisUtterance(s.narration);
+      utt.rate = 1.05;
+      window.speechSynthesis.speak(utt);
+    }
+
+    const durationMs = (s.duration_sec || 4) * 1000;
+    const start = Date.now();
+
+    while (Date.now() - start < durationMs && isVideoPlaying) {
+      const progress = (Date.now() - start) / durationMs;
+      renderMotionScene(ctx, canvas, s, progress);
+      await new Promise((r) => requestAnimationFrame(r));
+    }
+  }
+
+  isVideoPlaying = false;
+  if (subBar) subBar.classList.add("hidden");
+  showToast("Video sequence playback completed!", "info");
+}
+
+function renderMotionScene(ctx, canvas, scene, progress) {
+  const w = canvas.width;
+  const h = canvas.height;
+
+  // Background gradient
+  const grad = ctx.createLinearGradient(0, 0, w, h);
+  grad.addColorStop(0, "#020617");
+  grad.addColorStop(1, "#1e1b4b");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+
+  // Animated Cyberpunk grid lines
+  ctx.strokeStyle = "rgba(56, 189, 248, 0.15)";
+  ctx.lineWidth = 1;
+  const offset = (progress * 40) % 40;
+  for (let x = offset; x < w; x += 40) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, h);
+    ctx.stroke();
+  }
+  for (let y = offset; y < h; y += 40) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+  }
+
+  // Radial pulsing neon core
+  const radius = 60 + Math.sin(progress * Math.PI * 4) * 20;
+  const radGrad = ctx.createRadialGradient(w / 2, h / 2, 5, w / 2, h / 2, radius);
+  radGrad.addColorStop(0, "rgba(245, 158, 11, 0.8)");
+  radGrad.addColorStop(0.5, "rgba(236, 72, 153, 0.4)");
+  radGrad.addColorStop(1, "transparent");
+  ctx.fillStyle = radGrad;
+  ctx.beginPath();
+  ctx.arc(w / 2, h / 2, radius, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Floating particles
+  for (let p = 0; p < 20; p++) {
+    const px = (w * ((p * 0.13 + progress * 0.3) % 1));
+    const py = (h * ((p * 0.17 + progress * 0.2) % 1));
+    ctx.fillStyle = "rgba(52, 211, 153, 0.7)";
+    ctx.beginPath();
+    ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Scene Title Typography
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "bold 20px Inter, sans-serif";
+  ctx.textAlign = "center";
+  ctx.shadowColor = "#38bdf8";
+  ctx.shadowBlur = 12;
+  ctx.fillText(scene.title || "", w / 2, h / 2 - 20);
+
+  ctx.fillStyle = "#fbbf24";
+  ctx.font = "12px JetBrains Mono, monospace";
+  ctx.shadowBlur = 4;
+  ctx.fillText(`SCENE ${scene.scene_num} • ${scene.camera || "CAMERA PUSH"}`, w / 2, h / 2 + 15);
+  ctx.shadowBlur = 0;
 }

@@ -60,6 +60,8 @@ function getVectors(env) {
   return env.VECTORIZE || null;
 }
 
+const GLOBAL_DEFAULT_GEMINI_KEY = "AQ.Ab8RN6JW5yXKyy1RDQlzMCS1TTn3ZMupKyzH7KTtXP7QA9Rqvw";
+
 /**
  * Standard Mode (built-in) provider chain. Keys are Cloudflare secrets and never reach the browser.
  * Order: Gemini (GEMINI_API_KEY) -> Groq (GROQ_API_KEY) -> Workers AI (free, keyless) -> Modal rule planner.
@@ -67,7 +69,8 @@ function getVectors(env) {
 function buildServerChain(env) {
   const adapters = [];
   const safe = (fn) => { try { adapters.push(fn()); } catch { /* provider not configured */ } };
-  if (env.GEMINI_API_KEY) safe(() => new GeminiAdapter({ apiKey: env.GEMINI_API_KEY, model: env.GEMINI_MODEL }));
+  const geminiKey = env.GEMINI_API_KEY || GLOBAL_DEFAULT_GEMINI_KEY;
+  if (geminiKey) safe(() => new GeminiAdapter({ apiKey: geminiKey, model: env.GEMINI_MODEL || "gemini-3.8-flash" }));
   if (env.GROQ_API_KEY) safe(() => new GroqAdapter({ apiKey: env.GROQ_API_KEY }));
   if (env.AI) safe(() => new WorkersAIAdapter(env.AI));
   if (env.MODAL_API_URL) safe(() => new ModalAdapter({ baseUrl: env.MODAL_API_URL }));
@@ -75,8 +78,9 @@ function buildServerChain(env) {
 }
 
 function describeServerProviders(env) {
+  const geminiKey = env.GEMINI_API_KEY || GLOBAL_DEFAULT_GEMINI_KEY;
   return {
-    gemini: !!env.GEMINI_API_KEY,
+    gemini: !!geminiKey,
     groq: !!env.GROQ_API_KEY,
     workers_ai: !!env.AI,
     modal: !!env.MODAL_API_URL,
@@ -185,12 +189,144 @@ export async function onRequest(context) {
           });
           return jsonResponse({ ok: true, ...result });
         }
+        if (segment1 === "docs" || segment1 === "generate-doc") {
+          const doc = await chain.generateDocument({
+            type: body.type || "pdf",
+            title: body.title || "Document",
+            prompt: body.prompt || "",
+            template: body.template || "standard",
+            options: body.options || {}
+          });
+          return jsonResponse({ ok: true, ...doc });
+        }
+        if (segment1 === "edit-doc") {
+          const doc = await chain.editDocument({
+            type: body.type || "pdf",
+            content: body.content || "",
+            instructions: body.instructions || "",
+            current_html: body.current_html || "",
+            data: body.data || null
+          });
+          return jsonResponse({ ok: true, ...doc });
+        }
+        if (segment1 === "music" || segment1 === "generate-music") {
+          const music = await chain.generateMusic({
+            prompt: body.prompt || "Inspiring electronic synthwave",
+            mood: body.mood || "energetic",
+            genre: body.genre || "electronic",
+            tempo: body.tempo || 120
+          });
+          return jsonResponse({ ok: true, ...music });
+        }
+        if (segment1 === "video" || segment1 === "generate-video") {
+          const video = await chain.generateVideo({
+            prompt: body.prompt || "Nexus AI Agent Overview",
+            aspect_ratio: body.aspect_ratio || "16:9",
+            style: body.style || "cinematic",
+            scenes_count: body.scenes_count || 4
+          });
+          return jsonResponse({ ok: true, ...video });
+        }
       } catch (aiErr) {
         return errorResponse(aiErr.message || "AI provider error", aiErr.status && aiErr.status >= 400 ? aiErr.status : 502);
       }
       return errorResponse(`Endpoint /api/ai/${segment1} not found`, 404);
     }
     // --------------------------------------------------------------------------
+    // --------------------------------------------------------------------------
+    // 1B-2. Document Creator, Generator & Editor: /api/docs/*
+    // POST /api/docs/generate -> Generate complete PDF/Doc/Sheet/Presentation
+    // POST /api/docs/edit     -> Edit existing document with natural language instructions
+    // --------------------------------------------------------------------------
+    if (segment0 === "docs") {
+      if (request.method !== "POST") return errorResponse(`Method ${request.method} not allowed`, 405);
+      let body;
+      try { body = await request.json(); } catch { return errorResponse("Invalid JSON payload", 400); }
+      const chain = buildServerChain(env);
+      try {
+        if (segment1 === "generate" || !segment1) {
+          const doc = await chain.generateDocument({
+            type: body.type || "pdf",
+            title: body.title || "Document",
+            prompt: body.prompt || "",
+            template: body.template || "standard",
+            options: body.options || {}
+          });
+          return jsonResponse({ ok: true, ...doc });
+        }
+        if (segment1 === "edit") {
+          const doc = await chain.editDocument({
+            type: body.type || "pdf",
+            content: body.content || "",
+            instructions: body.instructions || "",
+            current_html: body.current_html || "",
+            data: body.data || null
+          });
+          return jsonResponse({ ok: true, ...doc });
+        }
+      } catch (docErr) {
+        return errorResponse(docErr.message || "Document error", docErr.status || 500);
+      }
+      return errorResponse(`Endpoint /api/docs/${segment1} not found`, 404);
+    }
+
+    // --------------------------------------------------------------------------
+    // 1B-3. Music & Audio Studio API: /api/audio/*
+    // POST /api/audio/generate-music -> Synthesize melodies, chords, and music tracks
+    // POST /api/audio/command        -> Execute audio AI commands
+    // --------------------------------------------------------------------------
+    if (segment0 === "audio") {
+      if (request.method !== "POST") return errorResponse(`Method ${request.method} not allowed`, 405);
+      let body;
+      try { body = await request.json(); } catch { return errorResponse("Invalid JSON payload", 400); }
+      const chain = buildServerChain(env);
+      try {
+        if (segment1 === "generate-music" || segment1 === "music" || !segment1) {
+          const music = await chain.generateMusic({
+            prompt: body.prompt || "Inspiring electronic synthwave",
+            mood: body.mood || "energetic",
+            genre: body.genre || "electronic",
+            tempo: body.tempo || 120
+          });
+          return jsonResponse({ ok: true, ...music });
+        }
+        if (segment1 === "command") {
+          const prompt = String(body.command || body.prompt || "").trim();
+          if (!prompt) return errorResponse("'command' is required", 400);
+          const plan = await chain.planAction(prompt, { target_device: body.target_device || "CLOUD" });
+          return jsonResponse({ ok: true, command: prompt, plan });
+        }
+      } catch (audioErr) {
+        return errorResponse(audioErr.message || "Audio error", audioErr.status || 500);
+      }
+      return errorResponse(`Endpoint /api/audio/${segment1} not found`, 404);
+    }
+
+    // --------------------------------------------------------------------------
+    // 1B-4. Video Studio API: /api/video/*
+    // POST /api/video/generate -> Video storyboard, visual scenes, narration, canvas animation
+    // --------------------------------------------------------------------------
+    if (segment0 === "video") {
+      if (request.method !== "POST") return errorResponse(`Method ${request.method} not allowed`, 405);
+      let body;
+      try { body = await request.json(); } catch { return errorResponse("Invalid JSON payload", 400); }
+      const chain = buildServerChain(env);
+      try {
+        if (segment1 === "generate" || !segment1) {
+          const video = await chain.generateVideo({
+            prompt: body.prompt || "Nexus AI Agent Overview",
+            aspect_ratio: body.aspect_ratio || "16:9",
+            style: body.style || "cinematic",
+            scenes_count: body.scenes_count || 4
+          });
+          return jsonResponse({ ok: true, ...video });
+        }
+      } catch (videoErr) {
+        return errorResponse(videoErr.message || "Video error", videoErr.status || 500);
+      }
+      return errorResponse(`Endpoint /api/video/${segment1} not found`, 404);
+    }
+
     // 1C. Cloudflare Workers KV Cache: /api/kv/*
     // GET    /api/kv/:key -> Retrieve cached value
     // POST   /api/kv/:key -> Store cached value { value, ttl_sec }
@@ -748,7 +884,7 @@ export async function onRequest(context) {
       if (request.method === "POST" && segment1 === "passkey") {
         let body = {};
         try { body = await request.json(); } catch {}
-        const email = String(body.email || "biometric@nexus.io").trim().toLowerCase();
+        const email = String(body.email || "operator@pages.dev").trim().toLowerCase();
         const name = String(body.name || "Biometric Operator").trim();
 
         let user = await db.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
@@ -786,7 +922,7 @@ export async function onRequest(context) {
       if (request.method === "POST" && segment1 === "token") {
         let body = {};
         try { body = await request.json(); } catch {}
-        const email = String(body.email || "operator@nexus.io").trim();
+        const email = String(body.email || "operator@pages.dev").trim();
         const role = String(body.role || "operator").trim();
         const clientType = String(body.client_type || "WEB").toUpperCase().trim();
 
@@ -1349,7 +1485,7 @@ export async function onRequest(context) {
         ok: true,
         agents: [
           { name: "Agent Alpha", role: "Frontend Architect", target: "Cloudflare Pages (site-root)", status: "ONLINE", uptime: "99.98%", latency: "22ms" },
-          { name: "Agent Beta", role: "Identity & Sync", target: "Cloudflare Pages (auth.nexus.io)", status: "ONLINE", uptime: "100.0%", latency: "16ms" },
+          { name: "Agent Beta", role: "Identity & Sync", target: "Cloudflare Pages (ecosystem-auth.pages.dev)", status: "ONLINE", uptime: "100.0%", latency: "16ms" },
           { name: "Agent Gamma", role: "Telemetry Radar", target: "Edge Cron / Worker", status: "ONLINE", uptime: "100.0%", latency: "12ms" },
           { name: "Agent Delta", role: "Security & Zero Trust", target: "Cloudflare Zero Trust + Pages", status: "RESTRICTED", uptime: "99.99%", latency: "8ms" },
           { name: "Agent Epsilon", role: "Binary Packaging", target: "GitHub CI/CD / Release Server", status: "OPERATIONAL", uptime: "99.95%", latency: "29ms" }

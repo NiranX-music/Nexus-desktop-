@@ -1,4 +1,4 @@
-# ==============================================================================
+﻿# ==============================================================================
 # Cloudflare Pages Configuration: Site 3 (Agent & API Radar)
 # Project Name: ecosystem-status
 # ==============================================================================
@@ -10,6 +10,6 @@ compatibility_date = "2024-09-23"
 [vars]
 SITE_ROLE = "STATUS_RADAR"
 ENVIRONMENT = "production"
-LANDING_URL = "https://nexus.io"
-AUTH_GATEWAY_URL = "https://auth.nexus.io"
-ADMIN_HQ_URL = "https://admin.nexus.io"
+LANDING_URL = "https://ecosystem-landing.pages.dev"
+AUTH_GATEWAY_URL = "https://ecosystem-auth.pages.dev"
+ADMIN_HQ_URL = "https://ecosystem-admin.pages.dev"

@@ -6,10 +6,19 @@
 name = "ecosystem-auth"
 pages_build_output_dir = "."
 compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# Cloudflare D1 Serverless SQLite Database Binding
+[[d1_databases]]
+binding = "DB"
+database_name = "nexus-db"
+database_id = "05f5359f-83fa-444c-891a-8714bc126adf"
 
 [vars]
 SITE_ROLE = "AUTH_GATEWAY"
 ENVIRONMENT = "production"
-LANDING_URL = "https://nexus.io"
-STATUS_RADAR_URL = "https://status.nexus.io"
-ADMIN_HQ_URL = "https://admin.nexus.io"
+SENDER_EMAIL = "niranjanbarhate42@gmail.com"
+LANDING_URL = "https://ecosystem-landing.pages.dev"
+STATUS_RADAR_URL = "https://ecosystem-status.pages.dev"
+ADMIN_HQ_URL = "https://ecosystem-admin.pages.dev"
+EDUNEXUS_URL = "https://edunexus.pages.dev"

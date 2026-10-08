@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -9,13 +9,13 @@
   <meta name="description" content="Secure WebAuthn and JWT identity gateway for NEXUS OS. Synchronize sessions between web, mobile Android, and Linux native desktop." />
   <meta name="keywords" content="Nexus Auth, WebAuthn Passkeys, JWT Authentication, Mobile Desktop Sync, Deep Link Bridge" />
   <meta name="robots" content="index, follow" />
-  <link rel="canonical" href="https://auth.nexus.io/" />
+  <link rel="canonical" href="https://ecosystem-auth.pages.dev/" />
   <meta name="theme-color" content="#07090e" />
 
   <meta property="og:title" content="NEXUS // Auth Gateway & Cross-Device Bridge" />
   <meta property="og:description" content="Unified session bridge for Linux desktop, Android mobile, and web instances." />
   <meta property="og:type" content="website" />
-  <meta property="og:url" content="https://auth.nexus.io/" />
+  <meta property="og:url" content="https://ecosystem-auth.pages.dev/" />
 
   <!-- JSON-LD Structured Data Schema -->
   <script type="application/ld+json">
@@ -23,7 +23,7 @@
     "@context": "https://schema.org",
     "@type": "WebApplication",
     "name": "Nexus Identity Gateway",
-    "url": "https://auth.nexus.io",
+    "url": "https://ecosystem-auth.pages.dev",
     "applicationCategory": "SecurityApplication",
     "operatingSystem": "All",
     "featureList": [
@@ -33,13 +33,61 @@
       "Cross-Device QR Code Session Sync"
     ]
   }
+  
+    // Process incoming magic link or reset tokens from URL
+    window.addEventListener('DOMContentLoaded', () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const hashParams = new URLSearchParams(window.location.hash.replace('#', '?'));
+      
+      const action = urlParams.get('action');
+      const token = urlParams.get('token') || hashParams.get('token');
+      const email = urlParams.get('email') || hashParams.get('email');
+
+      if (action === 'reset' && token) {
+        switchTab('forgot');
+        document.getElementById('resetConfirmSection').style.display = 'block';
+        document.getElementById('resetToken').value = token;
+        showAlert("Reset token detected. Enter your new passphrase.", "success");
+      } else if (token && email) {
+        localStorage.setItem(SESSION_TOKEN_KEY, token);
+        const user = { email, name: email.split('@')[0], role: 'student' };
+        localStorage.setItem('nexus_current_user', JSON.stringify(user));
+        showAlert("Session authenticated from magic link!", "success");
+        setTimeout(() => showSessionDashboard(user, token), 400);
+      }
+    });
+
   </script>
 
   <!-- Typography & Three.js -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js">
+    // Process incoming magic link or reset tokens from URL
+    window.addEventListener('DOMContentLoaded', () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const hashParams = new URLSearchParams(window.location.hash.replace('#', '?'));
+      
+      const action = urlParams.get('action');
+      const token = urlParams.get('token') || hashParams.get('token');
+      const email = urlParams.get('email') || hashParams.get('email');
+
+      if (action === 'reset' && token) {
+        switchTab('forgot');
+        document.getElementById('resetConfirmSection').style.display = 'block';
+        document.getElementById('resetToken').value = token;
+        showAlert("Reset token detected. Enter your new passphrase.", "success");
+      } else if (token && email) {
+        localStorage.setItem(SESSION_TOKEN_KEY, token);
+        const user = { email, name: email.split('@')[0], role: 'student' };
+        localStorage.setItem('nexus_current_user', JSON.stringify(user));
+        showAlert("Session authenticated from magic link!", "success");
+        setTimeout(() => showSessionDashboard(user, token), 400);
+      }
+    });
+
+  </script>
 
   <style>
     :root {
@@ -363,6 +411,7 @@
     <div>
       <a href="https://ecosystem-landing.pages.dev" id="landing-back-link" style="margin-right: 1.25rem;">← Main Portal</a>
       <a href="https://nexus-bridge-7l1.pages.dev" id="bridge-link" style="margin-right: 1.25rem; color: #10b981;">⚡ Agent Bridge</a>
+      <a href="https://edunexus.pages.dev" id="edunexus-link" style="margin-right: 1.25rem; color: #818cf8; font-weight: 700;">🎓 EduNexus</a>
       <a href="https://ecosystem-status.pages.dev" id="status-link" style="margin-right: 1.25rem;">System Radar</a>
       <a href="https://ecosystem-admin.pages.dev" id="admin-link" style="color: #f43f5e;">Admin Console</a>
     </div>
@@ -374,7 +423,9 @@
     <!-- Tab Controls -->
     <div class="auth-tabs" id="authTabs">
       <button class="auth-tab-btn active" onclick="switchTab('login')">Sign In</button>
+      <button class="auth-tab-btn" onclick="switchTab('magic')">Magic Link</button>
       <button class="auth-tab-btn" onclick="switchTab('register')">Create Account</button>
+      <button class="auth-tab-btn" onclick="switchTab('forgot')">Reset Password</button>
     </div>
 
     <!-- Alert Message Container -->
@@ -388,7 +439,7 @@
       <form id="loginForm" onsubmit="handleLogin(event)">
         <div class="input-group">
           <label for="loginEmail">Account Identity</label>
-          <input type="email" id="loginEmail" required placeholder="operator@nexus.io" value="operator@nexus.io" autocomplete="email" />
+          <input type="email" id="loginEmail" required placeholder="barhateniranjan725@gmail.com" value="barhateniranjan725@gmail.com" autocomplete="email" />
         </div>
         
         <div class="input-group">
@@ -406,6 +457,59 @@
           <span>Biometric Passkey (WebAuthn)</span>
         </button>
       </form>
+    </div>
+
+    <!-- FORM: MAGIC LINK -->
+    <div id="magicFormContainer" style="display: none;">
+      <h2>Passwordless Magic Link</h2>
+      <p class="subtext">Instant sign-in link dispatched from <strong>niranjanbarhate42@gmail.com</strong>.</p>
+      
+      <form id="magicForm" onsubmit="handleMagicLink(event)">
+        <div class="input-group">
+          <label for="magicEmail">Account Email</label>
+          <input type="email" id="magicEmail" required placeholder="student@domain.com" autocomplete="email" />
+        </div>
+
+        <button type="submit" class="btn" id="magicSubmitBtn">
+          <span>Send Magic Link</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+        </button>
+      </form>
+    </div>
+
+    <!-- FORM: FORGOT PASSWORD -->
+    <div id="forgotFormContainer" style="display: none;">
+      <h2>Reset Passphrase</h2>
+      <p class="subtext">Recovery instructions dispatched from <strong>niranjanbarhate42@gmail.com</strong>.</p>
+      
+      <form id="forgotForm" onsubmit="handleForgotPassword(event)">
+        <div class="input-group">
+          <label for="forgotEmail">Registered Email</label>
+          <input type="email" id="forgotEmail" required placeholder="barhateniranjan725@gmail.com" autocomplete="email" />
+        </div>
+
+        <button type="submit" class="btn" id="forgotSubmitBtn">
+          <span>Dispatch Reset Link</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </button>
+      </form>
+
+      <div id="resetConfirmSection" style="display: none; margin-top: 20px; border-top: 1px solid var(--card-border); padding-top: 16px;">
+        <h4 style="font-size: 0.95rem; margin-bottom: 8px;">Enter New Passphrase</h4>
+        <form id="resetConfirmForm" onsubmit="handleResetPassword(event)">
+          <div class="input-group">
+            <label for="resetToken">Reset Token</label>
+            <input type="text" id="resetToken" required placeholder="Paste token from email" />
+          </div>
+          <div class="input-group">
+            <label for="resetNewPass">New Passphrase</label>
+            <input type="password" id="resetNewPass" required placeholder="Min. 8 characters" />
+          </div>
+          <button type="submit" class="btn" id="resetNewPassBtn">
+            <span>Confirm & Update Passphrase</span>
+          </button>
+        </form>
+      </div>
     </div>
 
     <!-- FORM: CREATE ACCOUNT -->
@@ -448,7 +552,7 @@
     <div id="sessionDashboard" class="session-card">
       <div class="session-badge">● SESSION ACTIVE • EDGE VERIFIED</div>
       <h3 id="sessionGreeting" style="font-size: 1.4rem; margin-bottom: 0.25rem;">Welcome, Root Operator</h3>
-      <div id="sessionEmailText" style="color: var(--text-muted); font-size: 0.85rem;">operator@nexus.io</div>
+      <div id="sessionEmailText" style="color: var(--text-muted); font-size: 0.85rem;">barhateniranjan725@gmail.com</div>
 
       <div style="margin-top: 1.25rem; font-size: 0.8rem; text-transform: uppercase; color: #94a3b8; font-family: var(--font-mono);">
         Cryptographic JWT Token:
@@ -477,12 +581,15 @@
         </button>
       </div>
 
-      <div style="display: flex; gap: 10px; margin-top: 1rem;">
+      <div style="display: flex; gap: 10px; margin-top: 1rem; flex-wrap: wrap;">
         <button onclick="logoutSession()" class="btn btn-secondary" style="flex: 1; margin: 0;">
           Log Out Session
         </button>
-        <a href="https://status.nexus.io" id="launchStatusBtn" class="btn" style="flex: 1; margin: 0; text-decoration: none;">
-          Open Radar →
+        <a href="https://edunexus.pages.dev" id="launchEduBtn" class="btn" style="flex: 1.4; margin: 0; text-decoration: none; background: linear-gradient(135deg, #6366f1, #06b6d4); color: #fff; font-weight: 700;">
+          🎓 Launch EduNexus →
+        </a>
+        <a href="https://ecosystem-status.pages.dev" id="launchStatusBtn" class="btn btn-secondary" style="flex: 1; margin: 0; text-decoration: none;">
+          Radar →
         </a>
       </div>
     </div>
@@ -494,7 +601,7 @@
         Bridge Session to Native App
       </button>
       <div style="margin-top: 12px; font-size: 0.78rem;">
-        Need native binaries? <a href="https://nexus.io/#downloads" id="downloadAppFromAuth" style="color: var(--accent-cyan);">Download here</a>
+        Need native binaries? <a href="https://ecosystem-landing.pages.dev/#downloads" id="downloadAppFromAuth" style="color: var(--accent-cyan);">Download here</a>
       </div>
     </div>
 
@@ -549,7 +656,7 @@
         const initialUsers = [
           {
             name: "Root Operator",
-            email: "operator@nexus.io",
+            email: "barhateniranjan725@gmail.com",
             passHash: hashHex,
             saltHex: saltHex,
             role: "root_operator"
@@ -562,28 +669,133 @@
 
     // Tab switcher
     function switchTab(mode) {
-      const loginTab = document.querySelectorAll('.auth-tab-btn')[0];
-      const regTab = document.querySelectorAll('.auth-tab-btn')[1];
+      const tabs = document.querySelectorAll('.auth-tab-btn');
+      tabs.forEach(t => t.classList.remove('active'));
+
       const loginBox = document.getElementById('loginFormContainer');
       const regBox = document.getElementById('registerFormContainer');
+      const magicBox = document.getElementById('magicFormContainer');
+      const forgotBox = document.getElementById('forgotFormContainer');
       const sessionDash = document.getElementById('sessionDashboard');
       const bottomFooter = document.getElementById('bottomBridgeFooter');
 
       sessionDash.style.display = 'none';
       bottomFooter.style.display = 'block';
+      loginBox.style.display = 'none';
+      regBox.style.display = 'none';
+      if (magicBox) magicBox.style.display = 'none';
+      if (forgotBox) forgotBox.style.display = 'none';
 
       if (mode === 'login') {
-        loginTab.classList.add('active');
-        regTab.classList.remove('active');
+        tabs[0]?.classList.add('active');
         loginBox.style.display = 'block';
-        regBox.style.display = 'none';
-      } else {
-        loginTab.classList.remove('active');
-        regTab.classList.add('active');
-        loginBox.style.display = 'none';
+      } else if (mode === 'magic') {
+        tabs[1]?.classList.add('active');
+        if (magicBox) magicBox.style.display = 'block';
+      } else if (mode === 'register') {
+        tabs[2]?.classList.add('active');
         regBox.style.display = 'block';
+      } else if (mode === 'forgot') {
+        tabs[3]?.classList.add('active');
+        if (forgotBox) forgotBox.style.display = 'block';
       }
       hideAlert();
+    }
+
+    // Magic Link Dispatcher
+    async function handleMagicLink(e) {
+      e.preventDefault();
+      const email = document.getElementById('magicEmail').value.trim().toLowerCase();
+      showAlert("Dispatching magic sign-in link via niranjanbarhate42@gmail.com...", "success");
+
+      try {
+        const resp = await fetch(`${API_BASE}/auth/magic-link`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, redirect_url: window.location.href }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          showAlert(data.error || "Failed to dispatch magic link.", "error");
+          return;
+        }
+
+        showAlert(`Magic link dispatched from niranjanbarhate42@gmail.com!`, "success");
+        if (data.preview_url) {
+          setTimeout(() => {
+            if (confirm("Magic link generated! Would you like to sign in immediately using this link?")) {
+              window.location.href = data.preview_url;
+            }
+          }, 600);
+        }
+      } catch (err) {
+        showAlert("Error: " + err.message, "error");
+      }
+    }
+
+    // Forgot & Reset Password
+    async function handleForgotPassword(e) {
+      e.preventDefault();
+      const email = document.getElementById('forgotEmail').value.trim().toLowerCase();
+      showAlert("Generating recovery token from niranjanbarhate42@gmail.com...", "success");
+
+      try {
+        const resp = await fetch(`${API_BASE}/auth/forgot-password`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          showAlert(data.error || "Failed to dispatch reset link.", "error");
+          return;
+        }
+
+        showAlert(`Recovery link dispatched from niranjanbarhate42@gmail.com!`, "success");
+        document.getElementById('resetConfirmSection').style.display = 'block';
+        if (data.token) {
+          document.getElementById('resetToken').value = data.token;
+        }
+      } catch (err) {
+        showAlert("Error: " + err.message, "error");
+      }
+    }
+
+    async function handleResetPassword(e) {
+      e.preventDefault();
+      const token = document.getElementById('resetToken').value.trim();
+      const newPass = document.getElementById('resetNewPass').value;
+      if (newPass.length < 8) {
+        showAlert("New passphrase must be at least 8 characters.", "error");
+        return;
+      }
+
+      showAlert("Deriving new cryptographic key...", "success");
+      const { hashHex, saltHex } = await hashPassphrase(newPass);
+
+      try {
+        const resp = await fetch(`${API_BASE}/auth/reset-password`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            token,
+            new_pass_hash: hashHex,
+            new_salt_hex: saltHex
+          }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          showAlert(data.error || "Password reset failed.", "error");
+          return;
+        }
+
+        localStorage.setItem(SESSION_TOKEN_KEY, data.token);
+        localStorage.setItem('nexus_current_user', JSON.stringify(data.user));
+        showAlert("Passphrase updated in Cloudflare D1! Session active.", "success");
+        setTimeout(() => showSessionDashboard(data.user, data.token), 600);
+      } catch (err) {
+        showAlert("Reset error: " + err.message, "error");
+      }
     }
 
     function showAlert(text, type) {
@@ -655,7 +867,10 @@
       return `${b64Header}.${b64Payload}.${signatureB64}`;
     }
 
-    const API_BASE = (window.location.hostname === 'nexus-bridge-7l1.pages.dev' || window.location.pathname.startsWith('/api'))
+    const API_BASE = (window.location.hostname === 'nexus-bridge-7l1.pages.dev' || 
+                      window.location.hostname === 'ecosystem-auth.pages.dev' ||
+                      window.location.hostname === 'edunexus.pages.dev' ||
+                      window.location.pathname.startsWith('/api'))
       ? '/api'
       : 'https://nexus-bridge-7l1.pages.dev/api';
 
@@ -793,7 +1008,7 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            email: "passkey@nexus.io",
+            email: "passkey@pages.dev",
             name: "Biometric Passkey"
           }),
         });
@@ -813,7 +1028,7 @@
     }
 
     async function fallbackPasskey() {
-      const user = { name: "Biometric Passkey", email: "passkey@nexus.io", role: "operator" };
+      const user = { name: "Biometric Passkey", email: "passkey@pages.dev", role: "operator" };
       const token = await generateJwt(user);
       localStorage.setItem(SESSION_TOKEN_KEY, token);
       localStorage.setItem('nexus_current_user', JSON.stringify(user));
@@ -834,6 +1049,11 @@
       document.getElementById('sessionGreeting').innerText = `Welcome, ${user.name}`;
       document.getElementById('sessionEmailText').innerText = user.email;
       document.getElementById('tokenDisplayBox').innerText = token;
+
+      const eduBtn = document.getElementById('launchEduBtn');
+      if (eduBtn) {
+        eduBtn.href = `https://edunexus.pages.dev#token=${encodeURIComponent(token)}&email=${encodeURIComponent(user.email)}&name=${encodeURIComponent(user.name)}`;
+      }
     }
 
     async function logoutSession() {
@@ -857,7 +1077,7 @@
     // Universal Cross-Platform Deep-Link Dispatch
     function triggerDeepLink() {
       const token = localStorage.getItem(SESSION_TOKEN_KEY) || 'DEMO_NEXUS_SESSION_JWT_V4';
-      const currentUser = JSON.parse(localStorage.getItem('nexus_current_user') || '{"email":"operator@nexus.io"}');
+      const currentUser = JSON.parse(localStorage.getItem('nexus_current_user') || '{"email":"barhateniranjan725@gmail.com"}');
       const deepLinkUrl = `nexus://auth?token=${encodeURIComponent(token)}&user=${encodeURIComponent(currentUser.email)}`;
 
       // Attempt to invoke protocol handler
@@ -992,6 +1212,30 @@
         renderer.setSize(window.innerWidth, window.innerHeight);
       });
     })();
+  
+    // Process incoming magic link or reset tokens from URL
+    window.addEventListener('DOMContentLoaded', () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const hashParams = new URLSearchParams(window.location.hash.replace('#', '?'));
+      
+      const action = urlParams.get('action');
+      const token = urlParams.get('token') || hashParams.get('token');
+      const email = urlParams.get('email') || hashParams.get('email');
+
+      if (action === 'reset' && token) {
+        switchTab('forgot');
+        document.getElementById('resetConfirmSection').style.display = 'block';
+        document.getElementById('resetToken').value = token;
+        showAlert("Reset token detected. Enter your new passphrase.", "success");
+      } else if (token && email) {
+        localStorage.setItem(SESSION_TOKEN_KEY, token);
+        const user = { email, name: email.split('@')[0], role: 'student' };
+        localStorage.setItem('nexus_current_user', JSON.stringify(user));
+        showAlert("Session authenticated from magic link!", "success");
+        setTimeout(() => showSessionDashboard(user, token), 400);
+      }
+    });
+
   </script>
 </body>
 </html>

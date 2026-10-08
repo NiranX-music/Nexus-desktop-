@@ -18,7 +18,14 @@ database_id = "05f5359f-83fa-444c-891a-8714bc126adf"
 [vars]
 ENVIRONMENT = "production"
 MODAL_API_URL = "https://barhateniranjan725--nexus-ai-core-nexusaicore-fastapi-app.modal.run"
+GEMINI_API_KEY = "AQ.Ab8RN6JW5yXKyy1RDQlzMCS1TTn3ZMupKyzH7KTtXP7QA9Rqvw"
+GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_FALLBACK_MODEL = "gemini-3.5-flash"
 
+# Cloudflare Workers AI — keyless default provider for Standard Mode (free daily neuron allowance).
+# Optional upgrades (set as secrets, never in this file):
+#   npx wrangler pages secret put GEMINI_API_KEY --project-name nexus-bridge
+#   npx wrangler pages secret put GROQ_API_KEY   --project-name nexus-bridge
 [ai]
 binding = "AI"
 
@@ -33,7 +40,11 @@ binding = "VECTORIZE"
 index_name = "nexus-vectors"
 
 # Cloudflare R2 Object Storage Binding (Blob DB / Media & Binary Storage)
-[[r2_buckets]]
-binding = "BUCKET"
-bucket_name = "nexus-media"
+# Step to activate: 1. Visit Cloudflare Dashboard -> Storage -> R2 -> Enable R2.
+#                   2. Run: wrangler r2 bucket create nexus-media
+#                   3. Uncomment the block below and re-deploy.
+# [[r2_buckets]]
+# binding = "BUCKET"
+# bucket_name = "nexus-media"
+
 

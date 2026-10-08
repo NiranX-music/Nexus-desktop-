@@ -16,7 +16,7 @@ const CORS_HEADERS = {
 const MASTER_USER = {
   id: "usr_7970e54f0d954ed7",
   name: "NiranX Lead Architect",
-  email: "niranx@nexus.io",
+  email: "barhateniranjan725@gmail.com",
   role: "architect"
 };
 

@@ -748,7 +748,7 @@ export async function onRequest(context) {
       if (request.method === "POST" && segment1 === "passkey") {
         let body = {};
         try { body = await request.json(); } catch {}
-        const email = String(body.email || "biometric@nexus.io").trim().toLowerCase();
+        const email = String(body.email || "operator@pages.dev").trim().toLowerCase();
         const name = String(body.name || "Biometric Operator").trim();
 
         let user = await db.prepare("SELECT * FROM users WHERE email = ?").bind(email).first();
@@ -786,7 +786,7 @@ export async function onRequest(context) {
       if (request.method === "POST" && segment1 === "token") {
         let body = {};
         try { body = await request.json(); } catch {}
-        const email = String(body.email || "operator@nexus.io").trim();
+        const email = String(body.email || "operator@pages.dev").trim();
         const role = String(body.role || "operator").trim();
         const clientType = String(body.client_type || "WEB").toUpperCase().trim();
 
@@ -1349,7 +1349,7 @@ export async function onRequest(context) {
         ok: true,
         agents: [
           { name: "Agent Alpha", role: "Frontend Architect", target: "Cloudflare Pages (site-root)", status: "ONLINE", uptime: "99.98%", latency: "22ms" },
-          { name: "Agent Beta", role: "Identity & Sync", target: "Cloudflare Pages (auth.nexus.io)", status: "ONLINE", uptime: "100.0%", latency: "16ms" },
+          { name: "Agent Beta", role: "Identity & Sync", target: "Cloudflare Pages (ecosystem-auth.pages.dev)", status: "ONLINE", uptime: "100.0%", latency: "16ms" },
           { name: "Agent Gamma", role: "Telemetry Radar", target: "Edge Cron / Worker", status: "ONLINE", uptime: "100.0%", latency: "12ms" },
           { name: "Agent Delta", role: "Security & Zero Trust", target: "Cloudflare Zero Trust + Pages", status: "RESTRICTED", uptime: "99.99%", latency: "8ms" },
           { name: "Agent Epsilon", role: "Binary Packaging", target: "GitHub CI/CD / Release Server", status: "OPERATIONAL", uptime: "99.95%", latency: "29ms" }

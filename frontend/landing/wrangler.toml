@@ -1,4 +1,4 @@
-# ==============================================================================
+﻿# ==============================================================================
 # Cloudflare Pages Configuration: Site 1 (Landing Page & Download Hub)
 # Project Name: ecosystem-landing
 # ==============================================================================
@@ -10,6 +10,6 @@ compatibility_date = "2024-09-23"
 [vars]
 SITE_ROLE = "LANDING_PORTAL"
 ENVIRONMENT = "production"
-AUTH_GATEWAY_URL = "https://auth.nexus.io"
-STATUS_RADAR_URL = "https://status.nexus.io"
-ADMIN_HQ_URL = "https://admin.nexus.io"
+AUTH_GATEWAY_URL = "https://ecosystem-auth.pages.dev"
+STATUS_RADAR_URL = "https://ecosystem-status.pages.dev"
+ADMIN_HQ_URL = "https://ecosystem-admin.pages.dev"

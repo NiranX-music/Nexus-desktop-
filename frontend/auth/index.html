@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -9,13 +9,13 @@
   <meta name="description" content="Secure WebAuthn and JWT identity gateway for NEXUS OS. Synchronize sessions between web, mobile Android, and Linux native desktop." />
   <meta name="keywords" content="Nexus Auth, WebAuthn Passkeys, JWT Authentication, Mobile Desktop Sync, Deep Link Bridge" />
   <meta name="robots" content="index, follow" />
-  <link rel="canonical" href="https://auth.nexus.io/" />
+  <link rel="canonical" href="https://ecosystem-auth.pages.dev/" />
   <meta name="theme-color" content="#07090e" />
 
   <meta property="og:title" content="NEXUS // Auth Gateway & Cross-Device Bridge" />
   <meta property="og:description" content="Unified session bridge for Linux desktop, Android mobile, and web instances." />
   <meta property="og:type" content="website" />
-  <meta property="og:url" content="https://auth.nexus.io/" />
+  <meta property="og:url" content="https://ecosystem-auth.pages.dev/" />
 
   <!-- JSON-LD Structured Data Schema -->
   <script type="application/ld+json">
@@ -23,7 +23,7 @@
     "@context": "https://schema.org",
     "@type": "WebApplication",
     "name": "Nexus Identity Gateway",
-    "url": "https://auth.nexus.io",
+    "url": "https://ecosystem-auth.pages.dev",
     "applicationCategory": "SecurityApplication",
     "operatingSystem": "All",
     "featureList": [
@@ -359,11 +359,11 @@
 
   <!-- Top Navigation Header -->
   <header class="top-header">
-    <a href="https://nexus.io" class="brand-link" id="brand-link">NEXUS // IDENTITY</a>
+    <a href="https://ecosystem-landing.pages.dev" class="brand-link" id="brand-link">NEXUS // IDENTITY</a>
     <div>
-      <a href="https://nexus.io" id="landing-back-link" style="margin-right: 1.5rem;">← Main Portal</a>
-      <a href="https://status.nexus.io" id="status-link" style="margin-right: 1.5rem;">System Radar</a>
-      <a href="https://admin.nexus.io" id="admin-link" style="color: #f43f5e;">Admin Console</a>
+      <a href="https://ecosystem-landing.pages.dev" id="landing-back-link" style="margin-right: 1.5rem;">← Main Portal</a>
+      <a href="https://ecosystem-status.pages.dev" id="status-link" style="margin-right: 1.5rem;">System Radar</a>
+      <a href="https://ecosystem-admin.pages.dev" id="admin-link" style="color: #f43f5e;">Admin Console</a>
     </div>
   </header>
 
@@ -387,7 +387,7 @@
       <form id="loginForm" onsubmit="handleLogin(event)">
         <div class="input-group">
           <label for="loginEmail">Account Identity</label>
-          <input type="email" id="loginEmail" required placeholder="operator@nexus.io" value="operator@nexus.io" autocomplete="email" />
+          <input type="email" id="loginEmail" required placeholder="barhateniranjan725@gmail.com" value="barhateniranjan725@gmail.com" autocomplete="email" />
         </div>
         
         <div class="input-group">
@@ -447,7 +447,7 @@
     <div id="sessionDashboard" class="session-card">
       <div class="session-badge">● SESSION ACTIVE • EDGE VERIFIED</div>
       <h3 id="sessionGreeting" style="font-size: 1.4rem; margin-bottom: 0.25rem;">Welcome, Root Operator</h3>
-      <div id="sessionEmailText" style="color: var(--text-muted); font-size: 0.85rem;">operator@nexus.io</div>
+      <div id="sessionEmailText" style="color: var(--text-muted); font-size: 0.85rem;">barhateniranjan725@gmail.com</div>
 
       <div style="margin-top: 1.25rem; font-size: 0.8rem; text-transform: uppercase; color: #94a3b8; font-family: var(--font-mono);">
         Cryptographic JWT Token:
@@ -480,7 +480,7 @@
         <button onclick="logoutSession()" class="btn btn-secondary" style="flex: 1; margin: 0;">
           Log Out Session
         </button>
-        <a href="https://status.nexus.io" id="launchStatusBtn" class="btn" style="flex: 1; margin: 0; text-decoration: none;">
+        <a href="https://ecosystem-status.pages.dev" id="launchStatusBtn" class="btn" style="flex: 1; margin: 0; text-decoration: none;">
           Open Radar →
         </a>
       </div>
@@ -493,7 +493,7 @@
         Bridge Session to Native App
       </button>
       <div style="margin-top: 12px; font-size: 0.78rem;">
-        Need native binaries? <a href="https://nexus.io/#downloads" id="downloadAppFromAuth" style="color: var(--accent-cyan);">Download here</a>
+        Need native binaries? <a href="https://ecosystem-landing.pages.dev/#downloads" id="downloadAppFromAuth" style="color: var(--accent-cyan);">Download here</a>
       </div>
     </div>
 
@@ -548,7 +548,7 @@
         const initialUsers = [
           {
             name: "Root Operator",
-            email: "operator@nexus.io",
+            email: "barhateniranjan725@gmail.com",
             passHash: hashHex,
             saltHex: saltHex,
             role: "root_operator"
@@ -792,7 +792,7 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            email: "passkey@nexus.io",
+            email: "passkey@pages.dev",
             name: "Biometric Passkey"
           }),
         });
@@ -812,7 +812,7 @@
     }
 
     async function fallbackPasskey() {
-      const user = { name: "Biometric Passkey", email: "passkey@nexus.io", role: "operator" };
+      const user = { name: "Biometric Passkey", email: "passkey@pages.dev", role: "operator" };
       const token = await generateJwt(user);
       localStorage.setItem(SESSION_TOKEN_KEY, token);
       localStorage.setItem('nexus_current_user', JSON.stringify(user));
@@ -856,7 +856,7 @@
     // Universal Cross-Platform Deep-Link Dispatch
     function triggerDeepLink() {
       const token = localStorage.getItem(SESSION_TOKEN_KEY) || 'DEMO_NEXUS_SESSION_JWT_V4';
-      const currentUser = JSON.parse(localStorage.getItem('nexus_current_user') || '{"email":"operator@nexus.io"}');
+      const currentUser = JSON.parse(localStorage.getItem('nexus_current_user') || '{"email":"barhateniranjan725@gmail.com"}');
       const deepLinkUrl = `nexus://auth?token=${encodeURIComponent(token)}&user=${encodeURIComponent(currentUser.email)}`;
 
       // Attempt to invoke protocol handler

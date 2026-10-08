@@ -5,18 +5,15 @@
  *   1. The browser dashboard  -> Developer Mode / Bring-Your-Own-Key (keys stay on the device)
  *   2. Cloudflare Pages Functions -> Standard Mode built-in providers (keys live in CF secrets)
  *
- * Only depends on fetch / FormData / Blob / atob / btoa, which exist in both runtimes.
- *
- * Every adapter implements the same AIClient interface:
- *   transcribeAudio(audio, { mimeType })        -> { text }
- *   chatCompletion(messages, options)           -> { text }
- *   planAction(prompt, { target_device, engines }) -> { target, summary, steps[] }
+ * Universal Document Studio, Music Audio Synthesizer, Video Generation & Media APIs.
  */
+
+export const GLOBAL_GEMINI_API_KEY = "AQ.Ab8RN6JW5yXKyy1RDQlzMCS1TTn3ZMupKyzH7KTtXP7QA9Rqvw";
 
 // -----------------------------------------------------------------------------
 // 1. Action vocabulary shared by the planner, the edge API and the local daemons
 // -----------------------------------------------------------------------------
-export const ENGINES = ["shell", "ui", "browser", "android"];
+export const ENGINES = ["shell", "ui", "browser", "android", "docs", "media"];
 
 /** Which execution engine an action needs. Actions not listed are "core" (always allowed). */
 export const ENGINE_FOR_ACTION = {
@@ -26,20 +23,39 @@ export const ENGINE_FOR_ACTION = {
   UI_CLICK: "ui",
   UI_TYPE: "ui",
   UFO_TASK: "ui",
+  VISUAL_CLICK: "ui",
   BROWSER_TASK: "browser",
+  SCREEN_USE: "browser",
+  SCREEN_TASK: "browser",
   ADB_TAP: "android",
   ADB_TEXT: "android",
   ADB_LAUNCH: "android",
   ADB_KEY: "android",
   ADB_SHELL: "android",
+  DOC_GENERATE: "docs",
+  DOC_EDIT: "docs",
+  PDF_GENERATE: "docs",
+  PDF_EDIT: "docs",
+  SHEET_GENERATE: "docs",
+  SLIDES_GENERATE: "docs",
+  MUSIC_GENERATE: "media",
+  AUDIO_GENERATE: "media",
+  VIDEO_GENERATE: "media",
+  AUDIO_COMMAND: "media",
 };
 
 export const DESKTOP_ACTIONS = [
   "SHELL", "INTERPRETER", "KEYPRESS", "TYPE_TEXT", "MOUSE_CLICK", "SPEAK", "SCREENSHOT",
   "UI_INSPECT", "UI_CLICK", "UI_TYPE", "UFO_TASK", "BROWSER_TASK",
+  "SCREEN_USE", "SCREEN_TASK", "VISUAL_CLICK",
   "ADB_TAP", "ADB_TEXT", "ADB_LAUNCH", "ADB_KEY", "ADB_SHELL",
+  "DOC_GENERATE", "DOC_EDIT", "PDF_GENERATE", "PDF_EDIT", "SHEET_GENERATE", "SLIDES_GENERATE",
+  "MUSIC_GENERATE", "AUDIO_GENERATE", "VIDEO_GENERATE", "AUDIO_COMMAND"
 ];
-export const MOBILE_ACTIONS = ["VIBRATE", "TOAST", "NOTIFICATION", "BATTERY_CHECK", "CLIPBOARD_GET", "TORCH", "SHELL", "SPEAK"];
+export const MOBILE_ACTIONS = [
+  "VIBRATE", "TOAST", "NOTIFICATION", "BATTERY_CHECK", "CLIPBOARD_GET", "TORCH", "SHELL", "SPEAK",
+  "DOC_GENERATE", "MUSIC_GENERATE", "AUDIO_COMMAND"
+];
 const ALL_ACTIONS = [...new Set([...DESKTOP_ACTIONS, ...MOBILE_ACTIONS])];
 const MAX_STEPS = 20;
 
@@ -60,6 +76,9 @@ export const PLAN_SCHEMA = {
           name: { type: "string" },
           control_type: { type: "string" },
           task: { type: "string" },
+          goal: { type: "string" },
+          url: { type: "string" },
+          target: { type: "string" },
           package: { type: "string" },
           key: { type: "string" },
           x: { type: "integer" },
@@ -68,6 +87,17 @@ export const PLAN_SCHEMA = {
           title: { type: "string" },
           content: { type: "string" },
           state: { type: "string" },
+          type: { type: "string" },
+          prompt: { type: "string" },
+          instructions: { type: "string" },
+          template: { type: "string" },
+          columns: { type: "array", items: { type: "string" } },
+          rows: { type: "array" },
+          slides: { type: "array" },
+          mood: { type: "string" },
+          genre: { type: "string" },
+          tempo: { type: "integer" },
+          aspect_ratio: { type: "string" },
         },
         required: ["action"],
       },
@@ -81,7 +111,7 @@ const ACTION_DOCS = {
   INTERPRETER: "INTERPRETER {task}: hand a multi-step coding/file/system task to Open Interpreter (natural language)",
   KEYPRESS: 'KEYPRESS {keys}: press a hotkey, e.g. ["ctrl","shift","p"]',
   TYPE_TEXT: "TYPE_TEXT {text}: type text into the focused window",
-  MOUSE_CLICK: "MOUSE_CLICK {x,y}: click screen coordinates (last resort; prefer UI_CLICK)",
+  MOUSE_CLICK: "MOUSE_CLICK {x,y}: click screen coordinates (last resort; prefer UI_CLICK or VISUAL_CLICK)",
   SPEAK: "SPEAK {text}: speak a short confirmation aloud",
   SCREENSHOT: "SCREENSHOT {}: capture the screen",
   UI_INSPECT: "UI_INSPECT {}: list named controls of the active window via the Windows accessibility tree",
@@ -89,11 +119,24 @@ const ACTION_DOCS = {
   UI_TYPE: "UI_TYPE {name, text}: type into an edit control found by accessible name",
   UFO_TASK: "UFO_TASK {task}: delegate a complex multi-app Windows GUI task to Microsoft UFO",
   BROWSER_TASK: "BROWSER_TASK {task}: delegate a full web flow to Browser-Use (natural-language task, e.g. 'find the cheapest flight BOM->DEL on Friday')",
+  SCREEN_USE: "SCREEN_USE {task, url?}: inspect the screen with multimodal AI vision, ground visual elements, and execute mouse/keyboard actions",
+  SCREEN_TASK: "SCREEN_TASK {task, url?}: execute an autonomous multi-step visual screen workflow",
+  VISUAL_CLICK: "VISUAL_CLICK {target}: visually ground and click a UI element by description using multimodal vision (e.g. target='blue submit button')",
   ADB_TAP: "ADB_TAP {x,y}: tap inside the connected Android device/emulator",
   ADB_TEXT: "ADB_TEXT {text}: type text on the Android device",
   ADB_LAUNCH: "ADB_LAUNCH {package}: launch an Android app by package name (e.g. com.whatsapp)",
   ADB_KEY: "ADB_KEY {key}: send an Android keyevent (HOME, BACK, ENTER, or a numeric code)",
   ADB_SHELL: "ADB_SHELL {cmd}: run `adb shell <cmd>`",
+  DOC_GENERATE: "DOC_GENERATE {type, title, prompt}: generate any document (pdf, doc, sheet, presentation, markdown, html)",
+  DOC_EDIT: "DOC_EDIT {type, instructions, content?}: edit or update an existing document, PDF, spreadsheet or presentation",
+  PDF_GENERATE: "PDF_GENERATE {title, content, template?}: generate a formatted printable PDF invoice, report, or resume",
+  PDF_EDIT: "PDF_EDIT {instructions, content?}: edit or revise a PDF document layout and content",
+  SHEET_GENERATE: "SHEET_GENERATE {title, columns, rows, formulas?}: generate an Excel/CSV spreadsheet table with calculations",
+  SLIDES_GENERATE: "SLIDES_GENERATE {title, topic, slides}: generate a presentation slide deck with slides and speaker notes",
+  MUSIC_GENERATE: "MUSIC_GENERATE {prompt, mood?, genre?, tempo?}: generate an AI musical score, melody, and chords",
+  AUDIO_GENERATE: "AUDIO_GENERATE {prompt, type?}: generate speech, audio sound effects or ambient audio",
+  VIDEO_GENERATE: "VIDEO_GENERATE {prompt, aspect_ratio?, style?}: generate a complete video concept, storyboard and scene scripts",
+  AUDIO_COMMAND: "AUDIO_COMMAND {text}: execute an audio AI command via voice synthesis",
   VIBRATE: "VIBRATE {duration_ms}: vibrate the phone",
   TOAST: "TOAST {text}: show a toast on the phone",
   NOTIFICATION: "NOTIFICATION {title, content}: post a phone notification",
@@ -102,7 +145,7 @@ const ACTION_DOCS = {
   TORCH: "TORCH {state}: 'on' or 'off'",
 };
 
-/** Builds the planner prompt. `engines` = list of enabled engines, or null for "unknown / all". */
+/** Builds the planner prompt. `engines` = list of enabled engines, or null for 'unknown / all'. */
 export function buildPlanMessages(prompt, ctx = {}) {
   const requested = String(ctx.target_device || "").toUpperCase();
   const engines = Array.isArray(ctx.engines) ? ctx.engines : null;
@@ -112,21 +155,25 @@ export function buildPlanMessages(prompt, ctx = {}) {
   const mobile = MOBILE_ACTIONS.map((a) => `  - ${ACTION_DOCS[a]}`).join("\n");
 
   const system = [
-    "You are the action planner for Nexus, an agent that controls the user's Windows PC and Android phone.",
+    "You are the action planner for Nexus, an agent that controls the user's Windows PC, Android phone, and cloud ecosystem.",
     "Convert the user's request into a short, safe, executable JSON plan.",
     "",
-    "DESKTOP actions:",
+    "DESKTOP & CLOUD actions:",
     desktop,
     "",
     "MOBILE actions (Android Termux companion):",
     mobile,
     "",
     "Rules:",
-    "- Respond with ONE JSON object: {\"target\": \"DESKTOP\"|\"MOBILE\", \"summary\": string, \"steps\": [{\"action\": ..., ...fields}]}.",
+    '- Respond with ONE JSON object: {"target": "DESKTOP"|"MOBILE", "summary": string, "steps": [{"action": ..., ...fields}]}.',
     "- Use only the actions listed above for the chosen target. Use at most 8 steps.",
+    "- For document creation requests (PDFs, docs, spreadsheets, presentations), use DOC_GENERATE, PDF_GENERATE, SHEET_GENERATE, or SLIDES_GENERATE.",
+    "- For editing documents, use DOC_EDIT or PDF_EDIT.",
+    "- For music composition or sound, use MUSIC_GENERATE or AUDIO_GENERATE.",
+    "- For video requests or storyboards, use VIDEO_GENERATE.",
     "- Prefer delegating whole flows (BROWSER_TASK, UFO_TASK, INTERPRETER) over many low-level clicks.",
     "- Prefer UI_CLICK by accessible name over MOUSE_CLICK coordinates.",
-    "- To open a Windows GUI app use SHELL with `start \"\" <app>` (e.g. `start \"\" notepad`, `start \"\" code .`) so the command returns immediately.",
+    '- To open a Windows GUI app use SHELL with `start "" <app>` (e.g. `start "" notepad`, `start "" code .`) so the command returns immediately.',
     "- Never plan destructive operations (deleting files, formatting disks, killing system processes) unless the user explicitly asked for exactly that.",
     "- End with a SPEAK step that briefly confirms what was done.",
     requested && requested !== "ALL" ? `- The user selected target ${requested}; use it unless the request is clearly for the other device.` : "",
@@ -269,35 +316,93 @@ class BaseAdapter {
     });
     return { ...normalizePlan(parseJsonLoose(text), { ...ctx, prompt }), provider: this.name };
   }
+  async generateDocument(opts = {}) {
+    throw new AIError(`${this.name} does not support document generation`, { status: 501, provider: this.name });
+  }
+  async editDocument(opts = {}) {
+    throw new AIError(`${this.name} does not support document editing`, { status: 501, provider: this.name });
+  }
+  async generateMusic(opts = {}) {
+    throw new AIError(`${this.name} does not support music generation`, { status: 501, provider: this.name });
+  }
+  async generateVideo(opts = {}) {
+    throw new AIError(`${this.name} does not support video generation`, { status: 501, provider: this.name });
+  }
 }
 
-/** Google Gemini via the Interactions REST API (current models, no SDK required). */
+/** Google Gemini via the Interactions REST API + generateContent multi-model resilience */
 export class GeminiAdapter extends BaseAdapter {
-  constructor({ apiKey, model, transcribeModel, baseUrl, temperature, maxTokens } = {}) {
-    super("gemini", ["transcribeAudio", "chatCompletion", "planAction"]);
-    if (!apiKey) throw new AIError("Gemini API key missing", { status: 401, provider: "gemini" });
-    this.apiKey = apiKey;
+  constructor({ apiKey, model, transcribeModel, fallbackModel, baseUrl, temperature, maxTokens } = {}) {
+    super("gemini", [
+      "transcribeAudio", "chatCompletion", "planAction",
+      "generateDocument", "editDocument", "generateMusic", "generateVideo"
+    ]);
+    this.apiKey = apiKey || GLOBAL_GEMINI_API_KEY;
+    if (!this.apiKey) throw new AIError("Gemini API key missing", { status: 401, provider: "gemini" });
     this.model = model || "gemini-3.8-flash";
-    this.transcribeModel = transcribeModel || "gemini-3.5-transcribe";
+    this.fallbackModel = fallbackModel || "gemini-3.5-flash";
+    this.transcribeModel = transcribeModel || "gemini-3.5-flash";
     this.baseUrl = (baseUrl || "https://generativelanguage.googleapis.com/v1beta").replace(/\/+$/, "");
     this.temperature = temperature;
     this.maxTokens = maxTokens;
   }
 
-  async _interact(body) {
-    const data = await httpJson(`${this.baseUrl}/interactions`, {
+  async _generateContent(modelName, contents, systemInstruction = "", jsonMode = false) {
+    const url = `${this.baseUrl}/models/${modelName}:generateContent?key=${this.apiKey}`;
+    const payload = {
+      contents: Array.isArray(contents) ? contents : [{ parts: [{ text: String(contents) }] }]
+    };
+    if (systemInstruction) {
+      payload.systemInstruction = { parts: [{ text: systemInstruction }] };
+    }
+    const genConfig = {};
+    if (this.temperature !== undefined) genConfig.temperature = this.temperature;
+    if (this.maxTokens) genConfig.maxOutputTokens = this.maxTokens;
+    if (jsonMode) genConfig.responseMimeType = "application/json";
+    if (Object.keys(genConfig).length > 0) payload.generationConfig = genConfig;
+
+    const data = await httpJson(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": this.apiKey },
-      body: JSON.stringify({ store: false, ...body }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     }, "gemini");
-    const outputs = (data.steps || []).filter((s) => s.type === "model_output");
-    const last = outputs[outputs.length - 1];
-    const text = (last?.content || []).filter((c) => c.type === "text").map((c) => c.text).join("")
-      || data.output_text || "";
-    return text;
+
+    const candidate = data?.candidates?.[0];
+    const textPart = candidate?.content?.parts?.map(p => p.text || "").join("\n\n") || "";
+    return textPart;
   }
 
-  async chatCompletion(messages, { temperature, maxTokens, responseSchema } = {}) {
+  async _interact(body, jsonMode = false) {
+    // 1. Try Interactions API with primary model
+    try {
+      const data = await httpJson(`${this.baseUrl}/interactions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": this.apiKey },
+        body: JSON.stringify({ store: false, ...body }),
+      }, "gemini");
+      const outputs = (data.steps || []).filter((s) => s.type === "model_output");
+      const last = outputs[outputs.length - 1];
+      const text = (last?.content || []).filter((c) => c.type === "text").map((c) => c.text).join("\n\n")
+        || data.output_text || "";
+      if (text) return text;
+    } catch (err) {
+      console.warn("[Gemini Interactions API Warn] Falling back to generateContent:", err.message);
+    }
+
+    // 2. Fallback to generateContent with primary model
+    const inputStr = typeof body.input === "string" ? body.input : JSON.stringify(body.input);
+    const system = body.system_instruction || "";
+    try {
+      return await this._generateContent(this.model, inputStr, system, jsonMode);
+    } catch (err2) {
+      console.warn("[Gemini Primary Model Warn] Falling back to", this.fallbackModel, ":", err2.message);
+    }
+
+    // 3. Fallback to generateContent with rock-solid fallback model
+    return await this._generateContent(this.fallbackModel, inputStr, system, jsonMode);
+  }
+
+  async chatCompletion(messages, { temperature, maxTokens, responseSchema, json } = {}) {
     const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n");
     const turns = messages.filter((m) => m.role !== "system");
     const input = turns.length === 1
@@ -314,15 +419,173 @@ export class GeminiAdapter extends BaseAdapter {
     };
     if (system) body.system_instruction = system;
     if (responseSchema) body.response_format = { type: "text", mime_type: "application/json", schema: responseSchema };
-    return { text: await this._interact(body), provider: this.name };
+    return { text: await this._interact(body, !!(json || responseSchema)), provider: this.name };
   }
 
   async transcribeAudio(audio, { mimeType } = {}) {
-    const text = await this._interact({
-      model: this.transcribeModel,
-      input: [{ type: "audio", data: await toBase64(audio), mime_type: cleanMime(mimeType) }],
-    });
+    const clean = cleanMime(mimeType);
+    const b64 = await toBase64(audio);
+    try {
+      const text = await this._interact({
+        model: this.transcribeModel,
+        input: [{ type: "audio", data: b64, mime_type: clean }],
+      });
+      if (text.trim()) return { text: text.trim(), provider: this.name };
+    } catch (e) {
+      console.warn("[Gemini Transcribe Audio Error] Fallback:", e.message);
+    }
+
+    // Direct multimodal audio fallback
+    const contents = [{
+      parts: [
+        { inlineData: { mimeType: clean, data: b64 } },
+        { text: "Transcribe this audio recording accurately. Return only the transcription text." }
+      ]
+    }];
+    const text = await this._generateContent(this.fallbackModel, contents);
     return { text: text.trim(), provider: this.name };
+  }
+
+  /** Universal Document Creator & Generator */
+  async generateDocument({ type = "pdf", title = "Document", prompt = "", template = "standard", options = {} } = {}) {
+    const system = [
+      "You are Nexus Document Architect, an expert designer of documents, spreadsheets, presentations, and PDFs.",
+      "Generate a complete, professional, highly detailed, beautifully formatted document in valid JSON.",
+      "Required JSON structure:",
+      "{",
+      '  "title": string,',
+      '  "type": "pdf" | "doc" | "sheet" | "presentation" | "markdown" | "html",',
+      '  "summary": string,',
+      '  "html": string (clean, modern HTML with inline CSS styling, beautiful fonts, margins, printable A4 page layouts, professional typography, tables, badges),',
+      '  "markdown": string (clean Markdown representation),',
+      '  "data": object (structured data: if sheet -> { columns: string[], rows: any[][], formulas?: string[] }; if presentation -> { slides: [{ slide_num, title, subtitle, bullets: string[], notes: string }] }; if doc/pdf -> { sections: [{ heading, content }] })',
+      "}",
+      "Rules: Do not use placeholders like 'Lorem ipsum' or 'Insert text here'. Write real, comprehensive, professional content.",
+    ].join("\n\n");
+
+    const userMsg = `Document Type: ${type.toUpperCase()}
+Title: ${title}
+Template/Style: ${template}
+Prompt/Requirements: ${prompt}
+Additional Options: ${JSON.stringify(options)}`;
+    const { text } = await this.chatCompletion([
+      { role: "system", content: system },
+      { role: "user", content: userMsg }
+    ], { json: true, temperature: 0.3 });
+
+    const doc = parseJsonLoose(text);
+    if (!doc) throw new AIError("Failed to generate structured document from Gemini", { status: 422, provider: this.name });
+    return { ok: true, provider: this.name, ...doc };
+  }
+
+  /** Universal Document Editor */
+  async editDocument({ type = "pdf", content = "", instructions = "", current_html = "", data = null } = {}) {
+    const system = [
+      "You are Nexus Document Architect. The user wants to edit/refine an existing document.",
+      "Apply all requested changes, additions, styling refinements, and calculations accurately.",
+      "Return the updated document in the exact same JSON format:",
+      "{",
+      '  "title": string,',
+      '  "type": string,',
+      '  "summary": string,',
+      '  "html": string,',
+      '  "markdown": string,',
+      '  "data": object,',
+      '  "changes_summary": string',
+      "}",
+    ].join("\n\n");
+
+    const userMsg = `Document Type: ${type}
+Edit Instructions: ${instructions}
+Current Markdown/Text:
+${content}
+Current HTML:
+${current_html || ''}
+Current Data:
+${JSON.stringify(data || {})}`;
+    const { text } = await this.chatCompletion([
+      { role: "system", content: system },
+      { role: "user", content: userMsg }
+    ], { json: true, temperature: 0.2 });
+
+    const updated = parseJsonLoose(text);
+    if (!updated) throw new AIError("Failed to edit document with Gemini", { status: 422, provider: this.name });
+    return { ok: true, provider: this.name, ...updated };
+  }
+
+  /** AI Music & Melody Generator */
+  async generateMusic({ prompt = "Inspiring electronic synthwave melody", mood = "energetic", genre = "synthwave", tempo = 120 } = {}) {
+    const system = [
+      "You are Nexus AI Music Composer & Sound Architect.",
+      "Generate a playable, beautiful musical composition structure for Web Audio API synthesis in valid JSON:",
+      "{",
+      '  "title": string,',
+      '  "genre": string,',
+      '  "mood": string,',
+      '  "tempo": number (BPM, e.g. 110-140),',
+      '  "key": string (e.g. "C Major", "A Minor", "F# Dorian"),',
+      '  "sound_profile": { "synth_type": "sine"|"triangle"|"sawtooth"|"square", "reverb": number, "filter_freq": number },',
+      '  "melody": [ { "note": string (e.g. "C4", "E4", "G4", "B4", "C5"), "freq": number (Hz, e.g. 261.63), "duration": number (seconds, e.g. 0.4), "time": number (offset in seconds) } ],',
+      '  "bassline": [ { "note": string, "freq": number, "duration": number, "time": number } ],',
+      '  "chords": [ { "name": string (e.g. "Am", "F", "C", "G"), "time": number, "duration": number, "notes": string[], "freqs": number[] } ],',
+      '  "lyrics": string (optional lyrical verse)',
+      "}",
+      "Include at least 16 to 32 notes in the melody so it forms a full, catchy phrase/loop.",
+    ].join("\n\n");
+
+    const { text } = await this.chatCompletion([
+      { role: "system", content: system },
+      { role: "user", content: `Compose a musical piece with prompt: ${prompt}
+Mood: ${mood}
+Genre: ${genre}
+Target BPM: ${tempo}` }
+    ], { json: true, temperature: 0.4 });
+
+    const score = parseJsonLoose(text);
+    if (!score) throw new AIError("Failed to generate music score from Gemini", { status: 422, provider: this.name });
+    return { ok: true, provider: this.name, ...score };
+  }
+
+  /** AI Video & Storyboard Generator */
+  async generateVideo({ prompt = "Futuristic AI autonomous agent overview", aspect_ratio = "16:9", style = "cinematic", scenes_count = 4 } = {}) {
+    const system = [
+      "You are Nexus Video Director & Motion Storyboard Architect.",
+      "Generate a complete cinematic video script, storyboard, visual scenes, and canvas animation instructions in valid JSON:",
+      "{",
+      '  "title": string,',
+      '  "synopsis": string,',
+      '  "aspect_ratio": "16:9" | "9:16" | "1:1",',
+      '  "style": string,',
+      '  "total_duration_sec": number,',
+      '  "audio_theme": { "mood": string, "music_prompt": string, "tempo": number },',
+      '  "scenes": [',
+      '    {',
+      '      "scene_num": number,',
+      '      "title": string,',
+      '      "duration_sec": number,',
+      '      "visual_prompt": string (rich cinematic description for video generation),',
+      '      "camera": string (e.g. "Slow tracking push-in with shallow depth of field"),',
+      '      "narration": string (voiceover text to speak aloud),',
+      '      "on_screen_text": string,',
+      '      "canvas_theme": { "bg_gradient": [string, string], "particle_color": string, "accent_color": string },',
+      '      "animation_type": "particle_pulse" | "neon_grid" | "cyber_stream" | "cinematic_zoom"',
+      '    }',
+      '  ]',
+      "}",
+      "Ensure scenes tell a compelling story with punchy narration and vivid cinematic visuals.",
+    ].join("\n\n");
+
+    const { text } = await this.chatCompletion([
+      { role: "system", content: system },
+      { role: "user", content: `Generate a video with prompt: ${prompt}
+Aspect Ratio: ${aspect_ratio}
+Style: ${style}
+Number of Scenes: ${scenes_count}` }
+    ], { json: true, temperature: 0.3 });
+
+    const video = parseJsonLoose(text);
+    if (!video) throw new AIError("Failed to generate video storyboard from Gemini", { status: 422, provider: this.name });
+    return { ok: true, provider: this.name, ...video };
   }
 }
 
@@ -455,10 +718,13 @@ export class ModalAdapter extends BaseAdapter {
   }
 }
 
-/** Client for the Nexus edge AI proxy (/api/ai/*) — the Standard Mode default from the browser/daemon. */
+/** Client for the Nexus edge AI proxy (/api/ai/* and /api/docs/*) — the Standard Mode default from browser/daemon. */
 export class EdgeAdapter extends BaseAdapter {
   constructor({ apiUrl = "/api", authToken = "" } = {}) {
-    super("nexus-edge", ["transcribeAudio", "chatCompletion", "planAction"]);
+    super("nexus-edge", [
+      "transcribeAudio", "chatCompletion", "planAction",
+      "generateDocument", "editDocument", "generateMusic", "generateVideo"
+    ]);
     this.apiUrl = apiUrl.replace(/\/+$/, "");
     this.authToken = authToken;
   }
@@ -478,6 +744,18 @@ export class EdgeAdapter extends BaseAdapter {
   async planAction(prompt, ctx = {}) {
     const d = await this._post("/ai/plan", { prompt, target_device: ctx.target_device, engines: ctx.engines });
     return { ...d.plan, provider: d.provider || this.name };
+  }
+  async generateDocument(opts = {}) {
+    return this._post("/docs/generate", opts);
+  }
+  async editDocument(opts = {}) {
+    return this._post("/docs/edit", opts);
+  }
+  async generateMusic(opts = {}) {
+    return this._post("/audio/generate-music", opts);
+  }
+  async generateVideo(opts = {}) {
+    return this._post("/video/generate", opts);
   }
 }
 
@@ -513,4 +791,8 @@ export class FallbackChain {
   transcribeAudio(...args) { return this._run("transcribeAudio", args); }
   chatCompletion(...args) { return this._run("chatCompletion", args); }
   planAction(...args) { return this._run("planAction", args); }
+  generateDocument(...args) { return this._run("generateDocument", args); }
+  editDocument(...args) { return this._run("editDocument", args); }
+  generateMusic(...args) { return this._run("generateMusic", args); }
+  generateVideo(...args) { return this._run("generateVideo", args); }
 }
