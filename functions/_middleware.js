@@ -9,7 +9,7 @@
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Nexus-Key, X-Requested-With",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Nexus-Key, X-Nexus-Auth-Token, X-Requested-With",
   "Access-Control-Max-Age": "86400",
 };
 
@@ -30,17 +30,21 @@ export async function onRequest(context) {
     });
   }
 
-  // 2. Secret Token Authentication for mutating operations
+  // 2. Secret Token Authentication
   const secretKey = env.NEXUS_SECRET_KEY || env.AUTH_SECRET;
+  const publicPaths = ["/api/health", "/api/auth/login", "/api/auth/register", "/api/auth/passkey", "/api/vectors/info"];
+  const isPublic = publicPaths.some(p => url.pathname.startsWith(p));
   const isMutatingMethod = ["POST", "PATCH", "PUT", "DELETE"].includes(request.method);
 
-  // If a secret is configured in the environment, enforce it on mutating requests
-  if (secretKey && isMutatingMethod) {
+  if (secretKey && !isPublic && (isMutatingMethod || url.pathname.startsWith("/api/bridge") || url.pathname.startsWith("/api/tasks"))) {
     const authHeader = request.headers.get("Authorization") || "";
+    const nexusAuthToken = request.headers.get("X-Nexus-Auth-Token") || "";
     const customHeader = request.headers.get("X-Nexus-Key") || "";
     
     let providedToken = "";
-    if (authHeader.startsWith("Bearer ")) {
+    if (nexusAuthToken) {
+      providedToken = nexusAuthToken.trim();
+    } else if (authHeader.startsWith("Bearer ")) {
       providedToken = authHeader.slice(7).trim();
     } else if (customHeader) {
       providedToken = customHeader.trim();
@@ -50,8 +54,8 @@ export async function onRequest(context) {
       return new Response(
         JSON.stringify({
           ok: false,
-          error: "Unauthorized: Invalid or missing Bearer auth token",
-          hint: "Provide 'Authorization: Bearer <token>' or 'X-Nexus-Key: <token>'",
+          error: "Unauthorized: Invalid or missing X-Nexus-Auth-Token",
+          hint: "Provide 'X-Nexus-Auth-Token: <token>' or 'Authorization: Bearer <token>'",
           timestamp: new Date().toISOString(),
         }),
         {

@@ -1,15 +1,15 @@
 /**
- * Cloudflare Pages Function: Cloudflare R2 Media & Blob Upload Handler
+ * Nexus Media & Blob Upload Handler (100% Free - Zero Credit Cards)
  * Path: functions/api/upload.js
  * 
- * Free-Tier Object Storage: Cloudflare R2 (10 GB storage, zero egress bandwidth fees)
- * Stores audio recordings (WebM/WAV) and execution screenshots (PNG).
+ * Free-Tier Storage: Cloudflare Workers KV & D1 SQLite payload storage.
+ * Stores audio recordings (WebM/WAV) and screenshots as binary/Base64 without R2.
  */
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Nexus-Key, X-Filename",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Nexus-Key, X-Filename, X-Nexus-Auth-Token",
 };
 
 export async function onRequest(context) {
@@ -19,17 +19,8 @@ export async function onRequest(context) {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
 
-  const r2 = env.BUCKET || env.R2_BUCKET || env.nexus_media;
-  if (!r2) {
-    return new Response(
-      JSON.stringify({
-        ok: false,
-        error: "Cloudflare R2 Bucket binding 'BUCKET' is not configured in wrangler.toml or Pages dashboard.",
-        hint: "Add [[r2_buckets]] binding = 'BUCKET' bucket_name = 'nexus-media' to your configuration.",
-      }),
-      { status: 501, headers: { "Content-Type": "application/json", ...CORS_HEADERS } }
-    );
-  }
+  const kv = env.NEXUS_KV;
+  const db = env.DB || env.nexus_db;
 
   if (request.method === "POST") {
     try {
@@ -45,19 +36,25 @@ export async function onRequest(context) {
         );
       }
 
-      // Generate clean unique key in R2
       const safeFilename = customFilename.replace(/[^a-zA-Z0-9_.-]/g, "_");
       const objectKey = `media/${Date.now()}-${safeFilename}`;
 
-      await r2.put(objectKey, arrayBuffer, {
-        httpMetadata: { contentType },
-        customMetadata: {
-          uploadedAt: new Date().toISOString(),
-          bytes: arrayBuffer.byteLength.toString(),
-        },
-      });
+      // Convert ArrayBuffer to Base64 data URL
+      const bytes = new Uint8Array(arrayBuffer);
+      let binary = "";
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const base64Data = btoa(binary);
+      const dataUri = `data:${contentType};base64,${base64Data}`;
 
-      const publicOrApiUrl = `/api/files/${objectKey}`;
+      // Store in Cloudflare Workers KV (100% Free, up to 25MB per key)
+      if (kv) {
+        await kv.put(`blob:${objectKey}`, base64Data, {
+          metadata: { contentType, filename: safeFilename, bytes: arrayBuffer.byteLength },
+          expirationTtl: 30 * 24 * 3600 // 30 days retention
+        }).catch(() => {});
+      }
 
       return new Response(
         JSON.stringify({
@@ -66,7 +63,8 @@ export async function onRequest(context) {
           filename: safeFilename,
           size: arrayBuffer.byteLength,
           content_type: contentType,
-          url: publicOrApiUrl,
+          url: dataUri, // Directly usable in frontend <img> or <audio> tags
+          kv_stored: !!kv,
           created_at: new Date().toISOString(),
         }),
         { status: 201, headers: { "Content-Type": "application/json", ...CORS_HEADERS } }

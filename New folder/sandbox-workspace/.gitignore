@@ -1,4 +1,0 @@
-# Ignore all agent test outputs and temporary files inside the sandbox workspace
-*
-!.gitignore
-!README.md

@@ -20,12 +20,13 @@ CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
     source_device TEXT NOT NULL DEFAULT 'WEB',
     target_device TEXT NOT NULL DEFAULT 'DESKTOP' CHECK(target_device IN ('DESKTOP', 'MOBILE', 'ALL')),
-    command_type TEXT NOT NULL CHECK(command_type IN ('VOICE_PROMPT', 'TERMINAL_EXEC', 'DESKTOP_GUI', 'MOBILE_ACTION')),
+    command_type TEXT NOT NULL,
     prompt_raw TEXT NOT NULL,
     action_plan TEXT,                       -- Validated JSON action steps emitted by AI planner
-    media_r2_url TEXT,                      -- Cloudflare R2 object URL (voice clip, screenshot, log)
-    status TEXT NOT NULL DEFAULT 'QUEUED' CHECK(status IN ('QUEUED', 'PLANNING_AI', 'DISPATCHED', 'COMPLETED', 'FAILED')),
-    execution_log TEXT,                     -- Stdout/stderr, action results, or failure traceback
+    media_blob TEXT,                        -- 100% Free: Base64 / binary payload (audio, screenshot, logs) stored in D1
+    status TEXT NOT NULL DEFAULT 'QUEUED',  -- QUEUED, PROCESSING, COMPLETED, FAILED
+    result_output TEXT,                     -- Stdout/stderr, action results, or failure traceback
+    execution_log TEXT,                     -- Full execution history
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP
 );

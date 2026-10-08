@@ -1,3 +1,0 @@
-ALTER TABLE plans ADD COLUMN IF NOT EXISTS plan_config JSON;
-
-ALTER TABLE users ADD COLUMN IF NOT EXISTS default_plan_config JSON;

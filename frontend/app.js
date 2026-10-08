@@ -124,6 +124,21 @@ function showToast(message, type = "info") {
 }
 
 // -----------------------------------------------------------------------------
+// 3b. Live Execution Terminal Window Logger
+// -----------------------------------------------------------------------------
+function logToTerminal(text, type = "info") {
+  const terminal = document.getElementById("liveTerminalOutput");
+  if (!terminal) return;
+  const time = new Date().toLocaleTimeString();
+  const line = document.createElement("div");
+  const color = type === "error" ? "text-rose-400" : type === "success" ? "text-emerald-400" : type === "cmd" ? "text-cyan-400" : "text-slate-300";
+  line.className = `${color} leading-relaxed`;
+  line.innerHTML = `<span class="text-slate-600 font-mono">[${time}]</span> ${escapeHtml(text)}`;
+  terminal.appendChild(line);
+  terminal.scrollTop = terminal.scrollHeight;
+}
+
+// -----------------------------------------------------------------------------
 // 4. Edge API Client (with Bearer Token Auth)
 // -----------------------------------------------------------------------------
 async function fetchEdgeApi(endpoint, options = {}) {
@@ -190,8 +205,18 @@ async function pollFleetAndTasks() {
     // 2. Fetch Tasks Stream
     const tasksData = await fetchEdgeApi("/tasks?limit=40").catch(() => null);
     if (tasksData && tasksData.tasks) {
+      const prevMap = new Map((state.tasks || []).map(t => [t.id, t.status]));
       state.tasks = tasksData.tasks;
       renderTasksList();
+
+      // Stream new completions/failures into live execution terminal
+      for (const t of state.tasks) {
+        const prevStatus = prevMap.get(t.id);
+        if (prevStatus && prevStatus !== t.status) {
+          const summary = t.result_output || t.execution_log || `Task status updated to ${t.status}`;
+          logToTerminal(`[${t.target_device}] Task ${t.id.slice(0, 8)}: ${t.status} - ${typeof summary === "object" ? JSON.stringify(summary) : summary}`, t.status === "COMPLETED" ? "success" : t.status === "FAILED" ? "error" : "info");
+        }
+      }
     }
   } catch (err) {
     console.debug("Sync poll error:", err.message);
@@ -448,7 +473,7 @@ function updateRecordingUI(isRecording) {
     wave.classList.add("hidden");
     wave.classList.remove("flex");
     micBtn.classList.remove("border-red-500", "bg-red-950/40", "text-red-400");
-    micLabel.textContent = "Record Voice";
+    micLabel.textContent = "Hold to Talk";
     clearInterval(state.recordTimerInterval);
   }
 }
@@ -658,15 +683,64 @@ function setupEventListeners() {
     });
   });
 
-  // Microphone
-  document.getElementById("micBtn").addEventListener("click", () => {
-    if (state.isRecording) stopAudioRecording();
-    else startAudioRecording();
-  });
+  // Microphone: Click or Hold-to-Talk
+  const micBtn = document.getElementById("micBtn");
+  let holdTimeout = null;
+  let isHoldActive = false;
 
-  document.getElementById("cancelRecordBtn").addEventListener("click", () => {
+  if (micBtn) {
+    micBtn.addEventListener("pointerdown", () => {
+      isHoldActive = false;
+      holdTimeout = setTimeout(() => {
+        isHoldActive = true;
+        if (!state.isRecording) {
+          startAudioRecording();
+          logToTerminal("Hold-to-Talk active: recording voice...", "cmd");
+        }
+      }, 250);
+    });
+
+    const stopHold = () => {
+      if (holdTimeout) {
+        clearTimeout(holdTimeout);
+        holdTimeout = null;
+      }
+      if (isHoldActive) {
+        isHoldActive = false;
+        if (state.isRecording) {
+          stopAudioRecording();
+          logToTerminal("Hold-to-Talk released: transcribing audio...", "cmd");
+        }
+      }
+    };
+
+    micBtn.addEventListener("pointerup", stopHold);
+    micBtn.addEventListener("pointerleave", stopHold);
+    micBtn.addEventListener("pointercancel", stopHold);
+
+    micBtn.addEventListener("click", () => {
+      if (!isHoldActive) {
+        if (state.isRecording) {
+          stopAudioRecording();
+          logToTerminal("Voice recording stopped.", "cmd");
+        } else {
+          startAudioRecording();
+          logToTerminal("Voice recording started (Click mode).", "cmd");
+        }
+      }
+    });
+  }
+
+  document.getElementById("cancelRecordBtn")?.addEventListener("click", () => {
     state.audioChunks = [];
     stopAudioRecording();
+    logToTerminal("Voice recording cancelled.", "info");
+  });
+
+  // Clear Terminal Button
+  document.getElementById("clearTerminalBtn")?.addEventListener("click", () => {
+    const term = document.getElementById("liveTerminalOutput");
+    if (term) term.innerHTML = `<div class="text-slate-500">[System] Terminal output cleared.</div>`;
   });
 
   // Dispatch Button
@@ -771,14 +845,22 @@ async function handleDispatchTask() {
     );
 
     if (res.ok) {
-      showToast(`Task assigned to ${res.task.target_device}`, "success");
+      const tgt = res.task?.target_device || state.activeTarget;
+      const tId = res.task?.id || res.task_id || "new";
+      showToast(`Task assigned to ${tgt}`, "success");
+      logToTerminal(`[Dispatch] Task queued for ${tgt} (ID: ${tId}): "${promptText}"`, "cmd");
+      if (clientPlan) {
+        logToTerminal(`[Plan: ${clientPlan.provider || 'AI'}] ${clientPlan.summary || clientPlan.steps.length + ' steps'}`, "info");
+      }
       input.value = "";
       pollFleetAndTasks();
     } else {
       showToast(res.error || "Failed to dispatch task", "error");
+      logToTerminal(`[Dispatch Error] ${res.error || "Failed to dispatch task"}`, "error");
     }
   } catch (err) {
     showToast(err.message || "Network error", "error");
+    logToTerminal(`[Network Error] ${err.message}`, "error");
   } finally {
     sendBtn.disabled = false;
     sendBtn.innerHTML = `<i data-lucide="send" class="w-3.5 h-3.5"></i><span>Dispatch Task</span>`;

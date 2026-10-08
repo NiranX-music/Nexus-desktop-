@@ -52,6 +52,14 @@ function getStorage(env) {
   return env.BUCKET || env.R2_BUCKET || env.nexus_media || null;
 }
 
+function getKv(env) {
+  return env.NEXUS_KV || env.KV || null;
+}
+
+function getVectors(env) {
+  return env.VECTORIZE || null;
+}
+
 /**
  * Standard Mode (built-in) provider chain. Keys are Cloudflare secrets and never reach the browser.
  * Order: Gemini (GEMINI_API_KEY) -> Groq (GROQ_API_KEY) -> Workers AI (free, keyless) -> Modal rule planner.
@@ -104,9 +112,12 @@ export async function onRequest(context) {
 
   const segment0 = (route[0] || "").toLowerCase();
   const segment1 = (route[1] || "").toLowerCase();
+  const segment2 = (route[2] || "").toLowerCase();
 
   const db = getDatabase(env);
   const r2 = getStorage(env);
+  const kv = getKv(env);
+  const vectors = getVectors(env);
 
   try {
     // --------------------------------------------------------------------------
@@ -116,10 +127,12 @@ export async function onRequest(context) {
       return jsonResponse({
         ok: true,
         service: "Nexus Multi-Device Bridge API",
-        version: "2.0.0",
+        version: "2.1.0",
         edge_runtime: "Cloudflare Pages Functions / Workers",
         database_bound: !!db,
         r2_storage_bound: !!r2,
+        kv_bound: !!kv,
+        vectorize_bound: !!vectors,
         modal_configured: !!env.MODAL_API_URL,
         ai_providers: describeServerProviders(env),
         auth_required: !!(env.NEXUS_SECRET_KEY || env.AUTH_SECRET),
@@ -177,8 +190,134 @@ export async function onRequest(context) {
       }
       return errorResponse(`Endpoint /api/ai/${segment1} not found`, 404);
     }
+    // --------------------------------------------------------------------------
+    // 1C. Cloudflare Workers KV Cache: /api/kv/*
+    // GET    /api/kv/:key -> Retrieve cached value
+    // POST   /api/kv/:key -> Store cached value { value, ttl_sec }
+    // DELETE /api/kv/:key -> Invalidate key
+    // GET    /api/kv      -> List keys
+    // --------------------------------------------------------------------------
+    if (segment0 === "kv") {
+      if (!kv) return errorResponse("Cloudflare KV Namespace binding 'NEXUS_KV' is not configured.", 501);
 
-    if (!db && segment0 !== "files" && segment0 !== "upload") {
+      const kvKey = route.slice(1).join("/");
+
+      if (request.method === "GET" && !kvKey) {
+        const list = await kv.list({ limit: 50 });
+        return jsonResponse({ ok: true, keys: list.keys, list_complete: list.list_complete });
+      }
+
+      if (request.method === "GET" && kvKey) {
+        const val = await kv.get(kvKey);
+        if (val === null) return errorResponse(`Key '${kvKey}' not found in KV cache`, 404);
+        let parsed = val;
+        try { parsed = JSON.parse(val); } catch {}
+        return jsonResponse({ ok: true, key: kvKey, value: parsed });
+      }
+
+      if (request.method === "POST" && kvKey) {
+        let body = {};
+        try { body = await request.json(); } catch { return errorResponse("Invalid JSON payload", 400); }
+        const valueToStore = typeof body.value === "string" ? body.value : JSON.stringify(body.value);
+        const options = {};
+        if (body.ttl_sec && Number(body.ttl_sec) > 60) {
+          options.expirationTtl = Number(body.ttl_sec);
+        }
+        await kv.put(kvKey, valueToStore, options);
+        return jsonResponse({ ok: true, key: kvKey, stored: true });
+      }
+
+      if (request.method === "DELETE" && kvKey) {
+        await kv.delete(kvKey);
+        return jsonResponse({ ok: true, key: kvKey, deleted: true });
+      }
+
+      return errorResponse(`Method ${request.method} not supported for /api/kv`, 405);
+    }
+
+    // --------------------------------------------------------------------------
+    // 1D. Cloudflare Vectorize (Vector DB & Semantic Memory): /api/vectors/*
+    // GET  /api/vectors/info   -> Index stats & configuration
+    // POST /api/vectors/upsert -> Upsert embeddings ({ id, text, values?, metadata? })
+    // POST /api/vectors/query  -> Vector similarity search ({ text?, vector?, topK? })
+    // --------------------------------------------------------------------------
+    if (segment0 === "vectors") {
+      if (!vectors) return errorResponse("Cloudflare Vectorize binding 'VECTORIZE' is not configured.", 501);
+
+      if (request.method === "GET" && (segment1 === "info" || !segment1)) {
+        return jsonResponse({
+          ok: true,
+          index_name: "nexus-vectors",
+          dimensions: 768,
+          metric: "cosine",
+          ai_embedding_model: "@cf/baai/bge-base-en-v1.5",
+          bound: true,
+        });
+      }
+
+      if (request.method === "POST" && segment1 === "upsert") {
+        let body = {};
+        try { body = await request.json(); } catch { return errorResponse("Invalid JSON payload", 400); }
+        const docId = body.id || ("vec_" + crypto.randomUUID().replace(/-/g, ""));
+        let values = body.values;
+
+        // Auto-generate embeddings using Cloudflare Workers AI if text is provided
+        if (!values && body.text) {
+          if (!env.AI) return errorResponse("Cloudflare Workers AI binding 'AI' required to generate embeddings from text", 400);
+          const emb = await env.AI.run("@cf/baai/bge-base-en-v1.5", { text: [String(body.text)] });
+          values = emb.data ? emb.data[0] : (Array.isArray(emb) ? emb[0] : null);
+        }
+
+        if (!values || !Array.isArray(values)) {
+          return errorResponse("Either 'values' (number array) or 'text' must be provided", 400);
+        }
+
+        await vectors.upsert([
+          {
+            id: docId,
+            values,
+            metadata: body.metadata || (body.text ? { text: body.text } : {}),
+          }
+        ]);
+
+        return jsonResponse({
+          ok: true,
+          id: docId,
+          indexed: true,
+          dimensions: values.length,
+          timestamp: new Date().toISOString()
+        }, 201);
+      }
+
+      if (request.method === "POST" && segment1 === "query") {
+        let body = {};
+        try { body = await request.json(); } catch { return errorResponse("Invalid JSON payload", 400); }
+        let queryVector = body.vector;
+
+        if (!queryVector && body.text) {
+          if (!env.AI) return errorResponse("Cloudflare Workers AI binding 'AI' required to embed query text", 400);
+          const emb = await env.AI.run("@cf/baai/bge-base-en-v1.5", { text: [String(body.text)] });
+          queryVector = emb.data ? emb.data[0] : (Array.isArray(emb) ? emb[0] : null);
+        }
+
+        if (!queryVector || !Array.isArray(queryVector)) {
+          return errorResponse("Either 'vector' (number array) or 'text' query must be provided", 400);
+        }
+
+        const topK = Number(body.topK || body.top_k || 5);
+        const matches = await vectors.query(queryVector, { topK, returnMetadata: true });
+
+        return jsonResponse({
+          ok: true,
+          matches: matches.matches || [],
+          count: (matches.matches || []).length,
+        });
+      }
+
+      return errorResponse(`Endpoint /api/vectors/${segment1} not found`, 404);
+    }
+
+    if (!db && segment0 !== "files" && segment0 !== "upload" && segment0 !== "kv" && segment0 !== "vectors") {
       return errorResponse("Cloudflare D1 Database binding 'DB' is not configured.", 500);
     }
 
@@ -599,7 +738,8 @@ export async function onRequest(context) {
         const authHeader = request.headers.get("Authorization") || "";
         const token = authHeader.replace(/^Bearer\s+/i, "").trim() || "";
         if (token) {
-          await db.prepare("DELETE FROM sessions WHERE token = ?").bind(token).run();
+          await db.prepare("DELETE FROM sessions WHERE token = ?").bind(token).run().catch(() => {});
+          if (kv) await kv.delete(`session:${token}`).catch(() => {});
         }
         return jsonResponse({ ok: true, message: "Session revoked" });
       }
@@ -628,6 +768,10 @@ export async function onRequest(context) {
            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
         ).bind(token, user.id, user.email, "WebAuthn Biometric Passkey", request.headers.get("CF-Connecting-IP") || "127.0.0.1", expiresAt).run();
 
+        if (kv) {
+          await kv.put(`session:${token}`, JSON.stringify({ token, expires_at: expiresAt, user: { id: user.id, name: user.name, email: user.email, role: user.role } }), { expirationTtl: 604800 }).catch(() => {});
+        }
+
         await logTelemetry(db, "AGENT-BETA", "INFO", `Biometric Passkey login: ${email}`);
 
         return jsonResponse({
@@ -636,6 +780,61 @@ export async function onRequest(context) {
           token,
           expires_at: expiresAt,
         });
+      }
+
+      // POST /api/auth/token (Issue JWT token for cross-platform session bridge & deep-links)
+      if (request.method === "POST" && segment1 === "token") {
+        let body = {};
+        try { body = await request.json(); } catch {}
+        const email = String(body.email || "operator@nexus.io").trim();
+        const role = String(body.role || "operator").trim();
+        const clientType = String(body.client_type || "WEB").toUpperCase().trim();
+
+        const now = Math.floor(Date.now() / 1000);
+        const payload = {
+          iss: "nexus-edge-auth-service",
+          sub: email,
+          role,
+          client: clientType,
+          session_id: "ses_" + crypto.randomUUID().substring(0, 8),
+          iat: now,
+          exp: now + (3600 * 24 * 7)
+        };
+
+        const enc = new TextEncoder();
+        const b64Header = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" })).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+        const b64Payload = btoa(JSON.stringify(payload)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+        const dataToSign = enc.encode(`${b64Header}.${b64Payload}`);
+
+        const JWT_SECRET = env.JWT_SECRET || "nexus_cluster_ephemeral_key_2026_enterprise_subagent_matrix";
+        const key = await crypto.subtle.importKey("raw", enc.encode(JWT_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+        const sig = await crypto.subtle.sign("HMAC", key, dataToSign);
+        const signatureB64 = btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+        const token = `${b64Header}.${b64Payload}.${signatureB64}`;
+
+        if (kv) {
+          await kv.put(`session:${token}`, JSON.stringify({ token, user: { email, role }, client: clientType }), { expirationTtl: 604800 }).catch(() => {});
+        }
+
+        return jsonResponse({
+          ok: true,
+          token,
+          user: { email, role },
+          deep_link: `nexus://auth?token=${encodeURIComponent(token)}&user=${encodeURIComponent(email)}`,
+          expires_in: 604800
+        });
+      }
+
+      // POST /api/auth/revoke (Revoke active session token across edge cluster)
+      if (request.method === "POST" && segment1 === "revoke") {
+        let body = {};
+        try { body = await request.json(); } catch {}
+        const tokenToRevoke = body.token;
+        if (tokenToRevoke) {
+          await db.prepare("DELETE FROM sessions WHERE token = ?").bind(tokenToRevoke).run().catch(() => {});
+          if (kv) await kv.delete(`session:${tokenToRevoke}`).catch(() => {});
+        }
+        return jsonResponse({ ok: true, revoked: true, message: "Session invalidated across edge cluster." });
       }
 
       return errorResponse(`Endpoint /api/auth/${segment1} not found`, 404);
@@ -751,6 +950,48 @@ export async function onRequest(context) {
         await logTelemetry(db, source, level, message, latencyMs, body.metadata || null);
 
         return jsonResponse({ ok: true, created_at: new Date().toISOString() });
+      }
+
+      // GET /api/telemetry/stream (SSE live radar feed)
+      if (segment1 === "stream") {
+        const stream = new ReadableStream({
+          start(controller) {
+            const encoder = new TextEncoder();
+            const sendEvent = (event, data) => {
+              controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+            };
+
+            sendEvent("pulse", {
+              status: "ALL_SYSTEMS_OPERATIONAL",
+              timestamp: new Date().toISOString(),
+              agents: { alpha: "HEALTHY", beta: "HEALTHY", gamma: "ACTIVE", delta: "RESTRICTED", epsilon: "OPERATIONAL" },
+              latency_ms: 18
+            });
+            controller.close;
+          }
+        });
+
+        return new Response(stream, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            ...CORS_HEADERS
+          }
+        });
+      }
+
+      // POST /api/telemetry/ping
+      if (segment1 === "ping" && request.method === "POST") {
+        let body = {};
+        try { body = await request.json(); } catch {}
+        return jsonResponse({
+          ok: true,
+          ingested: true,
+          ping_ms: body.latency_ms || 18,
+          agent: body.agent || "AGENT-GAMMA",
+          received_at: new Date().toISOString()
+        });
       }
 
       return errorResponse(`Endpoint /api/telemetry/${segment1} not found`, 404);
@@ -888,151 +1129,39 @@ export async function onRequest(context) {
     }
 
     // --------------------------------------------------------------------------
-    // 7. Object Retrieval from R2: GET /api/files/:key
+    // 7. Object Retrieval: GET /api/files/:key (R2 with KV fallback)
     // --------------------------------------------------------------------------
     if (segment0 === "files" && request.method === "GET") {
-      if (!r2) return errorResponse("Cloudflare R2 Bucket binding 'BUCKET' is not configured.", 501);
-
       const objectKey = route.slice(1).join("/");
       if (!objectKey) return errorResponse("Missing object key in /api/files/:key", 400);
 
-      const object = await r2.get(objectKey);
-      if (!object) return errorResponse(`Object '${objectKey}' not found`, 404);
-
-      const headers = new Headers(CORS_HEADERS);
-      object.writeHttpMetadata(headers);
-      headers.set("etag", object.httpEtag);
-      return new Response(object.body, { headers });
-    }
-
-    // --------------------------------------------------------------------------
-    // 5. Backend #8: Auth & Session Bridge Service
-    // POST /api/auth/token   -> Issue/verify JWT & handle cross-platform sync
-    // GET  /api/auth/session -> Retrieve session state & connected devices
-    // POST /api/auth/revoke  -> Revoke active tokens across clients
-    // --------------------------------------------------------------------------
-    if (segment0 === "auth") {
-      const JWT_SECRET = env.JWT_SECRET || "nexus_cluster_ephemeral_key_2026_enterprise_subagent_matrix";
-
-      if (request.method === "POST" && segment1 === "token") {
-        let body = {};
-        try { body = await request.json(); } catch {}
-        const email = String(body.email || "operator@nexus.io").trim();
-        const role = String(body.role || "operator").trim();
-        const clientType = String(body.client_type || "WEB").toUpperCase().trim();
-
-        const now = Math.floor(Date.now() / 1000);
-        const payload = {
-          iss: "nexus-edge-auth-service",
-          sub: email,
-          role,
-          client: clientType,
-          session_id: "ses_" + crypto.randomUUID().substring(0, 8),
-          iat: now,
-          exp: now + (3600 * 24 * 7)
-        };
-
-        const enc = new TextEncoder();
-        const b64Header = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" })).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-        const b64Payload = btoa(JSON.stringify(payload)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-        const dataToSign = enc.encode(`${b64Header}.${b64Payload}`);
-
-        const key = await crypto.subtle.importKey("raw", enc.encode(JWT_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-        const sig = await crypto.subtle.sign("HMAC", key, dataToSign);
-        const signatureB64 = btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-        const token = `${b64Header}.${b64Payload}.${signatureB64}`;
-
-        return jsonResponse({
-          ok: true,
-          token,
-          user: { email, role },
-          deep_link: `nexus://auth?token=${encodeURIComponent(token)}&user=${encodeURIComponent(email)}`,
-          expires_in: 604800
-        });
+      if (r2) {
+        const object = await r2.get(objectKey);
+        if (object) {
+          const headers = new Headers(CORS_HEADERS);
+          object.writeHttpMetadata(headers);
+          headers.set("etag", object.httpEtag);
+          return new Response(object.body, { headers });
+        }
       }
 
-      if (request.method === "GET" && segment1 === "session") {
-        const authHeader = request.headers.get("Authorization") || "";
-        const token = authHeader.replace(/^Bearer\s+/i, "").trim();
-        if (!token) return errorResponse("Missing Authorization header", 401);
-
-        const parts = token.split(".");
-        if (parts.length !== 3) return errorResponse("Malformed JWT token", 401);
-
-        try {
-          const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
-          return jsonResponse({
-            ok: true,
-            active: true,
-            session: payload,
-            bridge_status: { desktop: "SYNCHRONIZED", mobile: "AVAILABLE", edge: "VERIFIED" }
+      // 100% Free Fallback: Retrieve from Workers KV
+      if (kv) {
+        const b64 = await kv.get(`blob:${objectKey}`);
+        if (b64) {
+          const binary = atob(b64);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          return new Response(bytes.buffer, {
+            headers: {
+              "Content-Type": "application/octet-stream",
+              ...CORS_HEADERS
+            }
           });
-        } catch {
-          return errorResponse("Invalid token payload", 401);
         }
       }
 
-      if (request.method === "POST" && segment1 === "revoke") {
-        return jsonResponse({ ok: true, revoked: true, message: "Session invalidated across edge cluster." });
-      }
-    }
-
-    // --------------------------------------------------------------------------
-    // 6. Backend #9: Dual-Key & Triple-Mail Consensus Engine
-    // POST /api/admin/consensus/dispatch -> Generate 3 parallel OTPs (Owner, Tech, SecOps)
-    // POST /api/admin/consensus/verify   -> Validate Master Passcode + 3-Tier OTP consensus
-    // --------------------------------------------------------------------------
-    if (segment0 === "admin" && segment1 === "consensus") {
-      const MASTER_ADMIN_KEY = "SEC-X94-K982-Z710-Q441-V019-DELTA";
-
-      if (request.method === "POST" && segment2 === "dispatch") {
-        const genOtp = () => Math.floor(100000 + Math.random() * 900000).toString();
-        const otpOwner = genOtp();
-        const otpTech = genOtp();
-        const otpSec = genOtp();
-        const expiresAt = Date.now() + 180 * 1000;
-
-        return jsonResponse({
-          ok: true,
-          status: "DISPATCHED",
-          targets: [
-            { role: "Owner", email: "barhateniranjan725@gmail.com", token: otpOwner },
-            { role: "Tech Lead", email: "niranjanbarhate42@gmail.com", token: otpTech },
-            { role: "SecOps", email: "niranjanbarhate36@gmail.com", token: otpSec }
-          ],
-          window_seconds: 180,
-          expires_at: new Date(expiresAt).toISOString()
-        });
-      }
-
-      if (request.method === "POST" && segment2 === "verify") {
-        let body = {};
-        try { body = await request.json(); } catch {}
-        const { master_key, otp_owner, otp_tech, otp_sec } = body;
-
-        if (master_key !== MASTER_ADMIN_KEY) {
-          return errorResponse("ACCESS DENIED: Master Cryptographic Passcode Invalid.", 403);
-        }
-
-        if (!otp_owner || !otp_tech || !otp_sec || otp_owner.length !== 6 || otp_tech.length !== 6 || otp_sec.length !== 6) {
-          return errorResponse("ACCESS DENIED: 3-Tier Consensus Incomplete (All 3 OTPs required).", 403);
-        }
-
-        const adminToken = "adm_" + crypto.randomUUID().replace(/-/g, "") + "_TIER4";
-        return jsonResponse({
-          ok: true,
-          authorized: true,
-          role: "ROOT_OPERATOR",
-          admin_jwt: adminToken,
-          consensus_recipients: [
-            "barhateniranjan725@gmail.com",
-            "niranjanbarhate42@gmail.com",
-            "niranjanbarhate36@gmail.com"
-          ],
-          message: "Consensus verified across Owner, Tech Lead, and SecOps.",
-          issued_at: new Date().toISOString()
-        });
-      }
+      return errorResponse(`Object '${objectKey}' not found`, 404);
     }
 
     // --------------------------------------------------------------------------
@@ -1207,54 +1336,6 @@ export async function onRequest(context) {
           method: request.method,
           edge_pop: request.headers.get("cf-ray") || "local-edge",
           timestamp: new Date().toISOString()
-        });
-      }
-    }
-
-    // --------------------------------------------------------------------------
-    // 8. Backend #11: Telemetry & Heartbeat Ingestion + Live Radar Feed
-    // GET  /api/telemetry/stream -> SSE (Server-Sent Events) live pulse feed
-    // POST /api/telemetry/ping   -> Ingest round-trip latency & error metric
-    // --------------------------------------------------------------------------
-    if (segment0 === "telemetry") {
-      if (segment1 === "stream") {
-        // Server-Sent Events stream for live radar
-        const stream = new ReadableStream({
-          start(controller) {
-            const encoder = new TextEncoder();
-            const sendEvent = (event, data) => {
-              controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-            };
-
-            sendEvent("pulse", {
-              status: "ALL_SYSTEMS_OPERATIONAL",
-              timestamp: new Date().toISOString(),
-              agents: { alpha: "HEALTHY", beta: "HEALTHY", gamma: "ACTIVE", delta: "RESTRICTED", epsilon: "OPERATIONAL" },
-              latency_ms: 18
-            });
-            controller.close();
-          }
-        });
-
-        return new Response(stream, {
-          headers: {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            ...CORS_HEADERS
-          }
-        });
-      }
-
-      if (segment1 === "ping" && request.method === "POST") {
-        let body = {};
-        try { body = await request.json(); } catch {}
-        return jsonResponse({
-          ok: true,
-          ingested: true,
-          ping_ms: body.latency_ms || 18,
-          agent: body.agent || "AGENT-GAMMA",
-          received_at: new Date().toISOString()
         });
       }
     }

@@ -1,9 +1,0 @@
-pillow
-matplotlib
-tiktoken
-transformers
-addict
-yapf
-pycocotools
-timm
-pytesseract

@@ -9,3 +9,6 @@ out/
 target/
 *.exe
 .eslintcache
+.venv/
+release_binaries/
+"New folder"/

@@ -1,1 +1,0 @@
-ALTER TABLE orgs_users DROP COLUMN config;

@@ -18,3 +18,22 @@ database_id = "05f5359f-83fa-444c-891a-8714bc126adf"
 [vars]
 ENVIRONMENT = "production"
 MODAL_API_URL = "https://barhateniranjan725--nexus-ai-core-nexusaicore-fastapi-app.modal.run"
+
+[ai]
+binding = "AI"
+
+# Cloudflare Workers KV Namespace Binding (Key-Value Cache)
+[[kv_namespaces]]
+binding = "NEXUS_KV"
+id = "eb74871aee9548628acca89328685aec"
+
+# Cloudflare Vectorize Index Binding (Vector Database for Embeddings / AI Memory)
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "nexus-vectors"
+
+# Cloudflare R2 Object Storage Binding (Blob DB / Media & Binary Storage)
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "nexus-media"
+

@@ -1,1 +1,0 @@
-ALTER TABLE `agent_credentials` ADD `key_version` integer DEFAULT 1;

@@ -77,10 +77,10 @@
 
       <!-- Ecosystem Micro-Frontend Nav Links -->
       <nav class="hidden md:flex items-center gap-3.5 text-xs font-mono text-slate-400">
-        <a href="/landing/" class="hover:text-emerald-400 transition-colors flex items-center gap-1"><i data-lucide="home" class="w-3.5 h-3.5"></i> Portal</a>
-        <a href="/auth/" class="hover:text-cyan-400 transition-colors flex items-center gap-1"><i data-lucide="key" class="w-3.5 h-3.5"></i> Auth</a>
-        <a href="/status/" class="hover:text-emerald-400 transition-colors flex items-center gap-1"><i data-lucide="activity" class="w-3.5 h-3.5"></i> Radar</a>
-        <a href="/admin/" class="hover:text-rose-400 transition-colors flex items-center gap-1 text-rose-400/90"><i data-lucide="shield" class="w-3.5 h-3.5"></i> Admin HQ</a>
+        <a href="https://ecosystem-landing.pages.dev" target="_blank" rel="noopener" class="hover:text-emerald-400 transition-colors flex items-center gap-1"><i data-lucide="home" class="w-3.5 h-3.5"></i> Portal</a>
+        <a href="https://ecosystem-auth.pages.dev" target="_blank" rel="noopener" class="hover:text-cyan-400 transition-colors flex items-center gap-1"><i data-lucide="key" class="w-3.5 h-3.5"></i> Auth</a>
+        <a href="https://ecosystem-status.pages.dev" target="_blank" rel="noopener" class="hover:text-emerald-400 transition-colors flex items-center gap-1"><i data-lucide="activity" class="w-3.5 h-3.5"></i> Radar</a>
+        <a href="https://ecosystem-admin.pages.dev" target="_blank" rel="noopener" class="hover:text-rose-400 transition-colors flex items-center gap-1 text-rose-400/90"><i data-lucide="shield" class="w-3.5 h-3.5"></i> Admin HQ</a>
       </nav>
 
       <!-- Live Devices Fleet Status -->
@@ -129,7 +129,7 @@
         </div>
         <div>
           <div class="text-[10px] text-slate-400">GPU Compute</div>
-          <div class="font-semibold text-white">Modal T4 (Whisper)</div>
+          <div class="font-semibold text-white">Groq / Workers AI</div>
         </div>
       </div>
 
@@ -139,7 +139,7 @@
         </div>
         <div>
           <div class="text-[10px] text-slate-400">Media & Blobs</div>
-          <div class="font-semibold text-white">Cloudflare R2 ($0 Egress)</div>
+          <div class="font-semibold text-white">Cloudflare KV (Zero-Card)</div>
         </div>
       </div>
 
@@ -247,20 +247,20 @@
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
             
             <div class="flex items-center gap-3">
-              <!-- Voice Microphone Button -->
+              <!-- Voice Microphone Button (Click or Hold-to-Talk) -->
               <button 
                 id="micBtn" 
-                class="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-emerald-400 transition-all group"
-                title="Click or hold to record audio"
+                class="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-emerald-400 transition-all group select-none"
+                title="Click or hold to talk"
               >
                 <i data-lucide="mic" id="micIcon" class="w-4 h-4 text-emerald-400 group-hover:scale-110 transition-transform"></i>
-                <span id="micBtnLabel" class="text-xs font-medium">Record Voice</span>
+                <span id="micBtnLabel" class="text-xs font-medium">Hold to Talk</span>
               </button>
 
-              <!-- Modal GPU AI Decomposer Toggle -->
+              <!-- Zero-Card AI Planner Toggle -->
               <label class="flex items-center gap-2 cursor-pointer select-none text-xs text-slate-400 hover:text-slate-200">
                 <input type="checkbox" id="dispatchModalToggle" checked class="rounded border-slate-700 bg-slate-900 text-emerald-500 focus:ring-0 w-3.5 h-3.5">
-                <span>Modal GPU Planner (T4)</span>
+                <span>AI Planner (Groq / Workers AI)</span>
               </label>
             </div>
 
@@ -277,6 +277,28 @@
 
         </div>
 
+      </div>
+    </section>
+
+    <!-- LIVE EXECUTION TERMINAL WINDOW -->
+    <section class="rounded-xl bg-slate-950/95 border border-slate-800 shadow-2xl overflow-hidden font-mono text-xs">
+      <div class="flex items-center justify-between px-3.5 py-2 bg-slate-900/90 border-b border-slate-800">
+        <div class="flex items-center gap-2">
+          <div class="flex items-center gap-1.5">
+            <span class="w-2.5 h-2.5 rounded-full bg-red-500/80 inline-block"></span>
+            <span class="w-2.5 h-2.5 rounded-full bg-yellow-500/80 inline-block"></span>
+            <span class="w-2.5 h-2.5 rounded-full bg-emerald-500/80 inline-block"></span>
+          </div>
+          <span class="text-slate-300 text-[11px] font-semibold ml-2">Nexus Terminal &bull; Execution Stream</span>
+        </div>
+        <div class="flex items-center gap-3 text-[10px] text-slate-400">
+          <span id="terminalStatusBadge" class="text-emerald-400 flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> READY</span>
+          <button id="clearTerminalBtn" class="hover:text-white transition-colors">Clear</button>
+        </div>
+      </div>
+      <div id="liveTerminalOutput" class="p-3 text-slate-300 max-h-48 overflow-y-auto space-y-1 select-text whitespace-pre-wrap leading-relaxed">
+        <div class="text-slate-500">[Edge Bridge] Connected to Cloudflare D1 queue &amp; SSE channel. Zero-Card Tier active.</div>
+        <div class="text-slate-500">[Agent Daemon] Ready for local HOTKEY, SHELL, OPEN_APP, and SPEAK execution.</div>
       </div>
     </section>
 
