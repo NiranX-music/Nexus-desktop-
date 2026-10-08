@@ -55,7 +55,7 @@ try {
 } catch {}
 
 const state = {
-  activeTarget: "DESKTOP",          // 'DESKTOP' | 'MOBILE' | 'ALL'
+  activeTarget: "CLOUD",            // 'CLOUD' | 'DESKTOP' | 'MOBILE' | 'ALL'
   activeCommandType: "VOICE_PROMPT", // 'VOICE_PROMPT' | 'TERMINAL_EXEC' | 'DESKTOP_GUI' | 'MOBILE_ACTION'
   isRecording: false,
   mediaRecorder: null,
@@ -644,6 +644,48 @@ async function handleAudioTranscription(audioBlob) {
 // -----------------------------------------------------------------------------
 // 8. Event Listeners & UI Controls
 // -----------------------------------------------------------------------------
+function updateTargetModeBanner() {
+  const banner = document.getElementById("targetModeBanner");
+  if (!banner) return;
+  if (state.activeTarget === "CLOUD") {
+    banner.className = "text-[11px] font-mono text-emerald-400 bg-emerald-950/40 border border-emerald-500/30 px-3 py-2 rounded-xl flex items-center justify-between";
+    banner.innerHTML = `
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span><strong>Cloud Autonomous Mode:</strong> Commands run 100% on Cloudflare Edge via NiranX master account. Zero local terminal scripts required.</span>
+      </div>
+      <span class="text-[10px] text-slate-400 font-sans hidden sm:inline">User: niranx@nexus.io</span>
+    `;
+  } else if (state.activeTarget === "DESKTOP") {
+    banner.className = "text-[11px] font-mono text-cyan-400 bg-cyan-950/40 border border-cyan-500/30 px-3 py-2 rounded-xl flex items-center justify-between";
+    banner.innerHTML = `
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
+        <span><strong>Desktop Companion Mode:</strong> Dispatches to local PC daemon if active (optional companion).</span>
+      </div>
+      <span class="text-[10px] text-slate-400 font-sans hidden sm:inline">Target: DESKTOP</span>
+    `;
+  } else if (state.activeTarget === "MOBILE") {
+    banner.className = "text-[11px] font-mono text-indigo-400 bg-indigo-950/40 border border-indigo-500/30 px-3 py-2 rounded-xl flex items-center justify-between";
+    banner.innerHTML = `
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-indigo-400"></span>
+        <span><strong>Mobile Companion Mode:</strong> Dispatches to Termux / Android device bridge.</span>
+      </div>
+      <span class="text-[10px] text-slate-400 font-sans hidden sm:inline">Target: MOBILE</span>
+    `;
+  } else {
+    banner.className = "text-[11px] font-mono text-purple-400 bg-purple-950/40 border border-purple-500/30 px-3 py-2 rounded-xl flex items-center justify-between";
+    banner.innerHTML = `
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-purple-400"></span>
+        <span><strong>Broadcast Mode:</strong> Dispatches across Cloud backend and all connected devices.</span>
+      </div>
+      <span class="text-[10px] text-slate-400 font-sans hidden sm:inline">Target: ALL</span>
+    `;
+  }
+}
+
 function setupEventListeners() {
   // Target Device Chips
   document.querySelectorAll(".target-chip").forEach((btn) => {
@@ -651,6 +693,7 @@ function setupEventListeners() {
       document.querySelectorAll(".target-chip").forEach((b) => b.classList.remove("active", "text-emerald-400"));
       btn.classList.add("active");
       state.activeTarget = btn.dataset.target;
+      updateTargetModeBanner();
     });
   });
 
@@ -672,6 +715,7 @@ function setupEventListeners() {
         document.querySelectorAll(".target-chip").forEach((b) => {
           b.classList.toggle("active", b.dataset.target === chip.dataset.target);
         });
+        updateTargetModeBanner();
       }
       if (chip.dataset.type) {
         state.activeCommandType = chip.dataset.type;
@@ -773,6 +817,31 @@ function setupEventListeners() {
   document.getElementById("saveSettingsBtn").addEventListener("click", saveSettings);
   document.getElementById("resetSettingsBtn").addEventListener("click", resetSettings);
 
+  // Master Account Profile Modal
+  const accountModal = document.getElementById("accountModal");
+  const openAccountBtn = document.getElementById("userAccountPill");
+  const closeAccountBtn = document.getElementById("closeAccountBtn");
+  const dismissAccountBtn = document.getElementById("dismissAccountBtn");
+
+  if (openAccountBtn && accountModal) {
+    openAccountBtn.addEventListener("click", () => {
+      accountModal.classList.remove("hidden");
+      accountModal.classList.add("flex");
+    });
+  }
+  if (closeAccountBtn && accountModal) {
+    closeAccountBtn.addEventListener("click", () => {
+      accountModal.classList.add("hidden");
+      accountModal.classList.remove("flex");
+    });
+  }
+  if (dismissAccountBtn && accountModal) {
+    dismissAccountBtn.addEventListener("click", () => {
+      accountModal.classList.add("hidden");
+      accountModal.classList.remove("flex");
+    });
+  }
+
   // Developer Mode Event Listeners
   const devToggle = document.getElementById("devModeToggle");
   if (devToggle) devToggle.addEventListener("change", updateDevModeUI);
@@ -847,8 +916,18 @@ async function handleDispatchTask() {
     if (res.ok) {
       const tgt = res.task?.target_device || state.activeTarget;
       const tId = res.task?.id || res.task_id || "new";
-      showToast(`Task assigned to ${tgt}`, "success");
-      logToTerminal(`[Dispatch] Task queued for ${tgt} (ID: ${tId}): "${promptText}"`, "cmd");
+      const isCloudEdge = res.execution === "CLOUD_EDGE" || res.status === "COMPLETED" || tgt === "CLOUD";
+
+      if (isCloudEdge) {
+        const out = res.result || res.task?.result_output || "Task completed on Cloudflare edge.";
+        showToast("Cloud Task Completed (Account: NiranX)", "success");
+        logToTerminal(`[Cloud Edge] COMPLETED (ID: ${tId})`, "success");
+        logToTerminal(`Output: ${typeof out === "object" ? JSON.stringify(out, null, 2) : out}`, "info");
+      } else {
+        showToast(`Task assigned to ${tgt}`, "success");
+        logToTerminal(`[Dispatch] Task queued for ${tgt} (ID: ${tId}): "${promptText}"`, "cmd");
+      }
+
       if (clientPlan) {
         logToTerminal(`[Plan: ${clientPlan.provider || 'AI'}] ${clientPlan.summary || clientPlan.steps.length + ' steps'}`, "info");
       }

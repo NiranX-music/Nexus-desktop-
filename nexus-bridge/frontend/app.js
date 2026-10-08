@@ -3,6 +3,17 @@
  * Cross-device control dashboard connecting Cloudflare D1/R2 and Modal Labs GPU Core.
  */
 
+import {
+  GeminiAdapter,
+  GroqAdapter,
+  OpenAICompatibleAdapter,
+  EdgeAdapter,
+  ModalAdapter,
+  FallbackChain,
+  normalizePlan,
+  ENGINE_FOR_ACTION
+} from "./ai/providers.js";
+
 // -----------------------------------------------------------------------------
 // 1. Configuration & App State
 // -----------------------------------------------------------------------------
@@ -13,8 +24,38 @@ const CONFIG = {
   pollInterval: parseInt(localStorage.getItem("nexus_poll_interval") || "2500", 10),
 };
 
+const DEFAULT_MODELS = {
+  gemini: { model: "gemini-3.8-flash", sttModel: "gemini-3.5-transcribe" },
+  groq: { model: "llama-3.3-70b-versatile", sttModel: "whisper-large-v3-turbo", baseUrl: "https://api.groq.com/openai/v1" },
+  openai: { model: "gpt-4o-mini", sttModel: "whisper-1", baseUrl: "https://api.openai.com/v1" },
+  custom: { model: "llama3.1", sttModel: "whisper-1", baseUrl: "http://localhost:11434/v1" },
+  edge: { model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", sttModel: "@cf/openai/whisper-large-v3-turbo" },
+};
+
+let DEV_CONFIG = {
+  enabled: false,
+  provider: "edge",
+  apiKey: "",
+  baseUrl: "",
+  model: "",
+  sttModel: "",
+  engines: {
+    shell: true,
+    ui: false,
+    browser: false,
+    android: false,
+  },
+};
+
+try {
+  const savedDev = localStorage.getItem("nexus_dev_settings");
+  if (savedDev) {
+    DEV_CONFIG = { ...DEV_CONFIG, ...JSON.parse(savedDev) };
+  }
+} catch {}
+
 const state = {
-  activeTarget: "DESKTOP",          // 'DESKTOP' | 'MOBILE' | 'ALL'
+  activeTarget: "CLOUD",            // 'CLOUD' | 'DESKTOP' | 'MOBILE' | 'ALL'
   activeCommandType: "VOICE_PROMPT", // 'VOICE_PROMPT' | 'TERMINAL_EXEC' | 'DESKTOP_GUI' | 'MOBILE_ACTION'
   isRecording: false,
   mediaRecorder: null,
@@ -83,6 +124,21 @@ function showToast(message, type = "info") {
 }
 
 // -----------------------------------------------------------------------------
+// 3b. Live Execution Terminal Window Logger
+// -----------------------------------------------------------------------------
+function logToTerminal(text, type = "info") {
+  const terminal = document.getElementById("liveTerminalOutput");
+  if (!terminal) return;
+  const time = new Date().toLocaleTimeString();
+  const line = document.createElement("div");
+  const color = type === "error" ? "text-rose-400" : type === "success" ? "text-emerald-400" : type === "cmd" ? "text-cyan-400" : "text-slate-300";
+  line.className = `${color} leading-relaxed`;
+  line.innerHTML = `<span class="text-slate-600 font-mono">[${time}]</span> ${escapeHtml(text)}`;
+  terminal.appendChild(line);
+  terminal.scrollTop = terminal.scrollHeight;
+}
+
+// -----------------------------------------------------------------------------
 // 4. Edge API Client (with Bearer Token Auth)
 // -----------------------------------------------------------------------------
 async function fetchEdgeApi(endpoint, options = {}) {
@@ -116,17 +172,21 @@ async function fetchEdgeApi(endpoint, options = {}) {
 /**
  * Submits a new multi-device task to Cloudflare D1
  */
-async function submitTask(targetDevice, commandType, promptRaw, dispatchModal = false, mediaUrl = null) {
+async function submitTask(targetDevice, commandType, promptRaw, dispatchModal = false, mediaUrl = null, actionPlan = null) {
+  const body = {
+    source_device: "WEB",
+    target_device: targetDevice,
+    command_type: commandType,
+    prompt_raw: promptRaw,
+    media_r2_url: mediaUrl,
+    dispatch_modal: dispatchModal,
+  };
+  if (actionPlan) {
+    body.action_plan = actionPlan;
+  }
   return fetchEdgeApi("/tasks", {
     method: "POST",
-    body: JSON.stringify({
-      source_device: "WEB",
-      target_device: targetDevice,
-      command_type: commandType,
-      prompt_raw: promptRaw,
-      media_r2_url: mediaUrl,
-      dispatch_modal: dispatchModal,
-    }),
+    body: JSON.stringify(body),
   });
 }
 
@@ -145,8 +205,18 @@ async function pollFleetAndTasks() {
     // 2. Fetch Tasks Stream
     const tasksData = await fetchEdgeApi("/tasks?limit=40").catch(() => null);
     if (tasksData && tasksData.tasks) {
+      const prevMap = new Map((state.tasks || []).map(t => [t.id, t.status]));
       state.tasks = tasksData.tasks;
       renderTasksList();
+
+      // Stream new completions/failures into live execution terminal
+      for (const t of state.tasks) {
+        const prevStatus = prevMap.get(t.id);
+        if (prevStatus && prevStatus !== t.status) {
+          const summary = t.result_output || t.execution_log || `Task status updated to ${t.status}`;
+          logToTerminal(`[${t.target_device}] Task ${t.id.slice(0, 8)}: ${t.status} - ${typeof summary === "object" ? JSON.stringify(summary) : summary}`, t.status === "COMPLETED" ? "success" : t.status === "FAILED" ? "error" : "info");
+        }
+      }
     }
   } catch (err) {
     console.debug("Sync poll error:", err.message);
@@ -288,7 +358,7 @@ function renderTasksList() {
             <div class="flex items-center justify-between text-[11px]">
               <span class="text-slate-400 font-medium">Task ID: <code class="text-slate-300">${task.id}</code></span>
               <button class="text-xs text-emerald-400 hover:text-emerald-300 font-medium flex items-center gap-1" onclick="copyToClipboard('${task.id}')">
-                <i data-lucide="copy" class="w-3.5 h-3.5"></i> Copy Output
+                <i data-lucide="copy" class="w-3 h-3"></i> Copy Output
               </button>
             </div>
             ${task.action_plan ? `
@@ -403,7 +473,7 @@ function updateRecordingUI(isRecording) {
     wave.classList.add("hidden");
     wave.classList.remove("flex");
     micBtn.classList.remove("border-red-500", "bg-red-950/40", "text-red-400");
-    micLabel.textContent = "Record Voice";
+    micLabel.textContent = "Hold to Talk";
     clearInterval(state.recordTimerInterval);
   }
 }
@@ -432,9 +502,104 @@ function startVisualizer() {
   draw();
 }
 
-async function handleAudioTranscription(audioBlob) {
-  showToast("Transcribing on Modal GPU (Whisper)...", "info");
+function buildClientAI() {
+  const edge = new EdgeAdapter({ apiUrl: CONFIG.apiUrl, authToken: CONFIG.authToken });
+  if (!DEV_CONFIG.enabled || DEV_CONFIG.provider === "edge") {
+    return edge;
+  }
 
+  const p = (DEV_CONFIG.provider || "edge").toLowerCase();
+  const def = DEFAULT_MODELS[p] || DEFAULT_MODELS.custom;
+  let customAdapter = null;
+
+  try {
+    if (p === "gemini") {
+      if (DEV_CONFIG.apiKey) {
+        customAdapter = new GeminiAdapter({
+          apiKey: DEV_CONFIG.apiKey,
+          model: DEV_CONFIG.model || def.model,
+          transcribeModel: DEV_CONFIG.sttModel || def.sttModel,
+        });
+      }
+    } else if (p === "groq") {
+      if (DEV_CONFIG.apiKey) {
+        customAdapter = new GroqAdapter({
+          apiKey: DEV_CONFIG.apiKey,
+          model: DEV_CONFIG.model || def.model,
+          sttModel: DEV_CONFIG.sttModel || def.sttModel,
+        });
+      }
+    } else if (p === "openai") {
+      if (DEV_CONFIG.apiKey) {
+        customAdapter = new OpenAICompatibleAdapter({
+          name: "openai",
+          apiKey: DEV_CONFIG.apiKey,
+          baseUrl: DEV_CONFIG.baseUrl || def.baseUrl,
+          model: DEV_CONFIG.model || def.model,
+          sttModel: DEV_CONFIG.sttModel || def.sttModel,
+        });
+      }
+    } else if (p === "custom") {
+      const base = DEV_CONFIG.baseUrl || def.baseUrl;
+      customAdapter = new OpenAICompatibleAdapter({
+        name: "custom",
+        apiKey: DEV_CONFIG.apiKey || "",
+        baseUrl: base,
+        model: DEV_CONFIG.model || def.model,
+        sttModel: DEV_CONFIG.sttModel || def.sttModel,
+      });
+    }
+  } catch (err) {
+    console.warn("Failed to initialize user provider adapter:", err);
+  }
+
+  if (customAdapter) {
+    return new FallbackChain([customAdapter, edge]);
+  }
+  return edge;
+}
+
+function getEnabledEngines() {
+  const eng = [];
+  if (DEV_CONFIG.engines?.shell) eng.push("shell");
+  if (DEV_CONFIG.engines?.ui) eng.push("ui");
+  if (DEV_CONFIG.engines?.browser) eng.push("browser");
+  if (DEV_CONFIG.engines?.android) eng.push("android");
+  return eng;
+}
+
+async function handleAudioTranscription(audioBlob) {
+  showToast("Transcribing audio...", "info");
+
+  // 1. Try Client / Developer Mode AI if configured
+  if (DEV_CONFIG.enabled && DEV_CONFIG.provider !== "edge") {
+    try {
+      const client = buildClientAI();
+      const res = await client.transcribeAudio(audioBlob, { mimeType: audioBlob.type || "audio/webm" });
+      if (res && res.text) {
+        document.getElementById("commandInput").value = res.text;
+        showToast(`Transcribed via ${res.provider || client.name}: "${res.text}"`, "success");
+        return;
+      }
+    } catch (e) {
+      console.warn("Client transcription failed, falling back to edge:", e);
+    }
+  }
+
+  // 2. Try Edge API (Workers AI Whisper Large v3 Turbo, free tier)
+  try {
+    const edge = new EdgeAdapter({ apiUrl: CONFIG.apiUrl, authToken: CONFIG.authToken });
+    const res = await edge.transcribeAudio(audioBlob, { mimeType: audioBlob.type || "audio/webm" });
+    if (res && res.text) {
+      document.getElementById("commandInput").value = res.text;
+      showToast(`Transcribed via Workers AI: "${res.text}"`, "success");
+      return;
+    }
+  } catch (e) {
+    console.warn("Workers AI transcription failed, trying Modal fallback:", e);
+  }
+
+  // 3. Fallback: Modal GPU (Whisper)
   const modalEndpoint = CONFIG.modalUrl.replace(/\/+$/, "");
   if (modalEndpoint) {
     try {
@@ -445,7 +610,7 @@ async function handleAudioTranscription(audioBlob) {
         const data = await resp.json();
         if (data.text) {
           document.getElementById("commandInput").value = data.text;
-          showToast(`Transcribed: "${data.text}"`, "success");
+          showToast(`Transcribed on Modal: "${data.text}"`, "success");
           return;
         }
       }
@@ -454,7 +619,7 @@ async function handleAudioTranscription(audioBlob) {
     }
   }
 
-  // Fallback: Upload to R2 and populate
+  // 4. Fallback: Upload to R2 and populate
   try {
     const uploadRes = await fetch(`${CONFIG.apiUrl}/upload?filename=voice-${Date.now()}.webm`, {
       method: "POST",
@@ -479,6 +644,48 @@ async function handleAudioTranscription(audioBlob) {
 // -----------------------------------------------------------------------------
 // 8. Event Listeners & UI Controls
 // -----------------------------------------------------------------------------
+function updateTargetModeBanner() {
+  const banner = document.getElementById("targetModeBanner");
+  if (!banner) return;
+  if (state.activeTarget === "CLOUD") {
+    banner.className = "text-[11px] font-mono text-emerald-400 bg-emerald-950/40 border border-emerald-500/30 px-3 py-2 rounded-xl flex items-center justify-between";
+    banner.innerHTML = `
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span><strong>Cloud Autonomous Mode:</strong> Commands run 100% on Cloudflare Edge via NiranX master account. Zero local terminal scripts required.</span>
+      </div>
+      <span class="text-[10px] text-slate-400 font-sans hidden sm:inline">User: niranx@nexus.io</span>
+    `;
+  } else if (state.activeTarget === "DESKTOP") {
+    banner.className = "text-[11px] font-mono text-cyan-400 bg-cyan-950/40 border border-cyan-500/30 px-3 py-2 rounded-xl flex items-center justify-between";
+    banner.innerHTML = `
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
+        <span><strong>Desktop Companion Mode:</strong> Dispatches to local PC daemon if active (optional companion).</span>
+      </div>
+      <span class="text-[10px] text-slate-400 font-sans hidden sm:inline">Target: DESKTOP</span>
+    `;
+  } else if (state.activeTarget === "MOBILE") {
+    banner.className = "text-[11px] font-mono text-indigo-400 bg-indigo-950/40 border border-indigo-500/30 px-3 py-2 rounded-xl flex items-center justify-between";
+    banner.innerHTML = `
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-indigo-400"></span>
+        <span><strong>Mobile Companion Mode:</strong> Dispatches to Termux / Android device bridge.</span>
+      </div>
+      <span class="text-[10px] text-slate-400 font-sans hidden sm:inline">Target: MOBILE</span>
+    `;
+  } else {
+    banner.className = "text-[11px] font-mono text-purple-400 bg-purple-950/40 border border-purple-500/30 px-3 py-2 rounded-xl flex items-center justify-between";
+    banner.innerHTML = `
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-purple-400"></span>
+        <span><strong>Broadcast Mode:</strong> Dispatches across Cloud backend and all connected devices.</span>
+      </div>
+      <span class="text-[10px] text-slate-400 font-sans hidden sm:inline">Target: ALL</span>
+    `;
+  }
+}
+
 function setupEventListeners() {
   // Target Device Chips
   document.querySelectorAll(".target-chip").forEach((btn) => {
@@ -486,6 +693,7 @@ function setupEventListeners() {
       document.querySelectorAll(".target-chip").forEach((b) => b.classList.remove("active", "text-emerald-400"));
       btn.classList.add("active");
       state.activeTarget = btn.dataset.target;
+      updateTargetModeBanner();
     });
   });
 
@@ -507,6 +715,7 @@ function setupEventListeners() {
         document.querySelectorAll(".target-chip").forEach((b) => {
           b.classList.toggle("active", b.dataset.target === chip.dataset.target);
         });
+        updateTargetModeBanner();
       }
       if (chip.dataset.type) {
         state.activeCommandType = chip.dataset.type;
@@ -518,15 +727,64 @@ function setupEventListeners() {
     });
   });
 
-  // Microphone
-  document.getElementById("micBtn").addEventListener("click", () => {
-    if (state.isRecording) stopAudioRecording();
-    else startAudioRecording();
-  });
+  // Microphone: Click or Hold-to-Talk
+  const micBtn = document.getElementById("micBtn");
+  let holdTimeout = null;
+  let isHoldActive = false;
 
-  document.getElementById("cancelRecordBtn").addEventListener("click", () => {
+  if (micBtn) {
+    micBtn.addEventListener("pointerdown", () => {
+      isHoldActive = false;
+      holdTimeout = setTimeout(() => {
+        isHoldActive = true;
+        if (!state.isRecording) {
+          startAudioRecording();
+          logToTerminal("Hold-to-Talk active: recording voice...", "cmd");
+        }
+      }, 250);
+    });
+
+    const stopHold = () => {
+      if (holdTimeout) {
+        clearTimeout(holdTimeout);
+        holdTimeout = null;
+      }
+      if (isHoldActive) {
+        isHoldActive = false;
+        if (state.isRecording) {
+          stopAudioRecording();
+          logToTerminal("Hold-to-Talk released: transcribing audio...", "cmd");
+        }
+      }
+    };
+
+    micBtn.addEventListener("pointerup", stopHold);
+    micBtn.addEventListener("pointerleave", stopHold);
+    micBtn.addEventListener("pointercancel", stopHold);
+
+    micBtn.addEventListener("click", () => {
+      if (!isHoldActive) {
+        if (state.isRecording) {
+          stopAudioRecording();
+          logToTerminal("Voice recording stopped.", "cmd");
+        } else {
+          startAudioRecording();
+          logToTerminal("Voice recording started (Click mode).", "cmd");
+        }
+      }
+    });
+  }
+
+  document.getElementById("cancelRecordBtn")?.addEventListener("click", () => {
     state.audioChunks = [];
     stopAudioRecording();
+    logToTerminal("Voice recording cancelled.", "info");
+  });
+
+  // Clear Terminal Button
+  document.getElementById("clearTerminalBtn")?.addEventListener("click", () => {
+    const term = document.getElementById("liveTerminalOutput");
+    if (term) term.innerHTML = `<div class="text-slate-500">[System] Terminal output cleared.</div>`;
   });
 
   // Dispatch Button
@@ -558,6 +816,54 @@ function setupEventListeners() {
   });
   document.getElementById("saveSettingsBtn").addEventListener("click", saveSettings);
   document.getElementById("resetSettingsBtn").addEventListener("click", resetSettings);
+
+  // Master Account Profile Modal
+  const accountModal = document.getElementById("accountModal");
+  const openAccountBtn = document.getElementById("userAccountPill");
+  const closeAccountBtn = document.getElementById("closeAccountBtn");
+  const dismissAccountBtn = document.getElementById("dismissAccountBtn");
+
+  if (openAccountBtn && accountModal) {
+    openAccountBtn.addEventListener("click", () => {
+      accountModal.classList.remove("hidden");
+      accountModal.classList.add("flex");
+    });
+  }
+  if (closeAccountBtn && accountModal) {
+    closeAccountBtn.addEventListener("click", () => {
+      accountModal.classList.add("hidden");
+      accountModal.classList.remove("flex");
+    });
+  }
+  if (dismissAccountBtn && accountModal) {
+    dismissAccountBtn.addEventListener("click", () => {
+      accountModal.classList.add("hidden");
+      accountModal.classList.remove("flex");
+    });
+  }
+
+  // Developer Mode Event Listeners
+  const devToggle = document.getElementById("devModeToggle");
+  if (devToggle) devToggle.addEventListener("change", updateDevModeUI);
+
+  const devProvider = document.getElementById("devProviderSelect");
+  if (devProvider) devProvider.addEventListener("change", updateDevModeUI);
+
+  const toggleKeyBtn = document.getElementById("toggleApiKeyVisibility");
+  if (toggleKeyBtn) {
+    toggleKeyBtn.addEventListener("click", () => {
+      const input = document.getElementById("devApiKey");
+      const icon = document.getElementById("toggleApiKeyIcon");
+      if (input.type === "password") {
+        input.type = "text";
+        if (icon) icon.setAttribute("data-lucide", "eye-off");
+      } else {
+        input.type = "password";
+        if (icon) icon.setAttribute("data-lucide", "eye");
+      }
+      refreshIcons();
+    });
+  }
 }
 
 async function handleDispatchTask() {
@@ -576,17 +882,64 @@ async function handleDispatchTask() {
   refreshIcons();
 
   try {
-    const shouldModal = modalToggle.checked;
-    const res = await submitTask(state.activeTarget, state.activeCommandType, promptText, shouldModal);
+    let clientPlan = null;
+    const shouldModal = modalToggle ? modalToggle.checked : false;
+
+    // In Developer Mode or for voice prompt, generate client plan if user configured custom provider
+    if (DEV_CONFIG.enabled && DEV_CONFIG.provider !== "edge") {
+      try {
+        const client = buildClientAI();
+        showToast(`Planning action with ${client.name}...`, "info");
+        const planned = await client.planAction(promptText, {
+          target_device: state.activeTarget,
+          engines: getEnabledEngines(),
+        });
+        if (planned && Array.isArray(planned.steps) && planned.steps.length > 0) {
+          clientPlan = planned;
+          showToast(`Plan ready: ${planned.summary || planned.steps.length + ' steps'} (${planned.provider || client.name})`, "success");
+        }
+      } catch (err) {
+        console.warn("Client plan failed, falling back to edge/server:", err);
+        showToast(`Planner fallback: ${err.message}`, "info");
+      }
+    }
+
+    const res = await submitTask(
+      state.activeTarget,
+      state.activeCommandType,
+      promptText,
+      clientPlan ? false : shouldModal,
+      null,
+      clientPlan
+    );
+
     if (res.ok) {
-      showToast(`Task assigned to ${res.task.target_device}`, "success");
+      const tgt = res.task?.target_device || state.activeTarget;
+      const tId = res.task?.id || res.task_id || "new";
+      const isCloudEdge = res.execution === "CLOUD_EDGE" || res.status === "COMPLETED" || tgt === "CLOUD";
+
+      if (isCloudEdge) {
+        const out = res.result || res.task?.result_output || "Task completed on Cloudflare edge.";
+        showToast("Cloud Task Completed (Account: NiranX)", "success");
+        logToTerminal(`[Cloud Edge] COMPLETED (ID: ${tId})`, "success");
+        logToTerminal(`Output: ${typeof out === "object" ? JSON.stringify(out, null, 2) : out}`, "info");
+      } else {
+        showToast(`Task assigned to ${tgt}`, "success");
+        logToTerminal(`[Dispatch] Task queued for ${tgt} (ID: ${tId}): "${promptText}"`, "cmd");
+      }
+
+      if (clientPlan) {
+        logToTerminal(`[Plan: ${clientPlan.provider || 'AI'}] ${clientPlan.summary || clientPlan.steps.length + ' steps'}`, "info");
+      }
       input.value = "";
       pollFleetAndTasks();
     } else {
       showToast(res.error || "Failed to dispatch task", "error");
+      logToTerminal(`[Dispatch Error] ${res.error || "Failed to dispatch task"}`, "error");
     }
   } catch (err) {
     showToast(err.message || "Network error", "error");
+    logToTerminal(`[Network Error] ${err.message}`, "error");
   } finally {
     sendBtn.disabled = false;
     sendBtn.innerHTML = `<i data-lucide="send" class="w-3.5 h-3.5"></i><span>Dispatch Task</span>`;
@@ -597,11 +950,86 @@ async function handleDispatchTask() {
 // -----------------------------------------------------------------------------
 // 9. Settings Storage
 // -----------------------------------------------------------------------------
+function updateDevModeUI() {
+  const isDev = document.getElementById("devModeToggle") ? document.getElementById("devModeToggle").checked : false;
+  const content = document.getElementById("devModeContent");
+  const badge = document.getElementById("devModeStatusBadge");
+  const provider = document.getElementById("devProviderSelect") ? document.getElementById("devProviderSelect").value : "edge";
+  const apiKeyRow = document.getElementById("devApiKeyRow");
+  const baseUrlRow = document.getElementById("devBaseUrlRow");
+
+  if (badge) {
+    if (isDev) {
+      badge.textContent = "DEV ACTIVE";
+      badge.className = "text-[9px] px-1.5 py-0.2 rounded-full font-mono bg-emerald-500/20 text-emerald-400 border border-emerald-500/40";
+    } else {
+      badge.textContent = "STANDARD";
+      badge.className = "text-[9px] px-1.5 py-0.2 rounded-full font-mono bg-slate-800 text-slate-400 border border-slate-700";
+    }
+  }
+
+  if (content) {
+    if (isDev) content.classList.remove("hidden");
+    else content.classList.add("hidden");
+  }
+
+  if (baseUrlRow) {
+    if (provider === "custom" || provider === "openai") baseUrlRow.classList.remove("hidden");
+    else baseUrlRow.classList.add("hidden");
+  }
+
+  if (apiKeyRow) {
+    if (provider === "edge") {
+      apiKeyRow.classList.add("opacity-40", "pointer-events-none");
+      const keyInput = document.getElementById("devApiKey");
+      if (keyInput) keyInput.placeholder = "(Built-in Cloudflare Zero-Card Free Tier)";
+    } else {
+      apiKeyRow.classList.remove("opacity-40", "pointer-events-none");
+      const keyInput = document.getElementById("devApiKey");
+      if (keyInput) keyInput.placeholder = provider === "gemini" ? "AIzaSy..." : "sk-...";
+    }
+  }
+}
+
 function loadConfigToModal() {
   document.getElementById("cfgApiUrl").value = CONFIG.apiUrl;
   document.getElementById("cfgModalUrl").value = CONFIG.modalUrl;
   document.getElementById("cfgAuthSecret").value = CONFIG.authToken;
   document.getElementById("cfgPollInterval").value = CONFIG.pollInterval;
+
+  // Dev settings
+  if (document.getElementById("devModeToggle")) {
+    document.getElementById("devModeToggle").checked = Boolean(DEV_CONFIG.enabled);
+  }
+  if (document.getElementById("devProviderSelect")) {
+    document.getElementById("devProviderSelect").value = DEV_CONFIG.provider || "edge";
+  }
+  if (document.getElementById("devApiKey")) {
+    document.getElementById("devApiKey").value = DEV_CONFIG.apiKey || "";
+  }
+  if (document.getElementById("devBaseUrl")) {
+    document.getElementById("devBaseUrl").value = DEV_CONFIG.baseUrl || "";
+  }
+  if (document.getElementById("devModelName")) {
+    document.getElementById("devModelName").value = DEV_CONFIG.model || "";
+  }
+  if (document.getElementById("devSttModelName")) {
+    document.getElementById("devSttModelName").value = DEV_CONFIG.sttModel || "";
+  }
+  if (document.getElementById("devEngineShell")) {
+    document.getElementById("devEngineShell").checked = DEV_CONFIG.engines?.shell !== false;
+  }
+  if (document.getElementById("devEngineUI")) {
+    document.getElementById("devEngineUI").checked = Boolean(DEV_CONFIG.engines?.ui);
+  }
+  if (document.getElementById("devEngineBrowser")) {
+    document.getElementById("devEngineBrowser").checked = Boolean(DEV_CONFIG.engines?.browser);
+  }
+  if (document.getElementById("devEngineAndroid")) {
+    document.getElementById("devEngineAndroid").checked = Boolean(DEV_CONFIG.engines?.android);
+  }
+
+  updateDevModeUI();
 }
 
 function saveSettings() {
@@ -615,10 +1043,26 @@ function saveSettings() {
   localStorage.setItem("nexus_auth_token", CONFIG.authToken);
   localStorage.setItem("nexus_poll_interval", CONFIG.pollInterval.toString());
 
+  // Save Developer Mode settings
+  DEV_CONFIG.enabled = document.getElementById("devModeToggle")?.checked || false;
+  DEV_CONFIG.provider = document.getElementById("devProviderSelect")?.value || "edge";
+  DEV_CONFIG.apiKey = document.getElementById("devApiKey")?.value.trim() || "";
+  DEV_CONFIG.baseUrl = document.getElementById("devBaseUrl")?.value.trim() || "";
+  DEV_CONFIG.model = document.getElementById("devModelName")?.value.trim() || "";
+  DEV_CONFIG.sttModel = document.getElementById("devSttModelName")?.value.trim() || "";
+  DEV_CONFIG.engines = {
+    shell: document.getElementById("devEngineShell")?.checked ?? true,
+    ui: document.getElementById("devEngineUI")?.checked ?? false,
+    browser: document.getElementById("devEngineBrowser")?.checked ?? false,
+    android: document.getElementById("devEngineAndroid")?.checked ?? false,
+  };
+
+  localStorage.setItem("nexus_dev_settings", JSON.stringify(DEV_CONFIG));
+
   document.getElementById("settingsModal").classList.add("hidden");
   document.getElementById("settingsModal").classList.remove("flex");
 
-  showToast("Settings saved", "success");
+  showToast("Settings & Developer Mode saved", "success");
   startLivePolling();
 }
 
@@ -627,11 +1071,22 @@ function resetSettings() {
   localStorage.removeItem("nexus_modal_url");
   localStorage.removeItem("nexus_auth_token");
   localStorage.removeItem("nexus_poll_interval");
+  localStorage.removeItem("nexus_dev_settings");
 
   CONFIG.apiUrl = "/api";
   CONFIG.modalUrl = "https://barhateniranjan725--nexus-ai-core-nexusaicore-fastapi-app.modal.run";
   CONFIG.authToken = "";
   CONFIG.pollInterval = 2500;
+
+  DEV_CONFIG = {
+    enabled: false,
+    provider: "edge",
+    apiKey: "",
+    baseUrl: "",
+    model: "",
+    sttModel: "",
+    engines: { shell: true, ui: false, browser: false, android: false },
+  };
 
   loadConfigToModal();
   showToast("Settings reset", "info");
