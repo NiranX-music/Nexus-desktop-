@@ -72,6 +72,7 @@ import registerSecurityVault from './security/Security'
 import registerSandboxManager from './security/sandbox-manager'
 import registerEmailAuth from './security/email-auth'
 import registerLockSystem from './security/lock-system'
+import registerSkyvernAgent from './services/skyvern-screen-agent'
 import { autoUpdater } from 'electron-updater'
 
 app.commandLine.appendSwitch('use-fake-ui-for-media-stream')
@@ -648,32 +649,39 @@ app.whenReady().then(() => {
     }
   })
 
+  const GLOBAL_GEMINI_KEY = 'AQ.Ab8RN6JW5yXKyy1RDQlzMCS1TTn3ZMupKyzH7KTtXP7QA9Rqvw'
+
   ipcMain.handle('secure-get-keys', async () => {
-    if (!fs.existsSync(secureConfigPath)) return null
-    try {
-      const data = JSON.parse(fs.readFileSync(secureConfigPath, 'utf8'))
-      let groqKey, geminiKey, fireworksKey
+    let groqKey = ''
+    let geminiKey = GLOBAL_GEMINI_KEY
+    let fireworksKey = ''
 
-      if (safeStorage.isEncryptionAvailable()) {
-        groqKey = safeStorage.decryptString(Buffer.from(data.groq, 'base64'))
-        geminiKey = safeStorage.decryptString(Buffer.from(data.gemini, 'base64'))
-        fireworksKey = data.fireworks
-          ? safeStorage.decryptString(Buffer.from(data.fireworks, 'base64'))
-          : ''
-      } else {
-        groqKey = Buffer.from(data.groq, 'base64').toString('utf8')
-        geminiKey = Buffer.from(data.gemini, 'base64').toString('utf8')
-        fireworksKey = data.fireworks ? Buffer.from(data.fireworks, 'base64').toString('utf8') : ''
+    if (fs.existsSync(secureConfigPath)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(secureConfigPath, 'utf8'))
+        if (safeStorage.isEncryptionAvailable()) {
+          groqKey = data.groq ? safeStorage.decryptString(Buffer.from(data.groq, 'base64')) : ''
+          const decryptedGemini = data.gemini ? safeStorage.decryptString(Buffer.from(data.gemini, 'base64')) : ''
+          geminiKey = decryptedGemini || GLOBAL_GEMINI_KEY
+          fireworksKey = data.fireworks
+            ? safeStorage.decryptString(Buffer.from(data.fireworks, 'base64'))
+            : ''
+        } else {
+          groqKey = data.groq ? Buffer.from(data.groq, 'base64').toString('utf8') : ''
+          const decryptedGemini = data.gemini ? Buffer.from(data.gemini, 'base64').toString('utf8') : ''
+          geminiKey = decryptedGemini || GLOBAL_GEMINI_KEY
+          fireworksKey = data.fireworks ? Buffer.from(data.fireworks, 'base64').toString('utf8') : ''
+        }
+      } catch (_err) {
+        // fallback
       }
-
-      return { groqKey, geminiKey, fireworksKey }
-    } catch (err) {
-      return null
     }
+
+    return { groqKey, geminiKey: geminiKey || GLOBAL_GEMINI_KEY, fireworksKey }
   })
 
   ipcMain.handle('check-keys-exist', () => {
-    return fs.existsSync(secureConfigPath)
+    return true
   })
 
   ipcMain.handle('save-whiteboard-pdf', async (_event, { imageDataUrl, title }) => {
@@ -801,6 +809,7 @@ app.whenReady().then(() => {
   registerWhatsAppManager(ipcMain)
   registerDocForge(ipcMain)
   registerFocusProtocol(ipcMain)
+  registerSkyvernAgent(ipcMain, app)
 
   ipcMain.handle('get-screen-source', async () => {
     const sources = await desktopCapturer.getSources({ types: ['screen'] })

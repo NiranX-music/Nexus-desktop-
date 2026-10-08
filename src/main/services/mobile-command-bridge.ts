@@ -5,6 +5,7 @@ import * as http from 'http'
 import * as https from 'https'
 import * as os from 'os'
 import * as path from 'path'
+import { getGlobalSkyvernAgent } from './skyvern-screen-agent'
 
 type MobileCommand = {
   source?: string
@@ -44,7 +45,11 @@ const allowedTypes = new Set([
   'weather',
   'stocks',
   'maps',
-  'research'
+  'research',
+  'screen-use',
+  'screen-task',
+  'screen',
+  'visual-click'
 ])
 
 const StoreClass = (Store as any).default || Store
@@ -539,6 +544,65 @@ export default function registerMobileCommandBridge({ app, getMainWindow }: Brid
         return
       }
 
+      if (req.method === 'POST' && (requestUrl.pathname === '/screen-task' || requestUrl.pathname === '/skyvern-task')) {
+        try {
+          const rawBody = await readBody(req)
+          const payload = JSON.parse(rawBody || '{}')
+          const goal = String(payload.goal || payload.task || payload.prompt || '').trim()
+          const mode = payload.mode || 'desktop'
+          const startUrl = payload.url || payload.startUrl || ''
+          const maxSteps = Number(payload.maxSteps || 15)
+
+          if (!goal) {
+            sendJson(res, 400, { ok: false, error: 'Goal is required' })
+            return
+          }
+
+          const agent = getGlobalSkyvernAgent()
+          if (!agent) {
+            sendJson(res, 503, { ok: false, error: 'Screen Agent not ready' })
+            return
+          }
+
+          const result = await agent.startTask(goal, { mode, startUrl, maxSteps })
+          sendJson(res, 200, { ok: true, result })
+        } catch (err: any) {
+          sendJson(res, 500, { ok: false, error: err?.message || 'Screen task failed' })
+        }
+        return
+      }
+
+      if (req.method === 'POST' && (requestUrl.pathname === '/screen-click' || requestUrl.pathname === '/skyvern-click')) {
+        try {
+          const rawBody = await readBody(req)
+          const payload = JSON.parse(rawBody || '{}')
+          const target = String(payload.target || payload.description || payload.element || '').trim()
+
+          if (!target) {
+            sendJson(res, 400, { ok: false, error: 'Target description is required' })
+            return
+          }
+
+          const agent = getGlobalSkyvernAgent()
+          if (!agent) {
+            sendJson(res, 503, { ok: false, error: 'Screen Agent not ready' })
+            return
+          }
+
+          const result = await agent.executeVisualClick(target)
+          sendJson(res, 200, { ok: true, result })
+        } catch (err: any) {
+          sendJson(res, 500, { ok: false, error: err?.message || 'Visual click failed' })
+        }
+        return
+      }
+
+      if (req.method === 'GET' && (requestUrl.pathname === '/screen-status' || requestUrl.pathname === '/skyvern-status')) {
+        const agent = getGlobalSkyvernAgent()
+        sendJson(res, 200, { ok: true, status: agent ? agent.getStatus() : null })
+        return
+      }
+
       if (req.method !== 'POST' || requestUrl.pathname !== '/mobile-command') {
         sendJson(res, 404, { ok: false, error: 'Unknown endpoint' })
         return
@@ -563,6 +627,18 @@ export default function registerMobileCommandBridge({ app, getMainWindow }: Brid
         targetWindow.show()
         targetWindow.focus()
         targetWindow.webContents.send('mobile-command', command)
+
+        if (command.type === 'screen-use' || command.type === 'screen-task' || command.type === 'screen' || command.type === 'skyvern') {
+          const agent = getGlobalSkyvernAgent()
+          if (agent && command.payload) {
+            agent.startTask(command.payload).catch(console.error)
+          }
+        } else if (command.type === 'visual-click') {
+          const agent = getGlobalSkyvernAgent()
+          if (agent && command.payload) {
+            agent.executeVisualClick(command.payload).catch(console.error)
+          }
+        }
 
         sendJson(res, 202, { ok: true, accepted: command.type })
       } catch (error: any) {

@@ -46,7 +46,7 @@ interface AiChatViewProps {
 }
 
 const systemPrompt =
-  'You are Nexus AI inside the desktop app. Be concise, useful, and write math with LaTeX when needed.'
+  'You are Nexus AI inside the desktop app. Be concise, useful, and write math with LaTeX when needed. You have built-in Autonomous Screen Use capabilities to autonomously automate desktop and browser workflows, visually locate UI elements, and execute clicks and tasks.'
 
 const cleanSpeechText = (text: string) =>
   text
@@ -314,6 +314,45 @@ export default function AiChatView({
     setMessages(nextMessages)
     setIsSending(true)
     await saveMessage('user', userContent)
+
+    const lowerPrompt = (prompt || '').toLowerCase().trim()
+    if (
+      lowerPrompt.startsWith('/screen ') ||
+      lowerPrompt.startsWith('use screen to ') ||
+      lowerPrompt.startsWith('/click ')
+    ) {
+      const isSingleClick = lowerPrompt.startsWith('/click ')
+      const screenGoal = prompt
+        .replace(/^\/(?:screen|click)\s+/i, '')
+        .replace(/^use screen to\s+/i, '')
+        .trim()
+
+      try {
+        if (isSingleClick) {
+          const clickRes = await window.electron.ipcRenderer.invoke('skyvern:visual-click', screenGoal)
+          const response = `👁️ [Screen Visual Click]\n\n${clickRes.message}`
+          setMessages((current) => [...current, { role: 'assistant', content: response }])
+          await saveMessage('nexus', response)
+          if (voiceReplies) await speakWithMainVoice(response)
+        } else {
+          const taskRes = await window.electron.ipcRenderer.invoke('skyvern:start-task', {
+            goal: screenGoal,
+            mode: 'desktop'
+          })
+          const response = `👁️ [Screen Use Agent Deployed]\n\n**Goal**: "${screenGoal}"\n**Status**: Initialized (${taskRes.status})\n\nNexus AI is now visually inspecting your screen, finding interactive targets, and executing mouse/keyboard actions autonomously. You can monitor live visual progress in the **Browser Control -> Autonomous Screen Use** tab!`
+          setMessages((current) => [...current, { role: 'assistant', content: response }])
+          await saveMessage('nexus', response)
+          if (voiceReplies) await speakWithMainVoice(response)
+        }
+      } catch (err: any) {
+        const errResponse = `❌ [Screen Use Error]: ${err?.message || 'Failed to start screen use task.'}`
+        setMessages((current) => [...current, { role: 'assistant', content: errResponse }])
+        await saveMessage('nexus', errResponse)
+      } finally {
+        setIsSending(false)
+      }
+      return
+    }
 
     try {
       const requestProvider = selectedAttachments.length ? 'gemini' : provider

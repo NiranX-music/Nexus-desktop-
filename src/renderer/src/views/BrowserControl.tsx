@@ -3,6 +3,7 @@ import {
   RiArrowGoBackLine,
   RiBrainLine,
   RiCursorLine,
+  RiEyeLine,
   RiGlobalLine,
   RiKeyboardLine,
   RiLoader4Line,
@@ -25,6 +26,7 @@ import {
   runServerlessBrowserPrompt
 } from '@renderer/functions/browser-control-api'
 import { nexusService } from '@renderer/services/nexus-voice-ai'
+import SkyvernScreenStudio from '@renderer/components/SkyvernScreenStudio'
 
 interface BrowserEvent {
   id: number
@@ -42,7 +44,7 @@ interface BrowserControlViewProps {
   sendTextCommand: (command: string) => Promise<void>
 }
 
-type BrowserExecutionMode = 'core' | 'bridge' | 'serverless'
+type BrowserExecutionMode = 'core' | 'bridge' | 'serverless' | 'skyvern'
 
 const quickPrompts = [
   { label: 'Search', prompt: 'search Nexus AI desktop agent', icon: <RiGlobalLine /> },
@@ -98,7 +100,9 @@ const executionModeCopy: Record<BrowserExecutionMode, string> = {
   core: 'Main Nexus voice assistant routes the task through the same live model.',
   bridge: 'Direct bridge controls the browser you already have open.',
   serverless:
-    'Serverless Chromium keeps an isolated browser session for search, open, type, click, scroll, play, pause, and account pages.'
+    'Serverless Chromium keeps an isolated browser session for search, open, type, click, scroll, play, pause, and account pages.',
+  skyvern:
+    'Skyvern autonomous vision agent: inspects screen visuals, determines element coordinates, and executes clicks, typing, and workflows.'
 }
 
 const buildCoreBrowserCommand = (command: string, scope: BrowserAccessScope) => `
@@ -456,7 +460,11 @@ export default function BrowserControlView({
   return (
     <div className="nexus-browser-control h-full w-full overflow-y-auto overflow-x-hidden p-3 text-zinc-100 scrollbar-small">
       <div className="grid min-h-full grid-cols-12 gap-3 pb-3">
-        <section className="col-span-12 flex min-h-0 flex-col gap-3 xl:col-span-8">
+        <section
+          className={`col-span-12 flex min-h-0 flex-col gap-3 ${
+            executionMode === 'skyvern' ? 'xl:col-span-12' : 'xl:col-span-8'
+          }`}
+        >
           <div className="nexus-browser-hero flex shrink-0 flex-wrap items-center justify-between gap-3 overflow-hidden border border-emerald-300/15 bg-black/35 p-3">
             <div className="flex min-w-0 items-center gap-4">
               <div className="grid h-12 w-12 shrink-0 place-items-center rounded-lg border border-emerald-300/25 bg-emerald-300/10 text-xl text-emerald-200">
@@ -513,10 +521,27 @@ export default function BrowserControlView({
               >
                 <RiGlobalLine /> Serverless Chromium
               </button>
+              <button
+                type="button"
+                onClick={() => setExecutionMode('skyvern')}
+                className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 transition ${
+                  executionMode === 'skyvern'
+                    ? 'border-emerald-400/40 bg-emerald-400/20 text-emerald-200 shadow-[0_0_15px_rgba(52,211,153,0.15)]'
+                    : 'border-white/10 bg-white/[0.03] text-zinc-500 hover:text-zinc-200'
+                }`}
+              >
+                <RiEyeLine /> Autonomous Screen Use
+              </button>
             </div>
           </div>
 
-          <div className="grid shrink-0 grid-cols-1 gap-3 lg:grid-cols-3">
+          {executionMode === 'skyvern' ? (
+            <div className="min-h-0 flex-1">
+              <SkyvernScreenStudio />
+            </div>
+          ) : (
+            <>
+              <div className="grid shrink-0 grid-cols-1 gap-3 lg:grid-cols-3">
             {accessScopes.map((item) => (
               <button
                 key={item.id}
@@ -755,63 +780,67 @@ export default function BrowserControlView({
               </div>
             </div>
           </div>
+            </>
+          )}
         </section>
 
-        <aside className="col-span-12 flex min-h-[420px] flex-col border border-white/10 bg-black/35 p-3 xl:col-span-4 xl:min-h-0">
-          <div className="mb-3 flex items-center justify-between border-b border-white/10 pb-2">
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400">
-              Browser Log
-            </span>
-            <span className="text-[8px] font-black uppercase tracking-[0.2em] text-emerald-300/60">
-              {scope}
-            </span>
-          </div>
-
-          <div
-            ref={logRef}
-            className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-2 scrollbar-small xl:max-h-[calc(100vh-190px)]"
-          >
-            {events.length === 0 ? (
-              <div className="grid h-full place-items-center text-[10px] font-black uppercase tracking-[0.2em] text-zinc-700">
-                No browser events
-              </div>
-            ) : (
-              events.map((event) => (
-                <div key={event.id} className="border border-white/10 bg-white/[0.03] p-3">
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <span className="rounded-md border border-white/10 bg-black/40 px-2 py-1 text-[8px] font-black uppercase tracking-[0.16em] text-zinc-500">
-                      {event.source}
-                    </span>
-                    <span
-                      className={`text-[8px] font-black uppercase tracking-[0.16em] ${
-                        event.result.success ? 'text-emerald-300' : 'text-red-300'
-                      }`}
-                    >
-                      {event.result.success ? 'success' : 'blocked'}
-                    </span>
-                  </div>
-                  <p className="text-xs font-semibold leading-relaxed text-zinc-200">
-                    {event.prompt}
-                  </p>
-                  <p className="mt-2 text-[10px] font-mono leading-relaxed text-zinc-500">
-                    {event.result.summary}
-                  </p>
-                </div>
-              ))
-            )}
-          </div>
-
-          <div className="mt-3 border-t border-white/10 pt-3">
-            <div className="flex items-center gap-2 text-[9px] font-black uppercase tracking-[0.18em] text-emerald-300/70">
-              {executionMode === 'core' ? <RiShieldFlashLine /> : <RiPlayFill />}
-              {executionMode === 'core'
-                ? 'Main browser voice armed'
-                : executionMode === 'serverless'
-                  ? 'Serverless Chromium armed'
-                  : 'Browser bridge armed'}
+        {executionMode !== 'skyvern' && (
+          <aside className="col-span-12 flex min-h-[420px] flex-col border border-white/10 bg-black/35 p-3 xl:col-span-4 xl:min-h-0">
+            <div className="mb-3 flex items-center justify-between border-b border-white/10 pb-2">
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400">
+                Browser Log
+              </span>
+              <span className="text-[8px] font-black uppercase tracking-[0.2em] text-emerald-300/60">
+                {scope}
+              </span>
             </div>
-          </div>
-        </aside>
+
+            <div
+              ref={logRef}
+              className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-2 scrollbar-small xl:max-h-[calc(100vh-190px)]"
+            >
+              {events.length === 0 ? (
+                <div className="grid h-full place-items-center text-[10px] font-black uppercase tracking-[0.2em] text-zinc-700">
+                  No browser events
+                </div>
+              ) : (
+                events.map((event) => (
+                  <div key={event.id} className="border border-white/10 bg-white/[0.03] p-3">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <span className="rounded-md border border-white/10 bg-black/40 px-2 py-1 text-[8px] font-black uppercase tracking-[0.16em] text-zinc-500">
+                        {event.source}
+                      </span>
+                      <span
+                        className={`text-[8px] font-black uppercase tracking-[0.16em] ${
+                          event.result.success ? 'text-emerald-300' : 'text-red-300'
+                        }`}
+                      >
+                        {event.result.success ? 'success' : 'blocked'}
+                      </span>
+                    </div>
+                    <p className="text-xs font-semibold leading-relaxed text-zinc-200">
+                      {event.prompt}
+                    </p>
+                    <p className="mt-2 text-[10px] font-mono leading-relaxed text-zinc-500">
+                      {event.result.summary}
+                    </p>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="mt-3 border-t border-white/10 pt-3">
+              <div className="flex items-center gap-2 text-[9px] font-black uppercase tracking-[0.18em] text-emerald-300/70">
+                {executionMode === 'core' ? <RiShieldFlashLine /> : <RiPlayFill />}
+                {executionMode === 'core'
+                  ? 'Main browser voice armed'
+                  : executionMode === 'serverless'
+                    ? 'Serverless Chromium armed'
+                    : 'Browser bridge armed'}
+              </div>
+            </div>
+          </aside>
+        )}
       </div>
     </div>
   )

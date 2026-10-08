@@ -75,6 +75,7 @@ import {
   scheduleWhatsAppMessage as scheduleWhatsAppDirect,
   openWhatsAppHUD
 } from '@renderer/tools/whatsapp-api'
+import { startSkyvernTask, executeSkyvernVisualClick } from '@renderer/functions/skyvern-agent-api'
 
 export type NexusVoiceStatus = {
   isConnected: boolean
@@ -1906,6 +1907,45 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
                       }
                     }
                   },
+                  {
+                    name: 'execute_screen_use_task',
+                    description:
+                      'ACTION: Autonomous Computer/Screen Use & Workflow Automation (powered by Nexus vision loop). Use this when the operator asks to automate an interactive UI workflow, click buttons, fill forms, navigate pages, or accomplish complex multi-step screen tasks on the desktop or browser. Provide the task description and target.',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {
+                        goal: {
+                          type: 'STRING',
+                          description: 'The exact task or workflow goal to accomplish on the screen.'
+                        },
+                        mode: {
+                          type: 'STRING',
+                          enum: ['desktop', 'browser'],
+                          description: 'desktop = OS screen automation; browser = web browser automation.'
+                        },
+                        start_url: {
+                          type: 'STRING',
+                          description: 'Optional web URL to open before beginning the screen workflow.'
+                        }
+                      },
+                      required: ['goal']
+                    }
+                  },
+                  {
+                    name: 'screen_visual_click',
+                    description:
+                      'ACTION: Visually locate any UI element on screen by natural language description (e.g. "the red subscribe button", "the search input", "the close icon") and click it using vision AI.',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {
+                        target_description: {
+                          type: 'STRING',
+                          description: 'Visual description of the element to click on screen.'
+                        }
+                      },
+                      required: ['target_description']
+                    }
+                  },
                   ...mcpDeclarations
                 ]
               }
@@ -2011,6 +2051,15 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
                   doubleClick: !!call.args.double_click
                 })
                 result = clickRes?.success ? clickRes.message : `Click failed: ${clickRes?.error}`
+              } else if (call.name === 'execute_screen_use_task' || call.name === 'execute_skyvern_screen_task') {
+                const taskRes = await startSkyvernTask(call.args.goal, {
+                  mode: call.args.mode || 'desktop',
+                  startUrl: call.args.start_url
+                })
+                result = `Autonomous Screen Agent deployed! Goal: "${call.args.goal}". Mode: ${call.args.mode || 'desktop'}. Status: ${taskRes.status}. The autonomous vision loop is now capturing the screen, identifying targets, and executing actions.`
+              } else if (call.name === 'screen_visual_click' || call.name === 'skyvern_visual_click') {
+                const clickRes = await executeSkyvernVisualClick(call.args.target_description)
+                result = clickRes.success ? clickRes.message : `Visual click failed: ${clickRes.message}`
               } else if (call.name === 'watch_screen_region') {
                 const watchRes = await window.electron?.ipcRenderer?.invoke('sentry:start-watch', {
                   label: call.args.label,
