@@ -26,7 +26,8 @@ import {
   RiPaintBrushLine,
   RiWhatsappLine,
   RiFilePpt2Line,
-  RiShieldCheckLine
+  RiShieldCheckLine,
+  RiVolumeUpLine
 } from 'react-icons/ri'
 import { FaMemory } from 'react-icons/fa6'
 import { GiTinker } from 'react-icons/gi'
@@ -54,9 +55,10 @@ interface NexusProps {
   toggleMic: () => void
   isVideoOn: boolean
   visionMode: VisionMode
-  startVision: (mode: 'camera' | 'screen') => void
+  startVision: (mode: 'camera' | 'screen' | 'dual', options?: any) => void
   stopVision: () => void
   activeStream: MediaStream | null
+  activeCameraStream?: MediaStream | null
 }
 
 interface DashboardViewProps {
@@ -113,6 +115,7 @@ export default function DashboardView({
     visionMode,
     startVision,
     activeStream,
+    activeCameraStream,
     toggleMic,
     toggleSystem,
     isMicMuted
@@ -120,6 +123,7 @@ export default function DashboardView({
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const videoElementRef = useRef<HTMLVideoElement | null>(null)
+  const pipVideoElementRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const faceScanInterval = useRef<NodeJS.Timeout | null>(null)
@@ -145,14 +149,22 @@ export default function DashboardView({
   )
   const [isUserSpeaking, setIsUserSpeaking] = useState(false)
   const [userAudioVolume, setUserAudioVolume] = useState(0)
+  const [isScreenAudioActive, setIsScreenAudioActive] = useState(false)
 
   useEffect(() => {
     const handleSpeaking = (e: any) => {
       setIsUserSpeaking(Boolean(e.detail?.speaking))
       setUserAudioVolume(typeof e.detail?.volume === 'number' ? e.detail.volume : 0)
     }
+    const handleScreenAudio = (e: any) => {
+      setIsScreenAudioActive(Boolean(e.detail?.active))
+    }
     window.addEventListener('nexus-user-speaking', handleSpeaking)
-    return () => window.removeEventListener('nexus-user-speaking', handleSpeaking)
+    window.addEventListener('nexus-screen-audio-changed', handleScreenAudio)
+    return () => {
+      window.removeEventListener('nexus-user-speaking', handleSpeaking)
+      window.removeEventListener('nexus-screen-audio-changed', handleScreenAudio)
+    }
   }, [])
 
   const activeMedia =
@@ -359,6 +371,17 @@ export default function DashboardView({
     [activeStream, isVideoOn, visionMode]
   )
 
+  const setPipVideoRef = useCallback(
+    (node: HTMLVideoElement | null) => {
+      pipVideoElementRef.current = node
+      if (node && activeCameraStream && isVideoOn) {
+        node.srcObject = activeCameraStream
+        node.onloadedmetadata = () => node.play().catch(() => {})
+      }
+    },
+    [activeCameraStream, isVideoOn, visionMode]
+  )
+
   const setMobileVideoRef = useCallback(
     (node: HTMLVideoElement | null) => {
       if (node && activeStream && isVideoOn) {
@@ -508,23 +531,43 @@ export default function DashboardView({
         >
           <div className="absolute top-3 left-3 z-30 flex items-center gap-2">
             <span
-              className={`w-1.5 h-1.5 rounded-full ${isVideoOn ? 'bg-red-500 animate-pulse shadow-[0_0_8px_red]' : 'bg-zinc-600'}`}
+              className={`w-1.5 h-1.5 rounded-full ${
+                isVideoOn
+                  ? visionMode === 'dual'
+                    ? 'bg-cyan-400 animate-pulse shadow-[0_0_8px_cyan]'
+                    : 'bg-red-500 animate-pulse shadow-[0_0_8px_red]'
+                  : 'bg-zinc-600'
+              }`}
             />
             <span
-              className={`text-[9px] font-bold tracking-widest ${isVideoOn ? 'text-red-400/80' : 'text-zinc-600'}`}
+              className={`text-[9px] font-bold tracking-widest ${
+                isVideoOn
+                  ? visionMode === 'dual'
+                    ? 'text-cyan-300'
+                    : 'text-red-400/80'
+                  : 'text-zinc-600'
+              }`}
             >
               {isVideoOn
-                ? visionMode === 'screen'
-                  ? 'SCREEN FEED'
-                  : 'OPTICAL FEED'
+                ? visionMode === 'dual'
+                  ? 'DUAL FEED (SCREEN + CAM)'
+                  : visionMode === 'screen'
+                    ? 'SCREEN FEED'
+                    : 'OPTICAL FEED'
                 : 'OPTICS OFFLINE'}
             </span>
+            {isVideoOn && isScreenAudioActive && (
+              <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[8px] font-mono font-bold animate-pulse">
+                <RiVolumeUpLine size={10} /> AUDIO
+              </span>
+            )}
           </div>
 
           {isVideoOn && (
             <button
-              onClick={toggleSource}
-              className="absolute top-2 right-2 z-30 p-1.5 rounded-md bg-black/50 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500 hover:text-black transition-all"
+              onClick={onVisionClick}
+              className="absolute top-2 right-2 z-30 p-1.5 rounded-md bg-black/60 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500 hover:text-black transition-all cursor-pointer"
+              title="Change capture source or mode"
             >
               <RiSwapBoxLine size={14} />
             </button>
@@ -541,6 +584,22 @@ export default function DashboardView({
               playsInline
               muted
             />
+
+            {/* Picture-In-Picture Webcam overlay for Dual Vision Mode */}
+            {visionMode === 'dual' && activeCameraStream && (
+              <div className="absolute bottom-2 right-2 w-28 h-20 rounded-lg overflow-hidden border border-cyan-400/60 shadow-[0_0_16px_rgba(6,182,212,0.45)] bg-black/85 z-25 group">
+                <video
+                  ref={setPipVideoRef}
+                  className="w-full h-full object-cover -scale-x-100"
+                  autoPlay
+                  playsInline
+                  muted
+                />
+                <div className="absolute top-1 left-1 px-1 py-0.2 rounded bg-black/75 text-[7px] font-mono font-bold text-cyan-300 border border-cyan-400/30">
+                  WEBCAM PIP
+                </div>
+              </div>
+            )}
 
             <canvas
               ref={canvasRef}
@@ -814,9 +873,15 @@ export default function DashboardView({
                 Vision
               </span>
               <span
-                className={`rounded-full border px-2 py-1 text-[9px] font-black uppercase tracking-widest ${isVideoOn ? 'border-cyan-300/30 bg-cyan-300/10 text-cyan-200' : 'border-white/10 bg-white/5 text-zinc-500'}`}
+                className={`rounded-full border px-2 py-1 text-[9px] font-black uppercase tracking-widest ${
+                  isVideoOn
+                    ? visionMode === 'dual'
+                      ? 'border-cyan-400/50 bg-cyan-400/15 text-cyan-200 shadow-[0_0_12px_rgba(6,182,212,0.4)]'
+                      : 'border-cyan-300/30 bg-cyan-300/10 text-cyan-200'
+                    : 'border-white/10 bg-white/5 text-zinc-500'
+                }`}
               >
-                {isVideoOn ? visionMode : 'Off'}
+                {isVideoOn ? (visionMode === 'dual' ? 'Dual' : visionMode) : 'Off'}
               </span>
             </div>
 
@@ -880,11 +945,19 @@ export default function DashboardView({
             >
               <button
                 onClick={onVisionClick}
-                className={`flex h-12 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-lg border px-3 text-[10px] font-black uppercase tracking-widest transition-all ${isVideoOn ? 'border-red-400/30 bg-red-500/15 text-red-300 shadow-[0_0_18px_rgba(248,113,113,0.12)]' : 'border-white/10 bg-white/[0.04] text-zinc-400 hover:border-cyan-300/30 hover:text-cyan-200'}`}
+                className={`flex h-12 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-lg border px-3 text-[10px] font-black uppercase tracking-widest transition-all ${
+                  isVideoOn
+                    ? visionMode === 'dual'
+                      ? 'border-cyan-400/60 bg-cyan-500/20 text-cyan-200 shadow-[0_0_20px_rgba(6,182,212,0.35)]'
+                      : 'border-red-400/30 bg-red-500/15 text-red-300 shadow-[0_0_18px_rgba(248,113,113,0.12)]'
+                    : 'border-white/10 bg-white/[0.04] text-zinc-400 hover:border-cyan-300/30 hover:text-cyan-200'
+                }`}
                 title="Vision source"
               >
                 {isVideoOn ? <RiSwapBoxLine size={20} /> : <RiCameraLine size={20} />}
-                <span className="hidden sm:inline">Vision</span>
+                <span className="hidden sm:inline">
+                  {isVideoOn ? (visionMode === 'dual' ? 'Dual' : 'Vision') : 'Vision'}
+                </span>
               </button>
               <button
                 onClick={toggleSystem}
