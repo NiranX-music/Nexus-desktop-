@@ -161,10 +161,10 @@ let updateDownloadPromise: Promise<Array<string>> | null = null
 let downloadedUpdateInfo: { version: string; releaseNotes: string } | null = null
 
 const CM_TO_PX = 37.8
-const DOCK_COLLAPSED_WIDTH = Math.round(5 * CM_TO_PX)
-const DOCK_COLLAPSED_HEIGHT = Math.max(8, Math.round(0.2 * CM_TO_PX))
-const DOCK_EXPANDED_WIDTH = 620
-const DOCK_EXPANDED_HEIGHT = 168
+const DOCK_COLLAPSED_WIDTH = 260
+const DOCK_COLLAPSED_HEIGHT = 48
+const DOCK_EXPANDED_WIDTH = 680
+const DOCK_EXPANDED_HEIGHT = 196
 
 const NEXUS_UPDATE_FEED_URL =
   process.env.NEXUS_UPDATE_FEED_URL || 'https://nexusaix.vercel.app/updates/win'
@@ -387,6 +387,8 @@ function createDockWindow(): void {
     show: false,
     frame: false,
     transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
     resizable: false,
     movable: true,
     alwaysOnTop: true,
@@ -431,7 +433,7 @@ function setDockExpanded(expanded: boolean) {
     dockCollapseTimer = setTimeout(() => {
       dockCollapseTimer = null
       setDockBounds(false)
-    }, 450)
+    }, 280)
     return
   }
   setDockBounds(true)
