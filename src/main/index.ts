@@ -818,6 +818,28 @@ app.whenReady().then(() => {
     return sources[0]?.id
   })
 
+  ipcMain.handle('get-desktop-sources', async (_event, options?: { types?: ('screen' | 'window')[] }) => {
+    try {
+      const types = options?.types || ['screen', 'window']
+      const sources = await desktopCapturer.getSources({
+        types,
+        thumbnailSize: { width: 480, height: 270 },
+        fetchWindowIcons: true
+      })
+      return sources.map((source) => ({
+        id: source.id,
+        name: source.name,
+        display_id: source.display_id,
+        type: source.id.startsWith('screen:') ? 'screen' : 'window',
+        thumbnail: source.thumbnail ? source.thumbnail.toDataURL() : '',
+        appIcon: source.appIcon ? source.appIcon.toDataURL() : null
+      }))
+    } catch (err: any) {
+      console.error('[get-desktop-sources] Error fetching desktop sources:', err)
+      return []
+    }
+  })
+
   ipcMain.handle('get-app-version', () => app.getVersion())
 
   ipcMain.handle('check-for-updates', async () => {
