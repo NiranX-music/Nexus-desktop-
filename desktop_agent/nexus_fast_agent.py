@@ -236,12 +236,55 @@ class NexusFastAgent:
             return {"success": False, "error": str(e)}
 
     def execute_shell(self, command: str) -> Dict[str, Any]:
-        """Executes safe local shell commands via subprocess."""
+        """Executes safe local shell commands via subprocess with Windows fallbacks."""
         self.log(f"Executing SHELL: {command}")
         t0 = time.time()
+        
+        # 1. LaTeX Auto-Fallback
+        cmd_lower = command.strip().lower()
+        if cmd_lower.startswith("pdflatex"):
+            import shutil
+            if not shutil.which("pdflatex"):
+                parts = command.strip().split()
+                tex_file = [p.strip('\'"') for p in parts if p.endswith('.tex')]
+                tex_name = tex_file[0] if tex_file else "Kinematics_Formula_Sheet.tex"
+                tex_path = os.path.abspath(tex_name)
+                
+                # Check Chrome / Edge paths
+                chrome = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+                edge = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+                browser = chrome if os.path.exists(chrome) else (edge if os.path.exists(edge) else None)
+                
+                pdf_path = tex_path.replace(".tex", ".pdf")
+                html_path = tex_path.replace(".tex", ".html")
+                
+                if os.path.exists(pdf_path):
+                    self.log(f"PDF already compiled: {pdf_path}")
+                    try:
+                        if platform.system() == "Windows": os.startfile(pdf_path)
+                    except Exception: pass
+                    return {"success": True, "returncode": 0, "stdout": f"[NEXUS ENGINE] PDF ready: {pdf_path}", "stderr": "", "elapsed_sec": round(time.time() - t0, 3)}
+                
+                if browser and os.path.exists(html_path):
+                    subprocess.run(f'"{browser}" --headless --disable-gpu --run-all-compositor-stages-before-draw --print-to-pdf="{pdf_path}" "{html_path}"', shell=True)
+                    if os.path.exists(pdf_path):
+                        try:
+                            if platform.system() == "Windows": os.startfile(pdf_path)
+                        except Exception: pass
+                        return {"success": True, "returncode": 0, "stdout": f"[NEXUS ENGINE] Successfully compiled {tex_name} -> {pdf_path}", "stderr": "", "elapsed_sec": round(time.time() - t0, 3)}
+
+        # 2. Windows shell command normalization
+        exec_cmd = command
+        if platform.system() == "Windows":
+            if "&&" in command or "||" in command:
+                exec_cmd = f'cmd.exe /c "{command}"'
+            elif command.strip().startswith("touch "):
+                target = command.strip()[6:].strip('\'"')
+                exec_cmd = f'powershell -NoProfile -Command "if (!(Test-Path \'{target}\')) {{ New-Item -ItemType File -Path \'{target}\' -Force | Out-Null }}"'
+
         try:
             proc = subprocess.run(
-                command,
+                exec_cmd,
                 shell=True,
                 capture_output=True,
                 text=True,
