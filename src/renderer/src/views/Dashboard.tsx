@@ -143,6 +143,17 @@ export default function DashboardView({
     normalizeGeminiLiveModel(localStorage.getItem('nexus_default_ai_model')) ||
       DEFAULT_LIVE_GEMINI_MODEL
   )
+  const [isUserSpeaking, setIsUserSpeaking] = useState(false)
+  const [userAudioVolume, setUserAudioVolume] = useState(0)
+
+  useEffect(() => {
+    const handleSpeaking = (e: any) => {
+      setIsUserSpeaking(Boolean(e.detail?.speaking))
+      setUserAudioVolume(typeof e.detail?.volume === 'number' ? e.detail.volume : 0)
+    }
+    window.addEventListener('nexus-user-speaking', handleSpeaking)
+    return () => window.removeEventListener('nexus-user-speaking', handleSpeaking)
+  }, [])
 
   const activeMedia =
     mediaSessions.find((session) => session.status === 'Playing') ||
@@ -779,6 +790,12 @@ export default function DashboardView({
             className={`group/core relative flex aspect-square h-[min(56vh,540px)] min-h-[300px] max-h-[540px] w-full max-w-[540px] items-center justify-center transition-all duration-1000 ${isSystemActive || isSystemStarting ? 'opacity-100 scale-100' : 'opacity-80 scale-95 grayscale'}`}
           >
             <div className="absolute inset-0 rounded-full border border-emerald-300/10 bg-[radial-gradient(circle,#031915_0%,#020807_48%,transparent_68%)] shadow-[0_0_90px_rgba(16,185,129,0.12)]" />
+            {isUserSpeaking && !isMicMuted && (
+              <>
+                <div className="pointer-events-none absolute inset-[-7%] animate-ping rounded-full border border-cyan-400/40 opacity-40 duration-1000" />
+                <div className="pointer-events-none absolute inset-[-15%] animate-pulse rounded-full border border-cyan-300/30 shadow-[0_0_55px_rgba(6,182,212,0.4)]" />
+              </>
+            )}
             <div className="absolute inset-[5%] rounded-full border border-emerald-300/15 animate-[nexus-orbit_18s_linear_infinite]" />
             <div className="absolute inset-[13%] rounded-full border border-cyan-300/10 animate-[nexus-orbit-reverse_26s_linear_infinite]" />
             <div className="absolute inset-[22%] rounded-full border border-white/5" />
@@ -808,15 +825,46 @@ export default function DashboardView({
                 Voice
               </span>
               <span
-                className={`rounded-full border px-2 py-1 text-[9px] font-black uppercase tracking-widest ${isMicMuted ? 'border-red-300/30 bg-red-500/10 text-red-300' : 'border-emerald-300/30 bg-emerald-300/10 text-emerald-200'}`}
+                className={`rounded-full border px-2 py-1 text-[9px] font-black uppercase tracking-widest transition-all ${
+                  isMicMuted
+                    ? 'border-red-300/30 bg-red-500/10 text-red-300'
+                    : isUserSpeaking
+                      ? 'border-cyan-400/60 bg-cyan-400/20 text-cyan-200 shadow-[0_0_16px_rgba(6,182,212,0.6)] flex items-center gap-1.5'
+                      : 'border-emerald-300/30 bg-emerald-300/10 text-emerald-200'
+                }`}
               >
-                {isMicMuted ? 'Muted' : 'Live'}
+                {isMicMuted ? (
+                  'Muted'
+                ) : isUserSpeaking ? (
+                  <>
+                    <span className="flex items-center gap-0.5">
+                      <span className="h-2 w-0.5 animate-pulse rounded-full bg-cyan-300" />
+                      <span className="h-3 w-0.5 animate-pulse rounded-full bg-cyan-100 delay-75" />
+                      <span className="h-1.5 w-0.5 animate-pulse rounded-full bg-cyan-300 delay-150" />
+                    </span>
+                    <span>Speaking</span>
+                  </>
+                ) : (
+                  'Live'
+                )}
               </span>
             </div>
 
-            <div className="absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/10 bg-black/50 px-3 py-1.5 text-[8px] font-mono uppercase tracking-widest text-zinc-500 backdrop-blur-md">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-300 shadow-[0_0_10px_rgba(52,211,153,0.8)]" />
-              Neural lattice synced
+            <div
+              className={`absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full border px-3 py-1.5 text-[8px] font-mono uppercase tracking-widest backdrop-blur-md transition-all ${
+                isUserSpeaking && !isMicMuted
+                  ? 'border-cyan-400/50 bg-black/80 text-cyan-300 shadow-[0_0_20px_rgba(6,182,212,0.4)] animate-pulse'
+                  : 'border-white/10 bg-black/50 text-zinc-500'
+              }`}
+            >
+              <span
+                className={`h-1.5 w-1.5 rounded-full transition-all ${
+                  isUserSpeaking && !isMicMuted
+                    ? 'bg-cyan-300 shadow-[0_0_12px_rgba(6,182,212,1)] animate-ping'
+                    : 'bg-emerald-300 shadow-[0_0_10px_rgba(52,211,153,0.8)]'
+                }`}
+              />
+              {isUserSpeaking && !isMicMuted ? 'User Voice Uplink Active' : 'Neural lattice synced'}
             </div>
 
             <div className="relative h-[78%] w-[78%] overflow-hidden rounded-full">
@@ -851,11 +899,33 @@ export default function DashboardView({
               </button>
               <button
                 onClick={toggleMic}
-                className={`flex h-12 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-lg border px-3 text-[10px] font-black uppercase tracking-widest transition-all ${isMicMuted ? 'border-red-400/30 bg-red-500/15 text-red-300' : 'border-emerald-300/25 bg-emerald-400/10 text-emerald-200 hover:border-emerald-300/45'}`}
+                className={`flex h-12 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-lg border px-3 text-[10px] font-black uppercase tracking-widest transition-all ${
+                  isMicMuted
+                    ? 'border-red-400/30 bg-red-500/15 text-red-300'
+                    : isUserSpeaking
+                      ? 'border-cyan-400 bg-cyan-400/25 text-cyan-200 shadow-[0_0_24px_rgba(6,182,212,0.6)] animate-pulse'
+                      : 'border-emerald-300/25 bg-emerald-400/10 text-emerald-200 hover:border-emerald-300/45'
+                }`}
                 title="Voice"
               >
-                {isMicMuted ? <RiMicOffLine size={20} /> : <RiMicLine size={20} />}
-                <span className="hidden sm:inline">{isMicMuted ? 'Muted' : 'Voice'}</span>
+                {isMicMuted ? (
+                  <RiMicOffLine size={20} />
+                ) : (
+                  <RiMicLine
+                    size={20}
+                    className={isUserSpeaking ? 'text-cyan-300 animate-bounce' : ''}
+                  />
+                )}
+                <span className="hidden sm:inline">
+                  {isMicMuted ? 'Muted' : isUserSpeaking ? 'Speaking' : 'Voice'}
+                </span>
+                {isUserSpeaking && !isMicMuted && (
+                  <span className="hidden sm:flex items-center gap-0.5 ml-0.5">
+                    <span className="h-2 w-0.5 rounded-full bg-cyan-300 animate-pulse" />
+                    <span className="h-3.5 w-0.5 rounded-full bg-cyan-100 animate-pulse delay-75" />
+                    <span className="h-2 w-0.5 rounded-full bg-cyan-300 animate-pulse delay-150" />
+                  </span>
+                )}
               </button>
             </div>
 
