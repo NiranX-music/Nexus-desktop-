@@ -144,7 +144,7 @@ const IndexRoot = () => {
         setIsMicMuted(true)
         stopVision()
       }
-    }, 1000)
+    }, 350)
     return () => clearInterval(watchdog)
   }, [isSystemActive, isSystemStarting])
 
@@ -159,6 +159,7 @@ const IndexRoot = () => {
       try {
         await nexusService.connect()
         setIsSystemActive(true)
+        setIsSystemStarting(false)
         setIsMicMuted(false)
         nexusService.setMute(false)
       } catch (err: any) {
