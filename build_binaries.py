@@ -61,7 +61,10 @@ def calculate_sha256(filepath: str) -> str:
 # 1. WINDOWS EXECUTABLE
 # =============================================================================
 def package_windows():
-    print("[1/4] Packaging Windows Desktop Installer...")
+    print("[1/4] Packaging Windows Desktop Executables...")
+    csc_path = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+
+    # A. Core Workstation Installer
     target_exe = os.path.join(BINARIES_DIR, "nexus-setup.exe")
     target_release_exe = os.path.join(RELEASE_BINARIES_DIR, "nexus-setup.exe")
     if os.path.exists(DIST_EXE_SOURCE):
@@ -77,6 +80,43 @@ def package_windows():
         print(f"  [OK] nexus-setup.exe ready ({os.path.getsize(target_exe):,} bytes, SHA-256: {sha[:16]}...)")
     else:
         print("  [!] Warning: Source installer not found at", DIST_EXE_SOURCE)
+
+    # B. Nexus Companion Standalone Executable
+    comp_cs = os.path.join(ROOT_DIR, "nexus-companion", "desktop", "Program.cs")
+    comp_exe = os.path.join(RELEASE_BINARIES_DIR, "nexus-companion.exe")
+    if os.path.exists(csc_path) and os.path.exists(comp_cs):
+        print("  -> Compiling nexus-companion.exe...")
+        os.system(f'"{csc_path}" /target:winexe /r:System.Windows.Forms.dll,System.Drawing.dll /out:"{comp_exe}" "{comp_cs}" >nul 2>&1')
+        if os.path.exists(comp_exe):
+            shutil.copy2(comp_exe, os.path.join(BINARIES_DIR, "nexus-companion.exe"))
+            shutil.copy2(comp_exe, os.path.join(ROOT_DIR, "nexus-companion", "nexus-companion.exe"))
+            sha_comp = calculate_sha256(comp_exe)
+            print(f"  [OK] nexus-companion.exe compiled ({os.path.getsize(comp_exe):,} bytes, SHA-256: {sha_comp[:16]}...)")
+
+    # C. Nexus Scholar Standalone Executable
+    schol_cs = os.path.join(ROOT_DIR, "nexus-scholar", "desktop", "Program.cs")
+    schol_exe = os.path.join(RELEASE_BINARIES_DIR, "nexus-scholar.exe")
+    if os.path.exists(csc_path) and os.path.exists(schol_cs):
+        print("  -> Compiling nexus-scholar.exe...")
+        os.system(f'"{csc_path}" /target:winexe /r:System.Windows.Forms.dll,System.Drawing.dll /out:"{schol_exe}" "{schol_cs}" >nul 2>&1')
+        if os.path.exists(schol_exe):
+            shutil.copy2(schol_exe, os.path.join(BINARIES_DIR, "nexus-scholar.exe"))
+            shutil.copy2(schol_exe, os.path.join(ROOT_DIR, "nexus-scholar", "nexus-scholar.exe"))
+            sha_schol = calculate_sha256(schol_exe)
+            print(f"  [OK] nexus-scholar.exe compiled ({os.path.getsize(schol_exe):,} bytes, SHA-256: {sha_schol[:16]}...)")
+
+    # D. Nexus Suite Launcher Executable
+    launch_cs = os.path.join(ROOT_DIR, "nexus-launcher", "Program.cs")
+    launch_exe = os.path.join(RELEASE_BINARIES_DIR, "nexus-suite-launcher.exe")
+    if os.path.exists(csc_path) and os.path.exists(launch_cs):
+        print("  -> Compiling nexus-suite-launcher.exe...")
+        os.system(f'"{csc_path}" /target:winexe /r:System.Windows.Forms.dll,System.Drawing.dll /out:"{launch_exe}" "{launch_cs}" >nul 2>&1')
+        if os.path.exists(launch_exe):
+            shutil.copy2(launch_exe, os.path.join(BINARIES_DIR, "nexus-suite-launcher.exe"))
+            shutil.copy2(launch_exe, os.path.join(ROOT_DIR, "nexus-launcher", "nexus-suite-launcher.exe"))
+            sha_launch = calculate_sha256(launch_exe)
+            print(f"  [OK] nexus-suite-launcher.exe compiled ({os.path.getsize(launch_exe):,} bytes, SHA-256: {sha_launch[:16]}...)")
+
 
 
 # =============================================================================
