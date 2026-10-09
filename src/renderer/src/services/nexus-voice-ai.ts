@@ -90,6 +90,10 @@ export class GeminiLiveService {
   public mediaStream: MediaStream | null = null
   public workletNode: AudioWorkletNode | null = null
   public analyser: AnalyserNode | null = null
+  public inputAnalyser: AnalyserNode | null = null
+  public isUserSpeaking: boolean = false
+  private speakingSilenceTimer: number | null = null
+  private static workletModuleUrl: string | null = null
   public apiKey: string
   public isConnected: boolean = false
   private isMicMuted: boolean = false
@@ -132,6 +136,73 @@ export class GeminiLiveService {
 
   setMute(muted: boolean) {
     this.isMicMuted = muted
+    if (muted && this.isUserSpeaking) {
+      this.isUserSpeaking = false
+      if (this.speakingSilenceTimer !== null) {
+        window.clearTimeout(this.speakingSilenceTimer)
+        this.speakingSilenceTimer = null
+      }
+      window.dispatchEvent(
+        new CustomEvent('nexus-user-speaking', {
+          detail: { speaking: false, volume: 0 }
+        })
+      )
+    }
+  }
+
+  getUserAudioVolume(dataArray?: Uint8Array): number {
+    if (!this.inputAnalyser || this.isMicMuted || !this.isConnected) return 0
+    const buffer = dataArray || new Uint8Array(this.inputAnalyser.frequencyBinCount)
+    this.inputAnalyser.getByteFrequencyData(buffer as any)
+    let weightedSum = 0
+    let totalWeight = 0
+    for (let i = 0; i < buffer.length; i++) {
+      const weight = i < 28 ? 1.55 : i < 70 ? 1.05 : 0.65
+      weightedSum += buffer[i] * weight
+      totalWeight += weight
+    }
+    const val = weightedSum / totalWeight / 128
+    return val > 0.035 ? Math.min(1, (val - 0.035) * 1.6) : 0
+  }
+
+  private updateUserSpeakingState(rms: number) {
+    if (this.isMicMuted || !this.isConnected) {
+      if (this.isUserSpeaking) {
+        this.isUserSpeaking = false
+        window.dispatchEvent(
+          new CustomEvent('nexus-user-speaking', {
+            detail: { speaking: false, volume: 0 }
+          })
+        )
+      }
+      return
+    }
+
+    const speaking = rms > 0.014
+    if (speaking) {
+      if (this.speakingSilenceTimer !== null) {
+        window.clearTimeout(this.speakingSilenceTimer)
+        this.speakingSilenceTimer = null
+      }
+      if (!this.isUserSpeaking) {
+        this.isUserSpeaking = true
+        window.dispatchEvent(
+          new CustomEvent('nexus-user-speaking', {
+            detail: { speaking: true, volume: Math.min(1, rms * 8) }
+          })
+        )
+      }
+    } else if (this.isUserSpeaking && this.speakingSilenceTimer === null) {
+      this.speakingSilenceTimer = window.setTimeout(() => {
+        this.isUserSpeaking = false
+        this.speakingSilenceTimer = null
+        window.dispatchEvent(
+          new CustomEvent('nexus-user-speaking', {
+            detail: { speaking: false, volume: 0 }
+          })
+        )
+      }, 340)
+    }
   }
 
   setModel(model: string) {
@@ -324,28 +395,81 @@ export class GeminiLiveService {
     } catch {}
   }
 
+  private async ensureAudioWorkletModule(): Promise<void> {
+    if (!this.audioContext) return
+    if (!GeminiLiveService.workletModuleUrl) {
+      const audioWorkletCode = `
+        class PCMProcessor extends AudioWorkletProcessor {
+          process(inputs, outputs, parameters) {
+            const input = inputs[0];
+            if (input && input.length > 0 && input[0]) {
+              this.port.postMessage(input[0]);
+            }
+            return true;
+          }
+        }
+        registerProcessor('pcm-processor', PCMProcessor);
+      `
+      const blob = new Blob([audioWorkletCode], { type: 'application/javascript' })
+      GeminiLiveService.workletModuleUrl = URL.createObjectURL(blob)
+    }
+    try {
+      await this.audioContext.audioWorklet.addModule(GeminiLiveService.workletModuleUrl)
+    } catch {
+      // module may already be registered
+    }
+  }
+
+  private async ensureAudioAndMicrophone(): Promise<void> {
+    if (!this.audioContext || this.audioContext.state === 'closed') {
+      this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+    } else if (this.audioContext.state === 'suspended') {
+      await this.audioContext.resume().catch(() => {})
+    }
+
+    if (!this.analyser) {
+      this.analyser = this.audioContext.createAnalyser()
+      this.analyser.fftSize = 256
+      this.analyser.smoothingTimeConstant = 0.5
+    }
+
+    await this.ensureAudioWorkletModule()
+    await this.startMicrophone()
+  }
+
   async connect(): Promise<void> {
+    if (this.isConnected && this.socket && this.socket.readyState === WebSocket.OPEN) {
+      return
+    }
+
     const reconnectAttempt = this.reconnectAttempt
     const wasReconnecting = this.reconnecting
     this.clearReconnectTimer()
 
-    if (this.socket || this.audioContext || this.mediaStream) {
+    if (this.socket || this.mediaStream) {
       this.disconnect()
       if (wasReconnecting) this.reconnectAttempt = reconnectAttempt
-      await new Promise((resolve) => setTimeout(resolve, 250))
+      await new Promise((resolve) => setTimeout(resolve, 60))
     }
     this.keepAliveRequested = true
     this.forceClosedByUser = false
     this.isDisconnecting = false
 
-    if (window.electron?.ipcRenderer) {
-      const secureKeys = await window.electron.ipcRenderer.invoke('secure-get-keys')
-      this.apiKey = secureKeys?.geminiKey || localStorage?.getItem('nexus_custom_api_key') || ''
-    } else {
-      this.apiKey = localStorage.getItem('nexus_custom_api_key') || ''
-    }
+    const [secureKeys, storedPersonality, mcpTools] = await Promise.all([
+      window.electron?.ipcRenderer
+        ? window.electron.ipcRenderer.invoke('secure-get-keys').catch(() => null)
+        : Promise.resolve(null),
+      window.electron?.ipcRenderer
+        ? window.electron.ipcRenderer.invoke('get-personality').catch(() => null)
+        : Promise.resolve(null),
+      getAllMcpTools().catch(() => [])
+    ])
 
-    this.apiKey = this.apiKey.trim()
+    this.apiKey = (
+      secureKeys?.geminiKey ||
+      localStorage?.getItem('nexus_custom_api_key') ||
+      ''
+    ).trim()
     this.model = normalizeGeminiLiveModel(localStorage.getItem('nexus_default_ai_model'))
     localStorage.setItem('nexus_default_ai_model', this.model)
 
@@ -359,7 +483,6 @@ export class GeminiLiveService {
       email: 'Not linked'
     }
 
-    const storedPersonality = await window.electron.ipcRenderer.invoke('get-personality')
     const activePersonality =
       storedPersonality && storedPersonality.trim() !== ''
         ? storedPersonality
@@ -376,6 +499,12 @@ ${activePersonality}
 - **📈 Financial Advisor (Stocks & Markets):** You are a sharp, ruthless financial analyst. When asked about stocks, give clear, data-driven insights. 
   - **Comparisons:** If asked to compare two stocks, provide a direct, hard-hitting comparison of their fundamentals/trends and **ALWAYS give a clear final option/verdict** on which one is the better play.
 - **💻 Master Coding Helper:** You are an elite 10x developer. Help User write clean, optimized, and bug-free code. Debug errors like a pro.
+
+## 🖥️ HOST SYSTEM ENVIRONMENT (WINDOWS 11)
+- Host PC runs Windows 11. All shell commands in \`run_terminal\` execute in Windows PowerShell / CMD.
+- **CRITICAL:** Do NOT run \`pdflatex\`, \`latex\`, or heavy non-default CLI tools. LaTeX CLI is NOT installed.
+- When generating formula sheets, study materials, or documents: generate an HTML file (using KaTeX for math formulas) or Markdown file, and open it with \`start filename.html\` or use DocForge!
+- Avoid Linux-specific bash syntax (no \`export\`, no \`cat <<EOF\`, no \`touch\`, no \`rm -rf\`). Use valid PowerShell or standard Windows CLI commands.
 
 ## ⛓️ MULTI-TASKING & TOOL CHAINING (CRITICAL)
 You are capable of complex, multi-step workflows. If the user gives a complex command, call the tools in sequence.
@@ -416,27 +545,13 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
 
     const finalSystemInstruction = NEXUS_SYSTEM_INSTRUCTION + contextPrompt
 
-    this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
-    this.analyser = this.audioContext.createAnalyser()
-    this.analyser.fftSize = 256
-    this.analyser.smoothingTimeConstant = 0.5
+    const initAudioPromise = this.ensureAudioAndMicrophone()
 
-    const audioWorkletCode = `
-      class PCMProcessor extends AudioWorkletProcessor {
-        process(inputs, outputs, parameters) {
-          const input = inputs[0];
-          if (input.length > 0) {
-            this.port.postMessage(input[0]);
-          }
-          return true;
-        }
-      }
-      registerProcessor('pcm-processor', PCMProcessor);
-    `
-    const blob = new Blob([audioWorkletCode], { type: 'application/javascript' })
-    const workletUrl = URL.createObjectURL(blob)
-    await this.audioContext.audioWorklet.addModule(workletUrl)
-    await this.startMicrophone()
+    const mcpDeclarations = (mcpTools || []).map((t: any) => ({
+      name: `mcp_${t.name.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
+      description: `[MCP: ${t.serverName}] ${t.description || t.name}`,
+      parameters: t.inputSchema?.type === 'OBJECT' ? t.inputSchema : { type: 'OBJECT', properties: {} }
+    }))
 
     const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${this.apiKey}`
     this.socket = new WebSocket(url)
@@ -447,7 +562,7 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
     const connectionReady = new Promise<void>((resolve, reject) => {
       const startupTimeout = window.setTimeout(() => {
         rejectStartup?.('Gemini Live connection timed out before the voice session opened.')
-      }, 20000)
+      }, 12000)
 
       resolveStartup = () => {
         if (startupComplete) return
@@ -517,8 +632,9 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
 
     this.socket.onopen = async () => {
       try {
+        await initAudioPromise
         if (this.audioContext && this.audioContext.state === 'suspended') {
-          await this.audioContext.resume()
+          await this.audioContext.resume().catch(() => {})
         }
 
         this.isConnected = false
@@ -528,16 +644,6 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
         this.userInputBuffer = ''
         this.rawAudioBuffer = []
         this.rawAudioBufferLength = 0
-
-        let mcpDeclarations: any[] = []
-        try {
-          const mcpTools = await getAllMcpTools()
-          mcpDeclarations = mcpTools.map((t) => ({
-            name: `mcp_${t.name.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
-            description: `[MCP: ${t.serverName}] ${t.description || t.name}`,
-            parameters: t.inputSchema?.type === 'OBJECT' ? t.inputSchema : { type: 'OBJECT', properties: {} }
-          }))
-        } catch {}
 
         const setupMsg = {
           setup: {
@@ -954,7 +1060,8 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
                   },
                   {
                     name: 'run_terminal',
-                    description: 'Run a shell command (npm install, git status, etc).',
+                    description:
+                      'Run a command on Windows PowerShell (e.g. npm install, git status, python script.py). Note: LaTeX (pdflatex) is not installed; generate HTML/Markdown files for documents instead.',
                     parameters: {
                       type: 'OBJECT',
                       properties: {
@@ -2522,6 +2629,24 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
       this.analyser.disconnect()
       this.analyser = null
     }
+    if (this.inputAnalyser) {
+      try {
+        this.inputAnalyser.disconnect()
+      } catch {}
+      this.inputAnalyser = null
+    }
+    if (this.speakingSilenceTimer !== null) {
+      window.clearTimeout(this.speakingSilenceTimer)
+      this.speakingSilenceTimer = null
+    }
+    if (this.isUserSpeaking) {
+      this.isUserSpeaking = false
+      window.dispatchEvent(
+        new CustomEvent('nexus-user-speaking', {
+          detail: { speaking: false, volume: 0 }
+        })
+      )
+    }
     this.isDisconnecting = false
   }
 
@@ -2559,19 +2684,51 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
   async startMicrophone(): Promise<void> {
     if (!this.audioContext) return
     try {
+      if (this.mediaStream) {
+        this.mediaStream.getTracks().forEach((track) => track.stop())
+        this.mediaStream = null
+      }
+
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, sampleRate: 16000 }
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
       })
 
       const source = this.audioContext.createMediaStreamSource(this.mediaStream)
       const inputSampleRate = this.audioContext.sampleRate
 
+      if (this.inputAnalyser) {
+        try {
+          this.inputAnalyser.disconnect()
+        } catch {}
+      }
+      this.inputAnalyser = this.audioContext.createAnalyser()
+      this.inputAnalyser.fftSize = 256
+      this.inputAnalyser.smoothingTimeConstant = 0.3
+      source.connect(this.inputAnalyser)
+
       this.workletNode = new AudioWorkletNode(this.audioContext, 'pcm-processor')
 
       this.workletNode.port.onmessage = (event) => {
+        const inputData = event.data
+        if (!inputData) return
+
+        // Compute voice RMS for reactive speaking visualizer
+        let sumSquares = 0
+        const step = Math.max(1, Math.floor(inputData.length / 32))
+        for (let i = 0; i < inputData.length; i += step) {
+          sumSquares += inputData[i] * inputData[i]
+        }
+        const rms = Math.sqrt(sumSquares / (inputData.length / step))
+        this.updateUserSpeakingState(rms)
+
         if (!this.socket || this.socket.readyState !== WebSocket.OPEN || this.isMicMuted) return
 
-        const inputData = event.data
         this.rawAudioBuffer.push(inputData)
         this.rawAudioBufferLength += inputData.length
 
@@ -2601,7 +2758,11 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
       }
 
       source.connect(this.workletNode)
-      this.workletNode.connect(this.audioContext.destination)
+      // Route through a muted gain node so AudioWorklet stays active without echoing mic to speakers
+      const silentGain = this.audioContext.createGain()
+      silentGain.gain.value = 0
+      this.workletNode.connect(silentGain)
+      silentGain.connect(this.audioContext.destination)
     } catch (err) {
       throw new Error('Microphone access denied or failed to initialize.')
     }
@@ -2725,6 +2886,24 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
     if (this.analyser) {
       this.analyser.disconnect()
       this.analyser = null
+    }
+    if (this.inputAnalyser) {
+      try {
+        this.inputAnalyser.disconnect()
+      } catch {}
+      this.inputAnalyser = null
+    }
+    if (this.speakingSilenceTimer !== null) {
+      window.clearTimeout(this.speakingSilenceTimer)
+      this.speakingSilenceTimer = null
+    }
+    if (this.isUserSpeaking) {
+      this.isUserSpeaking = false
+      window.dispatchEvent(
+        new CustomEvent('nexus-user-speaking', {
+          detail: { speaking: false, volume: 0 }
+        })
+      )
     }
     this.isDisconnecting = false
   }
