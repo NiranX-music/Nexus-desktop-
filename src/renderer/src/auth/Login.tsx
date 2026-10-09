@@ -67,7 +67,7 @@ export default function LoginPage() {
         setIsReady(true)
         clearInterval(interval)
       }
-    }, 420)
+    }, 70)
 
     return () => clearInterval(interval)
   }, [])
