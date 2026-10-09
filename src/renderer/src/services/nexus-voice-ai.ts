@@ -92,6 +92,10 @@ export class GeminiLiveService {
   public analyser: AnalyserNode | null = null
   public inputAnalyser: AnalyserNode | null = null
   public isUserSpeaking: boolean = false
+  public screenAudioStream: MediaStream | null = null
+  private screenAudioSource: MediaStreamAudioSourceNode | null = null
+  private screenGainNode: GainNode | null = null
+  public isScreenAudioActive: boolean = false
   private speakingSilenceTimer: number | null = null
   private static workletModuleUrl: string | null = null
   public apiKey: string
@@ -2647,6 +2651,7 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
         })
       )
     }
+    this.detachScreenAudio()
     this.isDisconnecting = false
   }
 
@@ -2758,6 +2763,24 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
       }
 
       source.connect(this.workletNode)
+
+      if (this.screenAudioStream && this.screenAudioStream.getAudioTracks().length > 0) {
+        try {
+          if (this.screenAudioSource) this.screenAudioSource.disconnect()
+          if (this.screenGainNode) this.screenGainNode.disconnect()
+
+          this.screenAudioSource = this.audioContext.createMediaStreamSource(this.screenAudioStream)
+          this.screenGainNode = this.audioContext.createGain()
+          this.screenGainNode.gain.value = 0.85
+
+          this.screenAudioSource.connect(this.screenGainNode)
+          if (this.inputAnalyser) this.screenGainNode.connect(this.inputAnalyser)
+          this.screenGainNode.connect(this.workletNode)
+        } catch (e) {
+          console.warn('[NexusVoice] Reconnecting screen audio failed:', e)
+        }
+      }
+
       // Route through a muted gain node so AudioWorklet stays active without echoing mic to speakers
       const silentGain = this.audioContext.createGain()
       silentGain.gain.value = 0
@@ -2844,6 +2867,70 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
     )
   }
 
+  attachScreenAudio(screenStream: MediaStream): void {
+    try {
+      const audioTracks = screenStream.getAudioTracks()
+      if (audioTracks.length === 0) {
+        console.log('[NexusVoice] Screen stream has no audio tracks.')
+        return
+      }
+
+      this.detachScreenAudio()
+
+      this.screenAudioStream = new MediaStream([audioTracks[0]])
+      this.isScreenAudioActive = true
+
+      if (this.audioContext && this.audioContext.state !== 'closed') {
+        this.screenAudioSource = this.audioContext.createMediaStreamSource(this.screenAudioStream)
+        this.screenGainNode = this.audioContext.createGain()
+        this.screenGainNode.gain.value = 0.85
+
+        this.screenAudioSource.connect(this.screenGainNode)
+
+        if (this.inputAnalyser) {
+          this.screenGainNode.connect(this.inputAnalyser)
+        }
+        if (this.workletNode) {
+          this.screenGainNode.connect(this.workletNode)
+        }
+      }
+
+      window.dispatchEvent(
+        new CustomEvent('nexus-screen-audio-changed', {
+          detail: { active: true }
+        })
+      )
+      console.log('[NexusVoice] System/screen audio attached to Gemini Live uplink successfully.')
+    } catch (err) {
+      console.warn('[NexusVoice] Failed to attach screen audio:', err)
+    }
+  }
+
+  detachScreenAudio(): void {
+    try {
+      if (this.screenAudioSource) {
+        this.screenAudioSource.disconnect()
+        this.screenAudioSource = null
+      }
+      if (this.screenGainNode) {
+        this.screenGainNode.disconnect()
+        this.screenGainNode = null
+      }
+      if (this.screenAudioStream) {
+        this.screenAudioStream.getTracks().forEach((track) => track.stop())
+        this.screenAudioStream = null
+      }
+      this.isScreenAudioActive = false
+      window.dispatchEvent(
+        new CustomEvent('nexus-screen-audio-changed', {
+          detail: { active: false }
+        })
+      )
+    } catch (err) {
+      console.warn('[NexusVoice] Error detaching screen audio:', err)
+    }
+  }
+
   disconnect(): void {
     this.keepAliveRequested = false
     this.clearReconnectTimer()
@@ -2905,6 +2992,7 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
         })
       )
     }
+    this.detachScreenAudio()
     this.isDisconnecting = false
   }
 }
