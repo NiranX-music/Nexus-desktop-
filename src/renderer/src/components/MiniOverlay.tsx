@@ -19,8 +19,8 @@ interface OverlayProps {
   isMicMuted: boolean
   toggleMic: () => void
   isVideoOn: boolean
-  visionMode: VisionMode
-  startVision: (mode: 'camera' | 'screen') => void
+  visionMode: VisionMode | any
+  startVision: (mode: any, options?: any) => void | Promise<void>
   stopVision: () => void
   sendTextCommand?: (command: string) => Promise<void>
 }

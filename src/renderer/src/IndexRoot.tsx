@@ -22,7 +22,13 @@ import DocForgeWidget from './Widgets/DocForgeWidget'
 import FocusWidget from './Widgets/FocusWidget'
 import TitleBar from './components/Titlebar'
 
-export type VisionMode = 'camera' | 'screen' | 'none'
+export type VisionMode = 'camera' | 'screen' | 'dual' | 'none'
+
+export interface StartVisionOptions {
+  sourceId?: string
+  shareAudio?: boolean
+  dualCamera?: boolean
+}
 
 const IndexRoot = () => {
   const [isOverlay, setIsOverlay] = useState(false)
@@ -34,8 +40,13 @@ const IndexRoot = () => {
   const [isVideoOn, setIsVideoOn] = useState(false)
   const [visionMode, setVisionMode] = useState<VisionMode>('none')
 
+  const [activeStream, setActiveStream] = useState<MediaStream | null>(null)
+  const [activeCameraStream, setActiveCameraStream] = useState<MediaStream | null>(null)
+
   const processingVideoRef = useRef<HTMLVideoElement>(document.createElement('video'))
+  const processingCameraVideoRef = useRef<HTMLVideoElement>(document.createElement('video'))
   const activeStreamRef = useRef<MediaStream | null>(null)
+  const cameraStreamRef = useRef<MediaStream | null>(null)
   const aiIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
   useEffect(() => {
@@ -204,49 +215,123 @@ const IndexRoot = () => {
     nexusService.setMute(s)
   }
 
-  const startVision = async (mode: 'camera' | 'screen') => {
+  const startVision = async (
+    mode: 'camera' | 'screen' | 'dual',
+    options?: StartVisionOptions
+  ) => {
     if (!isSystemActive) return
 
     try {
       if (activeStreamRef.current) {
         activeStreamRef.current.getTracks().forEach((t) => t.stop())
+        activeStreamRef.current = null
       }
+      if (cameraStreamRef.current) {
+        cameraStreamRef.current.getTracks().forEach((t) => t.stop())
+        cameraStreamRef.current = null
+      }
+      nexusService.detachScreenAudio()
 
-      let stream: MediaStream
+      let primaryStream: MediaStream | null = null
+      let camStream: MediaStream | null = null
 
       if (mode === 'camera') {
-        stream = await navigator.mediaDevices.getUserMedia({
+        primaryStream = await navigator.mediaDevices.getUserMedia({
           video: { width: 640, height: 480 }
         })
+        activeStreamRef.current = primaryStream
+        setActiveStream(primaryStream)
+        setActiveCameraStream(null)
+
+        processingVideoRef.current.srcObject = primaryStream
+        await processingVideoRef.current.play().catch(() => {})
       } else {
-        const sourceId = await getScreenSourceId()
+        const sourceId = options?.sourceId || (await getScreenSourceId())
         if (!sourceId) return
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: {
-            // @ts-ignore
-            mandatory: {
-              chromeMediaSource: 'desktop',
-              chromeMediaSourceId: sourceId,
-              maxWidth: 1280,
-              maxHeight: 720
+
+        const shouldCaptureAudio = options?.shareAudio !== false
+
+        try {
+          primaryStream = await navigator.mediaDevices.getUserMedia({
+            audio: shouldCaptureAudio
+              ? {
+                  // @ts-ignore
+                  mandatory: {
+                    chromeMediaSource: 'desktop',
+                    chromeMediaSourceId: sourceId
+                  }
+                }
+              : false,
+            video: {
+              // @ts-ignore
+              mandatory: {
+                chromeMediaSource: 'desktop',
+                chromeMediaSourceId: sourceId,
+                maxWidth: 1920,
+                maxHeight: 1080
+              }
             }
+          })
+        } catch (audioErr) {
+          console.warn('[Vision] Audio capture fallback to video-only for source:', audioErr)
+          primaryStream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+              // @ts-ignore
+              mandatory: {
+                chromeMediaSource: 'desktop',
+                chromeMediaSourceId: sourceId,
+                maxWidth: 1920,
+                maxHeight: 1080
+              }
+            }
+          })
+        }
+
+        activeStreamRef.current = primaryStream
+        setActiveStream(primaryStream)
+
+        if (primaryStream.getAudioTracks().length > 0) {
+          nexusService.attachScreenAudio(primaryStream)
+        }
+
+        processingVideoRef.current.srcObject = primaryStream
+        await processingVideoRef.current.play().catch(() => {})
+
+        if (mode === 'dual' || options?.dualCamera) {
+          try {
+            camStream = await navigator.mediaDevices.getUserMedia({
+              video: { width: 640, height: 480 }
+            })
+            cameraStreamRef.current = camStream
+            setActiveCameraStream(camStream)
+
+            processingCameraVideoRef.current.srcObject = camStream
+            await processingCameraVideoRef.current.play().catch(() => {})
+          } catch (camErr) {
+            console.warn('[Vision] Could not open webcam for dual vision mode:', camErr)
           }
-        })
+        } else {
+          setActiveCameraStream(null)
+        }
       }
-
-      activeStreamRef.current = stream
-
-      processingVideoRef.current.srcObject = stream
-      await processingVideoRef.current.play()
 
       setVisionMode(mode)
       setIsVideoOn(true)
+      startAIProcessing(mode)
 
-      startAIProcessing()
-
-      stream.getVideoTracks()[0].onended = () => stopVision()
+      primaryStream.getVideoTracks()[0].onended = () => stopVision()
+      if (camStream) {
+        camStream.getVideoTracks()[0].onended = () => {
+          if (cameraStreamRef.current) {
+            cameraStreamRef.current = null
+            setActiveCameraStream(null)
+            setVisionMode('screen')
+          }
+        }
+      }
     } catch (e) {
+      console.error('[Vision] Failed to start optical uplink:', e)
       stopVision()
     }
   }
@@ -259,9 +344,21 @@ const IndexRoot = () => {
       activeStreamRef.current.getTracks().forEach((t) => t.stop())
       activeStreamRef.current = null
     }
+    setActiveStream(null)
+
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach((t) => t.stop())
+      cameraStreamRef.current = null
+    }
+    setActiveCameraStream(null)
+
+    nexusService.detachScreenAudio()
 
     if (processingVideoRef.current) {
       processingVideoRef.current.srcObject = null
+    }
+    if (processingCameraVideoRef.current) {
+      processingCameraVideoRef.current.srcObject = null
     }
 
     if (aiIntervalRef.current) {
@@ -270,23 +367,60 @@ const IndexRoot = () => {
     }
   }
 
-  const startAIProcessing = () => {
+  const startAIProcessing = (currentMode?: VisionMode) => {
     if (aiIntervalRef.current) clearInterval(aiIntervalRef.current)
 
     aiIntervalRef.current = setInterval(() => {
+      const mode = currentMode || visionMode
       const vid = processingVideoRef.current
-      if (vid && vid.readyState === 4 && nexusService.socket?.readyState === WebSocket.OPEN) {
-        const canvas = document.createElement('canvas')
-        canvas.width = 800
-        canvas.height = 450
-        const ctx = canvas.getContext('2d')
-        if (ctx) {
-          ctx.drawImage(vid, 0, 0, canvas.width, canvas.height)
-          const base64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1]
-          nexusService.sendVideoFrame(base64)
-        }
+      const camVid = processingCameraVideoRef.current
+      if (!vid || vid.readyState < 2 || nexusService.socket?.readyState !== WebSocket.OPEN) return
+
+      const canvas = document.createElement('canvas')
+      canvas.width = 960
+      canvas.height = 540
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+
+      if (mode === 'dual' && camVid && camVid.readyState >= 2) {
+        // Draw primary screen share full canvas
+        ctx.drawImage(vid, 0, 0, canvas.width, canvas.height)
+
+        // Draw camera PIP in bottom-right corner
+        const pipW = 240
+        const pipH = 145
+        const pipX = canvas.width - pipW - 16
+        const pipY = canvas.height - pipH - 16
+
+        // PIP backdrop shadow
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.85)'
+        ctx.fillRect(pipX - 2, pipY - 2, pipW + 4, pipH + 4)
+
+        // Draw mirrored webcam
+        ctx.save()
+        ctx.translate(pipX + pipW, pipY)
+        ctx.scale(-1, 1)
+        ctx.drawImage(camVid, 0, 0, pipW, pipH)
+        ctx.restore()
+
+        // Neon cyan cyber border
+        ctx.strokeStyle = '#00f5ff'
+        ctx.lineWidth = 2.5
+        ctx.strokeRect(pipX, pipY, pipW, pipH)
+
+        // Camera Feed Label Badge
+        ctx.fillStyle = 'rgba(0, 245, 255, 0.9)'
+        ctx.fillRect(pipX + 6, pipY + 6, 72, 16)
+        ctx.fillStyle = '#000000'
+        ctx.font = 'bold 9px monospace'
+        ctx.fillText('CAM FEED', pipX + 10, pipY + 18)
+      } else {
+        ctx.drawImage(vid, 0, 0, canvas.width, canvas.height)
       }
-    }, 2000)
+
+      const base64 = canvas.toDataURL('image/jpeg', 0.65).split(',')[1]
+      nexusService.sendVideoFrame(base64)
+    }, 1800)
   }
 
   if (isOverlay) {
@@ -321,7 +455,8 @@ const IndexRoot = () => {
           visionMode={visionMode}
           startVision={startVision}
           stopVision={stopVision}
-          activeStream={activeStreamRef.current}
+          activeStream={activeStream}
+          activeCameraStream={activeCameraStream}
         />
       </div>
       <SmartDropZonesWidget />
