@@ -38,6 +38,7 @@ const GalleryView = lazy(() => import('../views/Gallery'))
 const BrowserControlView = lazy(() => import('../views/BrowserControl'))
 const WhiteboardView = lazy(() => import('../views/Whiteboard'))
 const VideoStudioView = lazy(() => import('../views/VideoStudio'))
+import VisionSourceModal, { StartVisionOptions } from '../components/VisionSourceModal'
 
 interface NexusProps {
   isSystemActive: boolean
@@ -47,9 +48,10 @@ interface NexusProps {
   toggleMic: () => void
   isVideoOn: boolean
   visionMode: VisionMode
-  startVision: (mode: 'camera' | 'screen') => void
+  startVision: (mode: 'camera' | 'screen' | 'dual', options?: StartVisionOptions) => void
   stopVision: () => void
   activeStream: MediaStream | null
+  activeCameraStream?: MediaStream | null
 }
 
 const glassPanel =
@@ -335,61 +337,11 @@ const NEXUS = (props: NexusProps) => {
         </Suspense>
       </div>
 
-      {showSourceModal && (
-        <div className="absolute inset-0 z-100 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className={`${glassPanel} w-96 p-1 border-emerald-500/30 flex flex-col shadow-2xl`}>
-            <div className="flex items-center justify-between p-4 border-b border-white/5 bg-white/5">
-              <span className="text-xs font-bold tracking-widest text-emerald-400">
-                ESTABLISH UPLINK
-              </span>
-              <button
-                onClick={() => setShowSourceModal(false)}
-                className="cursor-pointer text-zinc-500 hover:text-white"
-              >
-                <RiCloseLine size={18} />
-              </button>
-            </div>
-
-            <div className="p-4 grid grid-cols-2 gap-4">
-              <button
-                onClick={() => {
-                  props.startVision('camera')
-                  setShowSourceModal(false)
-                }}
-                className="cursor-pointer group flex flex-col items-center justify-center gap-3 p-6 rounded-xl bg-black/40 border border-white/10 hover:border-emerald-500/50 hover:bg-emerald-500/10 transition-all"
-              >
-                <div className="p-3 rounded-full bg-zinc-900 group-hover:bg-emerald-500 text-zinc-400 group-hover:text-black transition-colors">
-                  <RiCameraLine size={28} />
-                </div>
-                <span className="text-[10px] font-bold tracking-widest text-zinc-300 group-hover:text-emerald-400">
-                  CAMERA FEED
-                </span>
-              </button>
-
-              <button
-                onClick={() => {
-                  props.startVision('screen')
-                  setShowSourceModal(false)
-                }}
-                className="cursor-pointer group flex flex-col items-center justify-center gap-3 p-6 rounded-xl bg-black/40 border border-white/10 hover:border-emerald-500/50 hover:bg-emerald-500/10 transition-all"
-              >
-                <div className="p-3 rounded-full bg-zinc-900 group-hover:bg-emerald-500 text-zinc-400 group-hover:text-black transition-colors">
-                  <RiComputerLine size={28} />
-                </div>
-                <span className="text-[10px] font-bold tracking-widest text-zinc-300 group-hover:text-emerald-400">
-                  SCREEN SHARE
-                </span>
-              </button>
-            </div>
-
-            <div className="p-3 bg-black/20 text-center">
-              <p className="text-[9px] text-zinc-600 font-mono">
-                SELECT INPUT SOURCE FOR NEURAL PROCESSING
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
+      <VisionSourceModal
+        isOpen={showSourceModal}
+        onClose={() => setShowSourceModal(false)}
+        onSelect={(mode, options) => props.startVision(mode, options)}
+      />
     </div>
   )
 }
