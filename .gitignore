@@ -28,3 +28,12 @@ Offline PC files of Nexus/
 
 versions
 versions.json
+
+# Python & Temporary Cache
+__pycache__/
+*.py[cod]
+*$py.class
+_speech_temp.mp3
+_cache/
+*.db
+
