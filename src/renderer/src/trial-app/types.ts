@@ -1,6 +1,6 @@
 import type { RequestQueueItem, RequestRoutingMode } from '@renderer/hooks/useNexusRequestQueue'
 
-export type TrialTabKey = 'overview' | 'chat' | 'browser' | 'whiteboard' | 'settings'
+export type TrialTabKey = 'overview' | 'chat' | 'browser' | 'whiteboard' | 'agentic' | 'settings'
 export type TrialAssistantVisualState = 'offline' | 'running' | 'speaking'
 export type TrialVisionMode = 'camera' | 'screen' | 'none'
 
