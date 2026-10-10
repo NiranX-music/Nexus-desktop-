@@ -287,6 +287,7 @@ export class GeminiLiveService {
 
   private shouldRetryLiveError(message: string) {
     const lower = message.toLowerCase()
+    if (this.reconnectAttempt >= 2) return false
     return ![
       'no_api_key',
       'api key not valid',
@@ -295,6 +296,10 @@ export class GeminiLiveService {
       'permission denied',
       'forbidden',
       'microphone access denied',
+      'unregistered caller',
+      'callers without established identity',
+      'please use api key',
+      '1008',
       '401',
       '403'
     ].some((fatal) => lower.includes(fatal))
@@ -605,7 +610,10 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
       ...(toolBehavior ? { behavior: toolBehavior } : {})
     }))
 
-    const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${this.apiKey}`
+    const isEphemeral = this.apiKey.startsWith('AQ.') || this.apiKey.startsWith('ya29.')
+    const url = isEphemeral
+      ? `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?access_token=${this.apiKey}`
+      : `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${this.apiKey}`
     this.socket = new WebSocket(url)
 
     let startupComplete = false
@@ -619,7 +627,7 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
           localStorage.setItem('nexus_default_ai_model', this.model)
         }
         rejectStartup?.('Gemini Live connection timed out before the voice session opened.')
-      }, 5500)
+      }, 3500)
 
       resolveStartup = () => {
         if (startupComplete) return
@@ -2150,11 +2158,6 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
         }
 
         if (data.setupComplete) {
-          try {
-            await initAudioPromise
-          } catch (e) {
-            console.warn('[NexusVoice] Microphone stream not ready yet:', e)
-          }
           this.isConnected = true
           this.reconnectAttempt = 0
           this.reconnecting = false
@@ -2163,6 +2166,10 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
           localStorage.removeItem('nexus_last_session_error')
           window.dispatchEvent(new CustomEvent('nexus-session-reconnected'))
           resolveStartup?.()
+
+          void initAudioPromise.catch((e) => {
+            console.warn('[NexusVoice] Background audio stream warning:', e)
+          })
           return
         }
 
@@ -2644,12 +2651,15 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
           localStorage.getItem('nexus_last_session_error') ||
           `Gemini Live closed (${event.code || 'unknown'}).`
         localStorage.setItem('nexus_last_session_error', message)
-        if (rejectStartup?.(message)) return
         this.cleanupAfterRemoteClose()
         if (this.keepAliveRequested && this.shouldRetryLiveError(message)) {
+          if (rejectStartup?.(message)) return
           this.scheduleReconnect(message)
           return
         }
+        this.keepAliveRequested = false
+        this.reconnecting = false
+        rejectStartup?.(message)
         window.dispatchEvent(new CustomEvent('nexus-session-error', { detail: message }))
         return
       }

@@ -139,16 +139,35 @@ const IndexRoot = () => {
     return () => clearInterval(timer)
   }, [])
 
+  const startingSinceRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (isSystemStarting) {
+      if (!startingSinceRef.current) startingSinceRef.current = Date.now()
+    } else {
+      startingSinceRef.current = null
+    }
+  }, [isSystemStarting])
+
   useEffect(() => {
     const watchdog = setInterval(() => {
       if (nexusService.isConnected && isSystemStarting) {
         setIsSystemStarting(false)
         return
       }
+      if (isSystemStarting && startingSinceRef.current && Date.now() - startingSinceRef.current > 3500) {
+        setIsSystemStarting(false)
+        if (!nexusService.isConnected) {
+          setIsSystemActive(false)
+          setIsMicMuted(true)
+          nexusService.setMute(true)
+        }
+        return
+      }
       if (isSystemStarting) return
       if (isSystemActive && !nexusService.isConnected) {
-        if (nexusService.wantsLiveSession) {
-          setIsSystemStarting(nexusService.isRecovering)
+        if (nexusService.wantsLiveSession && nexusService.isRecovering) {
+          setIsSystemStarting(true)
           return
         }
         setIsSystemActive(false)
@@ -174,30 +193,14 @@ const IndexRoot = () => {
         setIsMicMuted(false)
         nexusService.setMute(false)
       } catch (err: any) {
-        if (err.message === 'NO_API_KEY') {
-          alert(
-            '⚠️ CRITICAL ERROR: Gemini API Key is missing. Please enter it in the Command Center Vault (Settings Tab).'
-          )
-          nexusService.disconnect()
-        } else if (/microphone access denied/i.test(err.message || '')) {
-          alert(`Connection failed: ${err.message}`)
-          nexusService.disconnect()
-        } else {
-          if (nexusService.wantsLiveSession && nexusService.isRecovering) {
-            setIsSystemActive(true)
-            setIsMicMuted(false)
-            nexusService.setMute(false)
-          } else {
-            alert(`Connection failed: ${err.message}`)
-          }
-        }
-        if (!nexusService.wantsLiveSession) {
+        console.warn('[Nexus] Connection failed:', err?.message)
+        if (!nexusService.wantsLiveSession || !nexusService.isRecovering) {
           setIsSystemActive(false)
           setIsMicMuted(true)
           nexusService.setMute(true)
         }
       } finally {
-        setIsSystemStarting(nexusService.isRecovering)
+        setIsSystemStarting(nexusService.isConnected ? false : nexusService.isRecovering)
       }
     } else {
       setIsSystemStarting(false)

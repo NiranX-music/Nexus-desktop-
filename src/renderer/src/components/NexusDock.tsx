@@ -21,6 +21,7 @@ export default function NexusDock() {
   const [expanded, setExpanded] = useState(false)
   const [sessionState, setSessionState] = useState<'STANDBY' | 'STARTING' | 'ONLINE'>('STANDBY')
   const [voiceState, setVoiceState] = useState<'MUTED' | 'OPEN'>('MUTED')
+  const startingTimerRef = useRef<number | null>(null)
   const collapseTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
@@ -29,14 +30,28 @@ export default function NexusDock() {
 
     api.on('dock-command', (_event: any, message: any) => {
       if (message?.command === 'session-state') {
-        setSessionState(
-          message.payload?.starting ? 'STARTING' : message.payload?.active ? 'ONLINE' : 'STANDBY'
-        )
+        const isStarting = Boolean(message.payload?.starting)
+        const isActive = Boolean(message.payload?.active)
+        if (startingTimerRef.current) {
+          window.clearTimeout(startingTimerRef.current)
+          startingTimerRef.current = null
+        }
+        if (isStarting) {
+          setSessionState('STARTING')
+          startingTimerRef.current = window.setTimeout(() => {
+            setSessionState((current) => (current === 'STARTING' ? 'STANDBY' : current))
+          }, 3500)
+        } else {
+          setSessionState(isActive ? 'ONLINE' : 'STANDBY')
+        }
         setVoiceState(message.payload?.muted ? 'MUTED' : 'OPEN')
       }
     })
 
-    return () => api.removeAllListeners('dock-command')
+    return () => {
+      if (startingTimerRef.current) window.clearTimeout(startingTimerRef.current)
+      api.removeAllListeners('dock-command')
+    }
   }, [])
 
   const clearCollapseTimer = () => {
