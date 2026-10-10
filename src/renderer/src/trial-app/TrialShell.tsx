@@ -6,6 +6,7 @@ import TrialDashboard from './TrialDashboard'
 import TrialAiChat from './TrialAiChat'
 import TrialBrowser from './TrialBrowser'
 import TrialSettings from './TrialSettings'
+import TrialAgentic from './TrialAgentic'
 import WhiteboardView from '@renderer/views/Whiteboard'
 
 const tabs: Array<{
@@ -15,6 +16,7 @@ const tabs: Array<{
   icon: React.ReactNode
 }> = [
   { id: 'overview', label: 'Overview', detail: 'Core command surface', icon: <RiLayoutGridLine /> },
+  { id: 'agentic', label: 'Agentic Nexus', detail: 'Autonomous execution engine', icon: <RiShieldFlashLine /> },
   { id: 'chat', label: 'AI Chat', detail: 'Hosted NVIDIA trial chat', icon: <RiChatSmile3Line /> },
   { id: 'browser', label: 'Browser', detail: 'Voice and text control', icon: <RiGlobalLine /> },
   { id: 'whiteboard', label: 'Whiteboard', detail: 'Handwritten solutions', icon: <RiEditLine /> },
@@ -131,6 +133,7 @@ export default function TrialShell(props: TrialRuntimeProps) {
           <section className="min-h-0 flex-1 overflow-hidden rounded-[28px] border border-emerald-400/16 bg-[linear-gradient(180deg,rgba(6,10,11,0.97),rgba(3,5,7,0.94))] shadow-[0_30px_90px_rgba(0,0,0,0.25)]">
             <div className="h-full overflow-y-auto scrollbar-small p-4 lg:p-5">
               {activeTab === 'overview' && <TrialDashboard {...props} />}
+              {activeTab === 'agentic' && <TrialAgentic {...props} />}
               {activeTab === 'chat' && <TrialAiChat />}
               {activeTab === 'whiteboard' && <WhiteboardView />}
               {activeTab === 'browser' && (
