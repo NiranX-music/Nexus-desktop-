@@ -38,6 +38,7 @@ const GalleryView = lazy(() => import('../views/Gallery'))
 const BrowserControlView = lazy(() => import('../views/BrowserControl'))
 const WhiteboardView = lazy(() => import('../views/Whiteboard'))
 const VideoStudioView = lazy(() => import('../views/VideoStudio'))
+const AgenticView = lazy(() => import('../views/AgenticView'))
 import VisionSourceModal, { StartVisionOptions } from '../components/VisionSourceModal'
 
 interface NexusProps {
@@ -92,6 +93,7 @@ const NEXUS = (props: NexusProps) => {
 
   const tabs = [
     { id: 'DASHBOARD', icon: <RiDashboardLine />, label: 'Agent' },
+    { id: 'AGENTIC', icon: <RiShieldFlashLine />, label: 'Agentic' },
     { id: 'PROFILE', icon: <RiUserLine />, label: 'Profile' },
     { id: 'AI CHAT', icon: <RiChatSmile3Line />, label: 'AI Chat' },
     { id: 'Macros', icon: <RiBrainLine />, label: 'Macros' },
@@ -109,6 +111,8 @@ const NEXUS = (props: NexusProps) => {
     const pageMap: Record<string, string> = {
       agent: 'DASHBOARD',
       dashboard: 'DASHBOARD',
+      agentic: 'AGENTIC',
+      autonomous: 'AGENTIC',
       profile: 'PROFILE',
       account: 'PROFILE',
       chat: 'AI CHAT',
@@ -304,6 +308,7 @@ const NEXUS = (props: NexusProps) => {
         </div>
 
         <Suspense fallback={<ViewSkeleton />}>
+          {activeTab === 'AGENTIC' && <AgenticView />}
           {activeTab === 'AI CHAT' && (
             <AiChatView
               isSystemActive={props.isSystemActive}
