@@ -66,10 +66,11 @@ const NEXUS = (props: NexusProps) => {
   const [showSourceModal, setShowSourceModal] = useState(false)
 
   useEffect(() => {
+    getSystemStatus().then(setStats)
     const timer = setInterval(() => {
       setTime(new Date())
       getSystemStatus().then(setStats)
-    }, 500)
+    }, 2000)
     return () => clearInterval(timer)
   }, [])
 
@@ -79,7 +80,7 @@ const NEXUS = (props: NexusProps) => {
       if (Array.isArray(history)) setChatHistory(history.slice(-15))
     }
     fetchHistory()
-    const interval = setInterval(fetchHistory, 500)
+    const interval = setInterval(fetchHistory, 2000)
     return () => clearInterval(interval)
   }, [])
 
