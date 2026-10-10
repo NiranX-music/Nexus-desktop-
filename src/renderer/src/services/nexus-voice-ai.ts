@@ -63,7 +63,7 @@ import { draftEmail, readEmails, sendEmail } from '@renderer/functions/gmail-man
 import { playSpotifyMusic } from '@renderer/functions/Sporify-manager'
 import { executeSmartDropZones } from '@renderer/functions/DropZone-handler-api'
 import { executeLockSystem } from '@renderer/handlers/LockSystem-handler'
-import { normalizeGeminiLiveModel } from '@renderer/config/gemini-models'
+import { normalizeGeminiLiveModel, DEFAULT_LIVE_GEMINI_MODEL } from '@renderer/config/gemini-models'
 import { createWhiteboardPayload, publishWhiteboardWrite } from '@renderer/services/whiteboard'
 import { getAllMcpTools, callMcpTool, listMcpServers } from './mcp-api'
 import { dispatchFleetTask, getFleetStatus, onFleetTaskComplete } from './agent-fleet-api'
@@ -107,7 +107,11 @@ export class GeminiLiveService {
   private reconnectTimer: number | null = null
   private reconnectAttempt: number = 0
   private reconnecting: boolean = false
-  private readonly maxReconnectDelayMs = 30000
+  private readonly maxReconnectDelayMs = 2500
+  private cachedSecureKeys: any = null
+  private cachedPersonality: string | null = null
+  private cachedMcpTools: any[] | null = null
+  private lastMcpFetchTime: number = 0
 
   private nextStartTime: number = 0
   public model: string = normalizeGeminiLiveModel(localStorage.getItem('nexus_default_ai_model'))
@@ -307,7 +311,7 @@ export class GeminiLiveService {
 
     this.clearReconnectTimer()
     const delay = Math.min(
-      1000 * Math.pow(2, Math.min(this.reconnectAttempt, 5)),
+      300 * Math.pow(1.5, Math.min(this.reconnectAttempt, 4)),
       this.maxReconnectDelayMs
     )
     this.reconnectAttempt += 1
@@ -342,14 +346,17 @@ export class GeminiLiveService {
       lower.includes('not supported') ||
       lower.includes('not enabled') ||
       lower.includes('not found') ||
-      lower.includes('not available')
+      lower.includes('not available') ||
+      lower.includes('thinking') ||
+      lower.includes('invalid argument') ||
+      lower.includes('timed out')
 
     if (!looksLikeUnsupportedModel) return message
 
-    this.model = normalizeGeminiLiveModel(null)
+    this.model = DEFAULT_LIVE_GEMINI_MODEL
     localStorage.setItem('nexus_default_ai_model', this.model)
 
-    return `Selected Gemini Live voice model is not enabled for this API key. Nexus switched the default voice model to Gemini 2.5 Flash Native Audio Latest and will reopen the voice session automatically.`
+    return `Selected Gemini Live model experienced a handshake issue. Nexus automatically switched to fast Gemini 3.8 Live.`
   }
 
   private removeForceSpeakListener() {
@@ -361,20 +368,22 @@ export class GeminiLiveService {
   private async sendDeferredSessionContext() {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return
 
-    try {
-      const [history, sysStats, allapps, runningApps, locationData] = await Promise.all([
-        getHistory().catch(() => []),
-        getSystemStatus().catch(() => null),
-        getAllApps().catch(() => []),
-        getRunningApps().catch(() => []),
-        getLiveLocation().catch(() => null)
-      ])
+    setTimeout(async () => {
+      if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return
+      try {
+        const [history, sysStats, allapps, runningApps, locationData] = await Promise.all([
+          getHistory().catch(() => []),
+          getSystemStatus().catch(() => null),
+          getAllApps().catch(() => []),
+          getRunningApps().catch(() => []),
+          getLiveLocation().catch(() => null)
+        ])
 
-      this.lastAppList = Array.isArray(runningApps) ? runningApps : []
-      const locStr = locationData?.fullString || 'Unknown Location'
-      const locTimezone = locationData?.timezone || 'Unknown Timezone'
+        this.lastAppList = Array.isArray(runningApps) ? runningApps : []
+        const locStr = locationData?.fullString || 'Unknown Location'
+        const locTimezone = locationData?.timezone || 'Unknown Timezone'
 
-      const contextUpdate = `
+        const contextUpdate = `
 [FAST SESSION CONTEXT UPDATE - DO NOT REPLY]
 - Current Physical Location: ${locStr}
 - Timezone: ${locTimezone}
@@ -383,20 +392,25 @@ export class GeminiLiveService {
 - Uptime: ${sysStats?.os?.uptime || 'Unknown'}
 - Temperature: ${sysStats?.temperature || 'Unknown'}°C
 - Open Apps: ${this.lastAppList.join(', ') || 'Unknown'}
-- Installed Apps: ${Array.isArray(allapps) ? allapps.slice(0, 25).join(', ') : 'Unknown'}
+- Installed Apps: ${Array.isArray(allapps) ? allapps.slice(0, 25).map((a: any) => a?.name || a).join(', ') : 'Unknown'}
 - Current Time: ${new Date().toLocaleString()}
 - Recent Memory: ${JSON.stringify(history).slice(0, 12000)}
 `
 
-      this.socket.send(
-        JSON.stringify({
-          clientContent: {
-            turns: [{ role: 'user', parts: [{ text: contextUpdate }] }],
-            turnComplete: true
-          }
-        })
-      )
-    } catch {}
+        if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+          this.socket.send(
+            JSON.stringify({
+              clientContent: {
+                turns: [{ role: 'user', parts: [{ text: contextUpdate }] }],
+                turnComplete: true
+              }
+            })
+          )
+        }
+      } catch (err) {
+        console.warn('[NexusVoice] Deferred context update warning:', err)
+      }
+    }, 400)
   }
 
   private async ensureAudioWorkletModule(): Promise<void> {
@@ -459,14 +473,44 @@ export class GeminiLiveService {
     this.forceClosedByUser = false
     this.isDisconnecting = false
 
+    const now = Date.now()
     const [secureKeys, storedPersonality, mcpTools] = await Promise.all([
-      window.electron?.ipcRenderer
-        ? window.electron.ipcRenderer.invoke('secure-get-keys').catch(() => null)
-        : Promise.resolve(null),
-      window.electron?.ipcRenderer
-        ? window.electron.ipcRenderer.invoke('get-personality').catch(() => null)
-        : Promise.resolve(null),
-      getAllMcpTools().catch(() => [])
+      this.cachedSecureKeys
+        ? Promise.resolve(this.cachedSecureKeys)
+        : (window.electron?.ipcRenderer
+            ? window.electron.ipcRenderer
+                .invoke('secure-get-keys')
+                .then((k: any) => {
+                  this.cachedSecureKeys = k
+                  return k
+                })
+                .catch(() => null)
+            : Promise.resolve(null)),
+      this.cachedPersonality
+        ? Promise.resolve(this.cachedPersonality)
+        : (window.electron?.ipcRenderer
+            ? window.electron.ipcRenderer
+                .invoke('get-personality')
+                .then((p: any) => {
+                  this.cachedPersonality = p
+                  return p
+                })
+                .catch(() => null)
+            : Promise.resolve(null)),
+      this.cachedMcpTools && now - this.lastMcpFetchTime < 30000
+        ? Promise.resolve(this.cachedMcpTools)
+        : Promise.race([
+            getAllMcpTools()
+              .then((tools) => {
+                this.cachedMcpTools = tools
+                this.lastMcpFetchTime = now
+                return tools
+              })
+              .catch(() => []),
+            new Promise<any[]>((resolve) =>
+              setTimeout(() => resolve(this.cachedMcpTools || []), 350)
+            )
+          ])
     ])
 
     this.apiKey = (
@@ -549,12 +593,16 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
 
     const finalSystemInstruction = NEXUS_SYSTEM_INSTRUCTION + contextPrompt
 
+    const isExtendedThinking = this.model.includes('extended-thinking')
+    const toolBehavior = isExtendedThinking ? 'NON_BLOCKING' : undefined
+
     const initAudioPromise = this.ensureAudioAndMicrophone()
 
     const mcpDeclarations = (mcpTools || []).map((t: any) => ({
       name: `mcp_${t.name.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
       description: `[MCP: ${t.serverName}] ${t.description || t.name}`,
-      parameters: t.inputSchema?.type === 'OBJECT' ? t.inputSchema : { type: 'OBJECT', properties: {} }
+      parameters: t.inputSchema?.type === 'OBJECT' ? t.inputSchema : { type: 'OBJECT', properties: {} },
+      ...(toolBehavior ? { behavior: toolBehavior } : {})
     }))
 
     const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${this.apiKey}`
@@ -565,8 +613,13 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
     let rejectStartup: ((message: string) => boolean) | null = null
     const connectionReady = new Promise<void>((resolve, reject) => {
       const startupTimeout = window.setTimeout(() => {
+        if (this.model.includes('extended-thinking')) {
+          console.warn('[GeminiLive] Extended thinking startup timed out, switching to fast realtime model...')
+          this.model = DEFAULT_LIVE_GEMINI_MODEL
+          localStorage.setItem('nexus_default_ai_model', this.model)
+        }
         rejectStartup?.('Gemini Live connection timed out before the voice session opened.')
-      }, 12000)
+      }, 5500)
 
       resolveStartup = () => {
         if (startupComplete) return
@@ -619,11 +672,7 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
       window.electron.ipcRenderer.removeAllListeners('system-proactive-alert')
       window.electron.ipcRenderer.on('system-proactive-alert', (_event: any, data: any) => {
         if (data?.message) {
-          window.dispatchEvent(
-            new CustomEvent('ai-force-speak', {
-              detail: `[SYSTEM GOVERNOR ALERT]: ${data.message} Advise the operator briefly.`
-            })
-          )
+          console.warn('[SYSTEM GOVERNOR ALERT]:', data.message)
         }
       })
     }
@@ -634,13 +683,8 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
       rejectStartup?.(message)
     }
 
-    this.socket.onopen = async () => {
+    this.socket.onopen = () => {
       try {
-        await initAudioPromise
-        if (this.audioContext && this.audioContext.state === 'suspended') {
-          await this.audioContext.resume().catch(() => {})
-        }
-
         this.isConnected = false
         this.nextStartTime = 0
 
@@ -648,6 +692,17 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
         this.userInputBuffer = ''
         this.rawAudioBuffer = []
         this.rawAudioBufferLength = 0
+
+        // Ensure audio context and microphone are ready in parallel
+        void initAudioPromise
+          .then(async () => {
+            if (this.audioContext && this.audioContext.state === 'suspended') {
+              await this.audioContext.resume().catch(() => {})
+            }
+          })
+          .catch((err) => {
+            console.warn('[NexusVoice] Background audio init warning:', err)
+          })
 
         const setupMsg = {
           setup: {
@@ -661,7 +716,8 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
                       localStorage.getItem('nexus_voice_profile') === 'FEMALE' ? 'Aoede' : 'Puck'
                   }
                 }
-              }
+              },
+              ...(isExtendedThinking ? { thinkingConfig: { thinkingLevel: 'low' } } : {})
             },
             systemInstruction: {
               parts: [{ text: finalSystemInstruction }]
@@ -2058,7 +2114,7 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
                     }
                   },
                   ...mcpDeclarations
-                ]
+                ].map((decl: any) => (toolBehavior ? { ...decl, behavior: toolBehavior } : decl))
               }
             ],
             inputAudioTranscription: {},
@@ -2094,6 +2150,11 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
         }
 
         if (data.setupComplete) {
+          try {
+            await initAudioPromise
+          } catch (e) {
+            console.warn('[NexusVoice] Microphone stream not ready yet:', e)
+          }
           this.isConnected = true
           this.reconnectAttempt = 0
           this.reconnecting = false
