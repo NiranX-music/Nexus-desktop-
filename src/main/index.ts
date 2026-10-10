@@ -652,35 +652,33 @@ app.whenReady().then(() => {
     }
   })
 
-  const GLOBAL_GEMINI_KEY = 'AQ.Ab8RN6JW5yXKyy1RDQlzMCS1TTn3ZMupKyzH7KTtXP7QA9Rqvw'
-
   ipcMain.handle('secure-get-keys', async () => {
-    let groqKey = ''
-    let geminiKey = GLOBAL_GEMINI_KEY
-    let fireworksKey = ''
+    let groqKey = process.env.GROQ_API_KEY || ''
+    let geminiKey = process.env.GEMINI_API_KEY || ''
+    let fireworksKey = process.env.FIREWORKS_API_KEY || ''
 
     if (fs.existsSync(secureConfigPath)) {
       try {
         const data = JSON.parse(fs.readFileSync(secureConfigPath, 'utf8'))
         if (safeStorage.isEncryptionAvailable()) {
-          groqKey = data.groq ? safeStorage.decryptString(Buffer.from(data.groq, 'base64')) : ''
+          groqKey = data.groq ? safeStorage.decryptString(Buffer.from(data.groq, 'base64')) : groqKey
           const decryptedGemini = data.gemini ? safeStorage.decryptString(Buffer.from(data.gemini, 'base64')) : ''
-          geminiKey = decryptedGemini || GLOBAL_GEMINI_KEY
+          geminiKey = decryptedGemini || geminiKey
           fireworksKey = data.fireworks
             ? safeStorage.decryptString(Buffer.from(data.fireworks, 'base64'))
-            : ''
+            : fireworksKey
         } else {
-          groqKey = data.groq ? Buffer.from(data.groq, 'base64').toString('utf8') : ''
+          groqKey = data.groq ? Buffer.from(data.groq, 'base64').toString('utf8') : groqKey
           const decryptedGemini = data.gemini ? Buffer.from(data.gemini, 'base64').toString('utf8') : ''
-          geminiKey = decryptedGemini || GLOBAL_GEMINI_KEY
-          fireworksKey = data.fireworks ? Buffer.from(data.fireworks, 'base64').toString('utf8') : ''
+          geminiKey = decryptedGemini || geminiKey
+          fireworksKey = data.fireworks ? Buffer.from(data.fireworks, 'base64').toString('utf8') : fireworksKey
         }
       } catch (_err) {
         // fallback
       }
     }
 
-    return { groqKey, geminiKey: geminiKey || GLOBAL_GEMINI_KEY, fireworksKey }
+    return { groqKey, geminiKey, fireworksKey }
   })
 
   ipcMain.handle('check-keys-exist', () => {

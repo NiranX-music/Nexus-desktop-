@@ -519,8 +519,8 @@ export class GeminiLiveService {
     ])
 
     this.apiKey = (
-      secureKeys?.geminiKey ||
       localStorage?.getItem('nexus_custom_api_key') ||
+      secureKeys?.geminiKey ||
       ''
     ).trim()
     this.model = normalizeGeminiLiveModel(localStorage.getItem('nexus_default_ai_model'))
@@ -610,9 +610,9 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
       ...(toolBehavior ? { behavior: toolBehavior } : {})
     }))
 
-    const isEphemeral = this.apiKey.startsWith('AQ.') || this.apiKey.startsWith('ya29.')
-    const url = isEphemeral
-      ? `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?access_token=${this.apiKey}`
+    const isOAuthBearer = this.apiKey.startsWith('ya29.')
+    const url = isOAuthBearer
+      ? `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token=${this.apiKey}`
       : `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${this.apiKey}`
     this.socket = new WebSocket(url)
 

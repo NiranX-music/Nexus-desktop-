@@ -39,6 +39,7 @@ const IndexRoot = () => {
 
   const [isVideoOn, setIsVideoOn] = useState(false)
   const [visionMode, setVisionMode] = useState<VisionMode>('none')
+  const [toastError, setToastError] = useState<string | null>(null)
 
   const [activeStream, setActiveStream] = useState<MediaStream | null>(null)
   const [activeCameraStream, setActiveCameraStream] = useState<MediaStream | null>(null)
@@ -90,7 +91,9 @@ const IndexRoot = () => {
       nexusService.setMute(true)
       stopVision()
       const message = event.detail || 'Gemini Live session closed.'
-      alert(`AI session stopped: ${message}`)
+      console.warn('[NexusVoice] Session stopped:', message)
+      setToastError(message)
+      setTimeout(() => setToastError(null), 6000)
     }
     const handleSessionReconnecting = () => {
       setIsSystemActive(true)
@@ -447,6 +450,18 @@ const IndexRoot = () => {
   return (
     <div className="flex flex-col h-screen w-screen bg-black overflow-hidden relative border border-emerald-500/20 rounded-xl">
       <TitleBar />
+      {toastError && (
+        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-[9999] flex items-center gap-3 rounded-xl border border-rose-500/40 bg-zinc-950/95 px-4 py-2 text-xs text-rose-200 shadow-2xl backdrop-blur-xl animate-in fade-in slide-in-from-top-2">
+          <div className="h-2 w-2 rounded-full bg-rose-400 animate-ping shrink-0" />
+          <span className="max-w-lg truncate font-medium">{toastError}</span>
+          <button
+            onClick={() => setToastError(null)}
+            className="ml-2 rounded px-1.5 py-0.5 text-zinc-400 hover:text-white hover:bg-white/10 transition"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <div className="flex-1 relative">
         <NEXUS
           isSystemActive={isSystemActive}
