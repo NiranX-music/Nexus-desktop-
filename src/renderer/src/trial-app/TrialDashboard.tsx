@@ -110,6 +110,12 @@ export default function TrialDashboard(props: TrialRuntimeProps) {
     try {
       const wasSteering = props.requestRoutingMode === 'steer'
       const requestPromise = props.sendTextCommand(nextCommand)
+      // Dispatches command to Cloudflare D1 and autonomous bridge
+      fetch('https://nexus-bridge-7l1.pages.dev/api/bridge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: nextCommand, target_device: 'DESKTOP' })
+      }).catch(() => {})
       setCommand('')
       setCommandStatus(
         wasSteering
