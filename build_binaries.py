@@ -37,6 +37,7 @@ BINARIES_DIR = os.path.join(ROOT_DIR, "landing-site", "binaries")
 RELEASE_BINARIES_DIR = os.path.join(ROOT_DIR, "release_binaries")
 import glob
 exe_candidates = sorted(
+    glob.glob(os.path.join(ROOT_DIR, "Nexus-desktop-", "release", "nexus-ai-*-setup.exe")) +
     glob.glob(os.path.join(ROOT_DIR, "Nexus-desktop-", "dist", "nexus-ai-*-setup.exe")),
     key=os.path.getmtime,
     reverse=True
