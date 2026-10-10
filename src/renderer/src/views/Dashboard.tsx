@@ -255,6 +255,7 @@ export default function DashboardView({
   }, [isSystemActive])
 
   useEffect(() => {
+    if (!isVideoOn || visionMode !== 'camera' || modelsLoaded) return
     const loadModels = async () => {
       try {
         const MODEL_URL = './models'
@@ -267,7 +268,7 @@ export default function DashboardView({
       } catch (e) {}
     }
     loadModels()
-  }, [])
+  }, [isVideoOn, visionMode, modelsLoaded])
 
   useEffect(() => {
     if (
