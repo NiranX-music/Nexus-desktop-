@@ -32,37 +32,47 @@ function getSystemCpuUsage() {
   return total === 0 ? '0.0' : (((total - idle) / total) * 100).toFixed(1)
 }
 
-export default function registerSystemHandlers(ipcMain: IpcMain) {
+let cachedInstalledApps: any[] | null = null
+let lastInstalledAppsFetch = 0
 
+export default function registerSystemHandlers(ipcMain: IpcMain) {
   ipcMain.removeHandler('get-installed-apps')
   ipcMain.handle('get-installed-apps', async () => {
     try {
       if (os.platform() !== 'win32') return []
 
-      const cmd = `powershell "Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Depth 1"`
+      const now = Date.now()
+      if (cachedInstalledApps && now - lastInstalledAppsFetch < 3600_000) {
+        return cachedInstalledApps
+      }
 
+      const cmd = `powershell "Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Depth 1"`
       const jsonOutput = await runCommand(cmd)
 
-      if (!jsonOutput) return []
+      if (!jsonOutput) return cachedInstalledApps || []
 
       let rawData
       try {
         rawData = JSON.parse(jsonOutput)
       } catch (parseError) {
-        return []
+        return cachedInstalledApps || []
       }
 
       const appsArray = Array.isArray(rawData) ? rawData : [rawData]
 
-      return appsArray
+      const formattedApps = appsArray
         .filter((a: any) => a && a.Name && a.AppID) 
         .map((a: any) => ({
           name: a.Name.trim(),
           id: a.AppID.trim()
         }))
         .sort((a, b) => a.name.localeCompare(b.name)) 
+
+      cachedInstalledApps = formattedApps
+      lastInstalledAppsFetch = now
+      return formattedApps
     } catch (e) {
-      return []
+      return cachedInstalledApps || []
     }
   })
 
