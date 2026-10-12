@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nexus Documentation &bull; Redirecting...</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Plus Jakarta Sans', 'Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <script>
+    // Smart GitHub Pages router for /nexusai/marco/docs and /nexusai/macro/docs
+    (function() {
+      const path = window.location.pathname;
+      const lowerPath = path.toLowerCase();
+
+      // Determine repository base path if hosted on username.github.io/repo-name/
+      const segments = path.split('/').filter(Boolean);
+      let repoPrefix = '';
+      if (segments.length > 0 && segments[0] === 'Nexus-desktop-') {
+        repoPrefix = '/Nexus-desktop-';
+      }
+
+      // Check for macro / marco routing
+      if (lowerPath.includes('marco') || lowerPath.includes('macro')) {
+        let target = repoPrefix + '/nexusai/marco/docs/';
+        if (lowerPath.includes('macro/docs')) {
+          target = repoPrefix + '/nexusai/macro/docs/';
+        }
+        window.location.replace(target);
+      }
+    })();
+  </script>
+</head>
+<body class="bg-[#03050c] text-slate-100 min-h-screen font-sans flex items-center justify-center p-4">
+  <div class="max-w-md w-full bg-slate-900/80 border border-slate-800 rounded-2xl p-6 md:p-8 backdrop-blur-xl shadow-2xl text-center">
+    <div class="w-14 h-14 mx-auto mb-4 rounded-2xl bg-gradient-to-tr from-emerald-500 via-cyan-500 to-indigo-600 p-[1.5px] shadow-lg shadow-emerald-500/20 flex items-center justify-center">
+      <div class="w-full h-full bg-[#03050c] rounded-[14px] flex items-center justify-center">
+        <i data-lucide="compass" class="w-6 h-6 text-emerald-400 animate-spin" style="animation-duration: 8s;"></i>
+      </div>
+    </div>
+
+    <h1 class="text-xl font-bold tracking-tight mb-2">Nexus Routing Gateway</h1>
+    <p class="text-xs text-slate-400 mb-6">Redirecting you to the requested documentation module...</p>
+
+    <div class="space-y-2.5 text-left text-xs font-mono">
+      <a id="linkMarco" href="./nexusai/marco/docs/" class="flex items-center justify-between p-3 rounded-xl bg-slate-800/60 hover:bg-emerald-500/10 border border-slate-700/60 hover:border-emerald-500/40 transition-all text-emerald-300 group">
+        <div class="flex items-center gap-2">
+          <i data-lucide="zap" class="w-4 h-4 text-emerald-400"></i>
+          <span>/nexusai/marco/docs</span>
+        </div>
+        <i data-lucide="arrow-right" class="w-4 h-4 group-hover:translate-x-1 transition-transform"></i>
+      </a>
+
+      <a id="linkMacro" href="./nexusai/macro/docs/" class="flex items-center justify-between p-3 rounded-xl bg-slate-800/60 hover:bg-cyan-500/10 border border-slate-700/60 hover:border-cyan-500/40 transition-all text-cyan-300 group">
+        <div class="flex items-center gap-2">
+          <i data-lucide="clock" class="w-4 h-4 text-cyan-400"></i>
+          <span>/nexusai/macro/docs</span>
+        </div>
+        <i data-lucide="arrow-right" class="w-4 h-4 group-hover:translate-x-1 transition-transform"></i>
+      </a>
+
+      <a href="./index.html" class="flex items-center justify-between p-3 rounded-xl bg-slate-800/60 hover:bg-slate-700/60 border border-slate-700/60 transition-all text-slate-300 group">
+        <div class="flex items-center gap-2">
+          <i data-lucide="book-open" class="w-4 h-4 text-slate-400"></i>
+          <span>Nexus Docs Home</span>
+        </div>
+        <i data-lucide="arrow-right" class="w-4 h-4 group-hover:translate-x-1 transition-transform"></i>
+      </a>
+    </div>
+
+    <div class="mt-6 pt-4 border-t border-slate-800 text-[11px] text-slate-500 flex items-center justify-center gap-1.5 font-mono">
+      <span>Nexus Sovereign Desktop Architecture</span>
+      <span>&bull;</span>
+      <span>NiranX</span>
+    </div>
+  </div>
+
+  <script>
+    lucide.createIcons();
+  </script>
+</body>
+</html>

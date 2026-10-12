@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+  <title>Nexus Marcos &amp; Timely Automations — Official Guide &amp; Studio (/nexusai/marco/docs)</title>
+  
+  <meta name="description" content="Official documentation, guide, and interactive studio for Nexus Marcos / Macros and Timely Automations hosted on GitHub Pages at /nexusai/marco/docs. Build autonomous, cross-device workflows across Cloudflare Edge, Win32 Desktop, and Android Termux.">
+  <meta name="keywords" content="Nexus Marcos, Nexus Macros, Timely Automations, Cron Scheduler, Autonomous AI Workflows, Cloudflare Workers, Cross-Device Matrix">
+  <meta name="author" content="Nexdune / Nexus Architecture">
+  <link rel="canonical" href="https://niranx-music.github.io/Nexus-desktop-/nexusai/marco/docs/">
+
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Google Fonts Plus Jakarta Sans & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Plus Jakarta Sans', 'Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            brand: {
+              400: '#34d399',
+              500: '#10b981',
+              600: '#059669',
+            },
+            nexus: {
+              bg: '#03050c',
+              surface: '#0b1120',
+              card: '#0f172a',
+              border: '#1e293b',
+              accent: '#38bdf8',
+            }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-[#03050c] text-slate-100 min-h-screen font-sans selection:bg-emerald-500 selection:text-black">
+
+  <!-- TOP HEADER / FLEET STATUS -->
+  <header class="sticky top-0 z-40 backdrop-blur-xl bg-[#03050c]/85 border-b border-nexus-border px-4 lg:px-8 py-3 transition-all">
+    <div class="max-w-7xl mx-auto flex items-center justify-between gap-3">
+      
+      <!-- Brand & Path Breadcrumb -->
+      <div class="flex items-center gap-3">
+        <a href="../../../index.html" class="flex items-center gap-3 group">
+          <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-500 via-cyan-500 to-indigo-600 p-[1.5px] shadow-lg shadow-emerald-500/20 group-hover:scale-105 transition-transform">
+            <div class="w-full h-full bg-[#03050c] rounded-[10px] flex items-center justify-center">
+              <i data-lucide="zap" class="w-4 h-4 text-emerald-400"></i>
+            </div>
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="font-bold text-sm md:text-base tracking-tight bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
+                Nexus Macros
+              </span>
+              <span class="text-[9px] font-mono px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
+                /nexusai/marco/docs
+              </span>
+            </div>
+            <p class="text-[11px] text-slate-400 hidden sm:block">GitHub Pages Official Guide &bull; Timely Schedulers &bull; Cross-Device Matrix</p>
+          </div>
+        </a>
+      </div>
+
+      <!-- Navigation Links -->
+      <nav class="hidden md:flex items-center gap-3.5 text-xs font-mono text-slate-400">
+        <a href="../../../index.html" class="hover:text-emerald-400 transition-colors flex items-center gap-1"><i data-lucide="book-open" class="w-3.5 h-3.5"></i> Docs Home</a>
+        <a href="https://ecosystem-landing.pages.dev" target="_blank" rel="noopener" class="hover:text-emerald-400 transition-colors flex items-center gap-1"><i data-lucide="home" class="w-3.5 h-3.5"></i> Portal</a>
+        <a href="https://ecosystem-status.pages.dev" target="_blank" rel="noopener" class="hover:text-emerald-400 transition-colors flex items-center gap-1"><i data-lucide="activity" class="w-3.5 h-3.5"></i> Radar</a>
+        <a href="https://ecosystem-admin.pages.dev" target="_blank" rel="noopener" class="hover:text-rose-400 transition-colors flex items-center gap-1"><i data-lucide="shield" class="w-3.5 h-3.5"></i> Admin</a>
+        <a href="https://github.com/NiranX-music/Nexus-desktop-" target="_blank" rel="noopener" class="hover:text-white transition-colors flex items-center gap-1"><i data-lucide="github" class="w-3.5 h-3.5"></i> Repo</a>
+      </nav>
+
+      <!-- Scheduler State Indicator -->
+      <div class="flex items-center gap-2 sm:gap-3">
+        <div id="schedulerStatusBadge" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900 border border-emerald-500/40 text-[11px]">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span class="text-emerald-400 font-semibold font-mono hidden sm:inline">SCHEDULER: ON</span>
+        </div>
+
+        <div class="flex items-center gap-2 px-2.5 py-1 rounded-full bg-slate-900 border border-white/10 text-[11px]">
+          <div class="w-4 h-4 rounded-full bg-gradient-to-tr from-emerald-400 to-cyan-400 text-slate-950 font-bold flex items-center justify-center text-[9px]">
+            NX
+          </div>
+          <span class="text-slate-200 font-semibold hidden sm:inline">NiranX</span>
+        </div>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- MAIN DASHBOARD -->
+  <main class="max-w-7xl mx-auto px-4 lg:px-8 py-5 space-y-6">
+
+    <!-- BREADCRUMB & HERO STRIP -->
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl bg-gradient-to-r from-slate-950 via-slate-900 to-slate-950 border border-white/10">
+      <div class="space-y-1">
+        <div class="flex items-center gap-2 text-xs font-mono text-slate-400">
+          <a href="../../../index.html" class="hover:text-emerald-400">docs</a>
+          <span>/</span>
+          <span class="text-cyan-400">nexusai</span>
+          <span>/</span>
+          <span class="text-emerald-400">macro</span>
+          <span>/</span>
+          <span class="text-white font-bold">docs</span>
+        </div>
+        <h1 class="text-lg sm:text-xl font-bold text-white tracking-tight">
+          Nexus Macros &amp; Timely Automations Studio
+        </h1>
+      </div>
+      <div class="flex items-center gap-2">
+        <a 
+          href="https://ecosystem-landing.pages.dev/macros.html" 
+          target="_blank" 
+          rel="noopener" 
+          class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 text-xs font-semibold shadow-lg shadow-emerald-500/20 transition-all"
+        >
+          <i data-lucide="play" class="w-3.5 h-3.5"></i> Launch Live App
+        </a>
+      </div>
+    </div>
+
+    <!-- METRICS TELEMETRY STRIP -->
+    <section class="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs font-mono">
+      <div class="p-3.5 rounded-xl bg-nexus-surface/80 border border-nexus-border flex items-center gap-3">
+        <div class="p-2 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+          <i data-lucide="clock" class="w-4 h-4"></i>
+        </div>
+        <div>
+          <div class="text-[10px] text-slate-400 uppercase">Active Schedulers</div>
+          <div id="statActiveSchedulers" class="text-sm font-bold text-white">6 Active</div>
+        </div>
+      </div>
+
+      <div class="p-3.5 rounded-xl bg-nexus-surface/80 border border-nexus-border flex items-center gap-3">
+        <div class="p-2 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+          <i data-lucide="hourglass" class="w-4 h-4"></i>
+        </div>
+        <div>
+          <div class="text-[10px] text-slate-400 uppercase">Next Trigger In</div>
+          <div id="statNextTriggerCountdown" class="text-sm font-bold text-cyan-400">04m 18s</div>
+        </div>
+      </div>
+
+      <div class="p-3.5 rounded-xl bg-nexus-surface/80 border border-nexus-border flex items-center gap-3">
+        <div class="p-2 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20">
+          <i data-lucide="zap" class="w-4 h-4"></i>
+        </div>
+        <div>
+          <div class="text-[10px] text-slate-400 uppercase">Macro Library</div>
+          <div id="statTotalMacros" class="text-sm font-bold text-purple-400">12 Recipes</div>
+        </div>
+      </div>
+
+      <div class="p-3.5 rounded-xl bg-nexus-surface/80 border border-nexus-border flex items-center gap-3">
+        <div class="p-2 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20">
+          <i data-lucide="activity" class="w-4 h-4"></i>
+        </div>
+        <div>
+          <div class="text-[10px] text-slate-400 uppercase">Runs Processed</div>
+          <div id="statTodayRuns" class="text-sm font-bold text-white">142 Runs</div>
+        </div>
+      </div>
+
+      <div class="p-3.5 rounded-xl bg-nexus-surface/80 border border-nexus-border flex items-center gap-3 col-span-2 md:col-span-1">
+        <div class="p-2 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+          <i data-lucide="database" class="w-4 h-4"></i>
+        </div>
+        <div>
+          <div class="text-[10px] text-slate-400 uppercase">Edge Runtime</div>
+          <div class="text-sm font-bold text-emerald-400">Zero-Card D1</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB NAVIGATION BAR -->
+    <div class="flex items-center justify-between border-b border-slate-800 pb-3 flex-wrap gap-3">
+      <div class="flex items-center gap-1.5 p-1 rounded-xl bg-slate-950/80 border border-slate-800 text-xs overflow-x-auto">
+        <button class="macro-nav-tab active px-3.5 py-1.5 rounded-lg font-semibold flex items-center gap-2 transition-all" data-tab="guide">
+          <i data-lucide="book-open" class="w-4 h-4 text-emerald-400"></i>
+          <span>📘 Macros Guide &amp; Docs</span>
+        </button>
+        <button class="macro-nav-tab px-3.5 py-1.5 rounded-lg font-semibold text-slate-400 hover:text-white flex items-center gap-2 transition-all" data-tab="automations">
+          <i data-lucide="clock" class="w-4 h-4 text-cyan-400"></i>
+          <span>⏱️ Timely Automations Hub</span>
+          <span class="text-[9px] px-1.5 py-0.2 rounded-full bg-cyan-500/20 text-cyan-300 font-mono" id="navAutomationsCount">6</span>
+        </button>
+        <button class="macro-nav-tab px-3.5 py-1.5 rounded-lg font-semibold text-slate-400 hover:text-white flex items-center gap-2 transition-all" data-tab="studio">
+          <i data-lucide="code" class="w-4 h-4 text-purple-400"></i>
+          <span>⚡ Macro Studio &amp; Composer</span>
+        </button>
+        <button class="macro-nav-tab px-3.5 py-1.5 rounded-lg font-semibold text-slate-400 hover:text-white flex items-center gap-2 transition-all" data-tab="recipes">
+          <i data-lucide="layers" class="w-4 h-4 text-amber-400"></i>
+          <span>📦 Recipe Library</span>
+        </button>
+        <button class="macro-nav-tab px-3.5 py-1.5 rounded-lg font-semibold text-slate-400 hover:text-white flex items-center gap-2 transition-all" data-tab="logs">
+          <i data-lucide="terminal" class="w-4 h-4 text-pink-400"></i>
+          <span>📜 Telemetry Logs</span>
+        </button>
+      </div>
+
+      <!-- Quick Action Buttons -->
+      <div class="flex items-center gap-2">
+        <button id="openNewAutomationBtn" class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 text-xs font-semibold shadow-md active:scale-95 transition-all">
+          <i data-lucide="plus" class="w-3.5 h-3.5"></i> New Automation
+        </button>
+        <button id="openNewMacroBtn" class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 text-xs font-semibold shadow-md active:scale-95 transition-all">
+          <i data-lucide="sparkles" class="w-3.5 h-3.5"></i> Compose Macro
+        </button>
+      </div>
+    </div>
+
+    <!-- ========================================================================= -->
+    <!-- TAB 1: INTERACTIVE MACROS GUIDE & MANUAL -->
+    <!-- ========================================================================= -->
+    <div id="tabContentGuide" class="tab-pane space-y-6">
+      
+      <!-- Guide Banner -->
+      <div class="rounded-2xl bg-gradient-to-r from-emerald-950/40 via-cyan-950/30 to-purple-950/20 border border-emerald-500/30 p-5 sm:p-6 relative overflow-hidden">
+        <div class="max-w-3xl space-y-2 relative z-10">
+          <div class="flex items-center gap-2 text-emerald-400 text-xs font-mono font-semibold">
+            <i data-lucide="sparkles" class="w-4 h-4"></i>
+            <span>NEXUS OPERATING SYSTEM &bull; MACRO ARCHITECTURE GUIDE</span>
+          </div>
+          <h2 class="text-xl sm:text-2xl font-bold text-white tracking-tight">
+            The Complete Nexus Macros &amp; Timely Automations Manual
+          </h2>
+          <p class="text-slate-300 text-xs sm:text-sm leading-relaxed">
+            Welcome to the official developer and operator guide at <code>/nexusai/macro/docs</code>. Learn how to craft multi-step cross-device pipelines, configure precision cron expressions, tap into dynamic runtime variables, and orchestrate automated AI workflows.
+          </p>
+        </div>
+      </div>
+
+      <!-- Guide Chapters Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+        <div class="p-5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-3">
+          <div class="flex items-center gap-2 text-emerald-400 font-bold text-xs uppercase tracking-wider">
+            <i data-lucide="cpu" class="w-4 h-4"></i> 1. Core Architecture
+          </div>
+          <h3 class="font-bold text-sm text-white">How Nexus Macros Work</h3>
+          <p class="text-slate-400 text-xs leading-relaxed">
+            A Macro is an ordered chain of execution steps. When triggered (by a cron timer, hotkey, webhook, or system event), it evaluates conditions, interpolates dynamic tokens, and dispatches instructions across Cloudflare Edge, Win32 Desktop, or Android Termux.
+          </p>
+          <div class="pt-2 border-t border-slate-800/80 text-[11px] text-slate-300 font-mono space-y-1">
+            <div>&bull; <strong class="text-emerald-400">Deterministic</strong>: sequential dependency</div>
+            <div>&bull; <strong class="text-cyan-400">Zero-Card</strong>: powered by D1 &amp; KV</div>
+            <div>&bull; <strong class="text-purple-400">Resilient</strong>: auto-retry failover</div>
+          </div>
+        </div>
+
+        <div class="p-5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-3">
+          <div class="flex items-center gap-2 text-cyan-400 font-bold text-xs uppercase tracking-wider">
+            <i data-lucide="clock" class="w-4 h-4"></i> 2. Timely Automations
+          </div>
+          <h3 class="font-bold text-sm text-white">Precision Scheduling Engine</h3>
+          <p class="text-slate-400 text-xs leading-relaxed">
+            Automate tasks on continuous schedules. Use 5-field standard cron expressions (<code class="text-cyan-300">min hr dom mon dow</code>), interval loop timers, or one-shot countdown triggers. Built-in drift compensation guarantees time accuracy.
+          </p>
+          <div class="pt-2 border-t border-slate-800/80 text-[11px] text-slate-300 font-mono space-y-1">
+            <div>&bull; <strong class="text-cyan-400">CRON</strong>: <code>30 8 * * *</code> (Daily 8:30 AM)</div>
+            <div>&bull; <strong class="text-emerald-400">INTERVAL</strong>: Every 15 min / 1 hour</div>
+            <div>&bull; <strong class="text-amber-400">ONE-SHOT</strong>: Run once in 30 minutes</div>
+          </div>
+        </div>
+
+        <div class="p-5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-3">
+          <div class="flex items-center gap-2 text-purple-400 font-bold text-xs uppercase tracking-wider">
+            <i data-lucide="hash" class="w-4 h-4"></i> 3. Dynamic Variables
+          </div>
+          <h3 class="font-bold text-sm text-white">Runtime Context Tokens</h3>
+          <p class="text-slate-400 text-xs leading-relaxed">
+            Enrich steps with dynamic real-time data using curly tokens: <code class="text-purple-300">{date}</code>, <code class="text-purple-300">{timestamp}</code>, <code class="text-purple-300">{battery_pct}</code>, <code class="text-purple-300">{clipboard}</code>, <code class="text-purple-300">{device_name}</code>, and chain outputs via <code class="text-purple-300">{step_1_output}</code>.
+          </p>
+          <div class="pt-2 border-t border-slate-800/80 text-[11px] text-slate-300 font-mono space-y-1">
+            <div>&bull; <strong class="text-purple-400">{timestamp}</strong>: ISO 8601 current time</div>
+            <div>&bull; <strong class="text-pink-400">{battery_pct}</strong>: Current battery 0-100%</div>
+            <div>&bull; <strong class="text-cyan-400">{step_N_output}</strong>: Preceding step stdout</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- LIVE INTERACTIVE CRON CALCULATOR -->
+      <div class="p-5 sm:p-6 rounded-2xl bg-slate-950 border border-cyan-500/30 space-y-4">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+          <div class="flex items-center gap-2">
+            <i data-lucide="calculator" class="w-5 h-5 text-cyan-400"></i>
+            <div>
+              <h3 class="font-bold text-sm sm:text-base text-white">Live Cron Calculator &amp; Explainer</h3>
+              <p class="text-[11px] text-slate-400">Test and translate any 5-part cron schedule into plain English with live next execution timestamps.</p>
+            </div>
+          </div>
+          <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">INTERACTIVE TOOL</span>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
+          <div class="sm:col-span-3">
+            <label class="block text-[11px] font-mono text-slate-400 mb-1">Enter Cron Pattern</label>
+            <input type="text" id="guideCronInput" value="30 8 * * *" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-sm font-mono text-emerald-400 tracking-wider focus:outline-none focus:border-cyan-500">
+          </div>
+          <div>
+            <label class="block text-[11px] font-mono text-slate-400 mb-1">Common Presets</label>
+            <select id="guideCronPresetSelect" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-cyan-500">
+              <option value="30 8 * * *">Daily 8:30 AM (Briefing)</option>
+              <option value="*/5 * * * *">Every 5 Minutes (Health Sweep)</option>
+              <option value="0 * * * *">Hourly at :00 (Fleet Ping)</option>
+              <option value="0 18 * * 1-5">Weekdays 6:00 PM (Wrap-up)</option>
+              <option value="0 0 * * *">Midnight 00:00 (Cache Clean)</option>
+              <option value="0 0 * * 0">Weekly Sunday (Backup)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 flex items-start gap-3">
+          <i data-lucide="info" class="w-4 h-4 text-cyan-400 shrink-0 mt-0.5"></i>
+          <div>
+            <div class="text-[10px] font-mono uppercase text-slate-400">Plain English Translation:</div>
+            <div id="guideCronTranslation" class="text-sm font-semibold text-white mt-0.5">
+              At 08:30 AM every day
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="text-[11px] font-mono text-slate-400 mb-2">Calculated Next 5 Trigger Timestamps:</div>
+          <div id="guideCronNextRuns" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 text-xs font-mono"></div>
+        </div>
+
+        <div class="pt-2 flex items-center justify-end gap-3 border-t border-slate-800/80">
+          <button id="copyGuideCronBtn" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium flex items-center gap-1.5">
+            <i data-lucide="copy" class="w-3.5 h-3.5"></i> Copy Cron
+          </button>
+          <button id="useGuideCronInSchedulerBtn" class="px-4 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-semibold flex items-center gap-1.5">
+            <i data-lucide="calendar" class="w-3.5 h-3.5"></i> Create Automation with this Schedule
+          </button>
+        </div>
+      </div>
+
+      <!-- TUTORIAL STEP-BY-STEP -->
+      <div class="p-5 sm:p-6 rounded-2xl bg-slate-950 border border-slate-800 space-y-4">
+        <h3 class="font-bold text-sm sm:text-base text-white flex items-center gap-2">
+          <i data-lucide="compass" class="w-4 h-4 text-emerald-400"></i>
+          <span>Step-by-Step Tutorial: Creating an Autonomous Fleet Monitor in 3 Minutes</span>
+        </h3>
+
+        <div class="space-y-3 text-xs text-slate-300">
+          <div class="flex items-start gap-3 p-3 rounded-xl bg-slate-900 border border-slate-800">
+            <span class="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold font-mono text-[11px] shrink-0">1</span>
+            <div>
+              <strong class="text-white">Define the Schedule Trigger:</strong>
+              <p class="text-slate-400 mt-0.5">Choose an interval of 15 minutes (<code class="text-emerald-300">every 15 min</code>) or cron (<code class="text-emerald-300">*/15 * * * *</code>).</p>
+            </div>
+          </div>
+
+          <div class="flex items-start gap-3 p-3 rounded-xl bg-slate-900 border border-slate-800">
+            <span class="w-5 h-5 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center font-bold font-mono text-[11px] shrink-0">2</span>
+            <div>
+              <strong class="text-white">Add Query Step (Cloudflare D1):</strong>
+              <p class="text-slate-400 mt-0.5">Configure step 1 as a <code class="text-cyan-300">D1_QUERY</code> targeting <code class="text-cyan-300">CLOUD</code> to fetch telemetry.</p>
+            </div>
+          </div>
+
+          <div class="flex items-start gap-3 p-3 rounded-xl bg-slate-900 border border-slate-800">
+            <span class="w-5 h-5 rounded-full bg-purple-500/20 text-purple-400 flex items-center justify-center font-bold font-mono text-[11px] shrink-0">3</span>
+            <div>
+              <strong class="text-white">Add AI Synthesizer Step (Gemini 3.8):</strong>
+              <p class="text-slate-400 mt-0.5">Configure step 2 as an <code class="text-purple-300">AI_REASON</code> step passing <code class="text-purple-300">{step_1_output}</code> for analysis.</p>
+            </div>
+          </div>
+
+          <div class="flex items-start gap-3 p-3 rounded-xl bg-slate-900 border border-slate-800">
+            <span class="w-5 h-5 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold font-mono text-[11px] shrink-0">4</span>
+            <div>
+              <strong class="text-white">Add Desktop Audio &amp; Notification Alert:</strong>
+              <p class="text-slate-400 mt-0.5">Configure step 3 as a <code class="text-amber-300">NOTIFY</code> step targeting <code class="text-amber-300">DESKTOP</code> with chime.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="pt-2 flex justify-end">
+          <button id="loadTutorialMacroBtn" class="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs transition-colors">
+            <i data-lucide="play-circle" class="w-4 h-4"></i> Load this Tutorial into Macro Studio
+          </button>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ========================================================================= -->
+    <!-- TAB 2: TIMELY AUTOMATIONS HUB -->
+    <!-- ========================================================================= -->
+    <div id="tabContentAutomations" class="tab-pane space-y-6 hidden">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 sm:p-5 rounded-2xl bg-slate-950 border border-slate-800">
+        <div class="space-y-0.5">
+          <div class="flex items-center gap-2">
+            <h2 class="font-bold text-sm sm:text-base text-white">Timely Automations Fleet</h2>
+            <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
+              Ticking Every 1s
+            </span>
+          </div>
+          <p class="text-xs text-slate-400">Autonomous scheduled tasks running with drift compensation and local storage persistence.</p>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <button id="pauseAllAutomationsBtn" class="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-medium flex items-center gap-1.5 transition-colors">
+            <i data-lucide="pause" class="w-3.5 h-3.5"></i> <span id="pauseAllBtnLabel">Pause All</span>
+          </button>
+          <button id="createAutomationCardBtn" class="flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-semibold shadow-md active:scale-95 transition-all">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i> Add Automation
+          </button>
+        </div>
+      </div>
+
+      <div id="automationsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+    </div>
+
+    <!-- ========================================================================= -->
+    <!-- TAB 3: MACRO STUDIO & VISUAL COMPOSER -->
+    <!-- ========================================================================= -->
+    <div id="tabContentStudio" class="tab-pane space-y-6 hidden">
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        <!-- Left: Steps Designer (2 cols) -->
+        <div class="lg:col-span-2 space-y-4">
+          <div class="p-5 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div class="flex items-center gap-2">
+                <i data-lucide="edit-3" class="w-4 h-4 text-purple-400"></i>
+                <h3 class="font-bold text-sm text-white">Macro Pipeline Designer</h3>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label class="block text-[11px] font-semibold text-slate-300 mb-1">Macro ID</label>
+                <input type="text" id="macroIdInput" value="macro_custom_pipeline" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs font-mono text-slate-200 focus:outline-none focus:border-purple-500">
+              </div>
+              <div class="sm:col-span-2">
+                <label class="block text-[11px] font-semibold text-slate-300 mb-1">Macro Name</label>
+                <input type="text" id="macroNameInput" value="Custom Multi-Device Pipeline" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-purple-500">
+              </div>
+            </div>
+
+            <div>
+              <label class="block text-[11px] font-semibold text-slate-300 mb-1">Description / Goal</label>
+              <input type="text" id="macroDescInput" value="Autonomous sequence executing query, AI reasoning, and desktop alerts" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-purple-500">
+            </div>
+
+            <div>
+              <label class="block text-[10px] font-mono text-slate-400 mb-1.5">Insert Dynamic Token into Active Step:</label>
+              <div class="flex flex-wrap items-center gap-1.5 text-xs font-mono">
+                <button class="token-chip px-2 py-0.5 rounded bg-purple-950/60 hover:bg-purple-900 text-purple-300 border border-purple-500/30" data-token="{timestamp}">{timestamp}</button>
+                <button class="token-chip px-2 py-0.5 rounded bg-purple-950/60 hover:bg-purple-900 text-purple-300 border border-purple-500/30" data-token="{date}">{date}</button>
+                <button class="token-chip px-2 py-0.5 rounded bg-purple-950/60 hover:bg-purple-900 text-purple-300 border border-purple-500/30" data-token="{time}">{time}</button>
+                <button class="token-chip px-2 py-0.5 rounded bg-cyan-950/60 hover:bg-cyan-900 text-cyan-300 border border-cyan-500/30" data-token="{device_name}">{device_name}</button>
+                <button class="token-chip px-2 py-0.5 rounded bg-cyan-950/60 hover:bg-cyan-900 text-cyan-300 border border-cyan-500/30" data-token="{battery_pct}">{battery_pct}</button>
+                <button class="token-chip px-2 py-0.5 rounded bg-emerald-950/60 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/30" data-token="{step_1_output}">{step_1_output}</button>
+                <button class="token-chip px-2 py-0.5 rounded bg-pink-950/60 hover:bg-pink-900 text-pink-300 border border-pink-500/30" data-token="{clipboard}">{clipboard}</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="space-y-3">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                <i data-lucide="list" class="w-3.5 h-3.5 text-purple-400"></i> Execution Steps Chain
+              </span>
+              <button id="addStepBtn" class="flex items-center gap-1 px-3 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-emerald-400 text-xs font-semibold">
+                <i data-lucide="plus-circle" class="w-3.5 h-3.5"></i> Add Step
+              </button>
+            </div>
+            <div id="stepsListContainer" class="space-y-3"></div>
+          </div>
+
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-slate-800">
+            <div></div>
+            <div class="flex items-center gap-2">
+              <button id="scheduleThisMacroBtn" class="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-cyan-950 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 text-xs font-semibold">
+                <i data-lucide="clock" class="w-3.5 h-3.5"></i> Schedule as Automation
+              </button>
+              <button id="testRunMacroBtn" class="flex items-center gap-2 px-5 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 text-xs font-bold shadow-lg shadow-emerald-500/20 active:scale-95 transition-all">
+                <i data-lucide="play" class="w-4 h-4"></i> Test Run Pipeline
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Terminal Simulator (1 col) -->
+        <div class="space-y-4">
+          <div class="rounded-2xl bg-slate-950 border border-slate-800 overflow-hidden font-mono text-xs flex flex-col h-[560px] shadow-2xl">
+            <div class="flex items-center justify-between px-3.5 py-2.5 bg-slate-900/90 border-b border-slate-800 shrink-0">
+              <div class="flex items-center gap-2">
+                <div class="flex items-center gap-1.5">
+                  <span class="w-2.5 h-2.5 rounded-full bg-red-500 inline-block"></span>
+                  <span class="w-2.5 h-2.5 rounded-full bg-yellow-500 inline-block"></span>
+                  <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span>
+                </div>
+                <span class="text-slate-300 text-[11px] font-semibold ml-2">Execution Stream</span>
+              </div>
+              <button id="clearMacroTerminalBtn" class="text-slate-400 hover:text-white text-[10px]">Clear</button>
+            </div>
+
+            <div id="macroTerminalOutput" class="p-4 flex-1 overflow-y-auto space-y-1 text-slate-300 select-text leading-relaxed">
+              <div class="text-slate-500">[Macro Engine] Ready for pipeline dispatch at /nexusai/macro/docs.</div>
+            </div>
+
+            <div class="p-3 bg-slate-900/80 border-t border-slate-800 shrink-0 flex items-center justify-between text-[11px]">
+              <span id="pipelineStatusText" class="text-slate-400">Status: IDLE</span>
+              <span id="pipelineDurationText" class="text-emerald-400 font-mono">0.00s</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ========================================================================= -->
+    <!-- TAB 4: RECIPE LIBRARY -->
+    <!-- ========================================================================= -->
+    <div id="tabContentRecipes" class="tab-pane space-y-6 hidden">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl bg-slate-950 border border-slate-800">
+        <div>
+          <h2 class="font-bold text-sm sm:text-base text-white">Curated Recipe Library</h2>
+          <p class="text-xs text-slate-400">12 production pipelines ready for instant execution or scheduling.</p>
+        </div>
+        <div class="flex items-center gap-1.5 text-xs font-mono">
+          <button class="recipe-filter-btn active px-3 py-1 rounded-lg bg-slate-800 text-white" data-cat="ALL">All</button>
+          <button class="recipe-filter-btn px-3 py-1 rounded-lg text-slate-400 hover:text-white" data-cat="CLOUD">Cloud &bull; AI</button>
+          <button class="recipe-filter-btn px-3 py-1 rounded-lg text-slate-400 hover:text-white" data-cat="DESKTOP">Desktop</button>
+          <button class="recipe-filter-btn px-3 py-1 rounded-lg text-slate-400 hover:text-white" data-cat="MOBILE">Mobile</button>
+        </div>
+      </div>
+      <div id="recipesGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+    </div>
+
+    <!-- ========================================================================= -->
+    <!-- TAB 5: TELEMETRY & LOGS -->
+    <!-- ========================================================================= -->
+    <div id="tabContentLogs" class="tab-pane space-y-6 hidden">
+      <div class="flex items-center justify-between p-4 rounded-2xl bg-slate-950 border border-slate-800">
+        <div>
+          <h2 class="font-bold text-sm sm:text-base text-white">Execution Stream &amp; Audit Logs</h2>
+          <p class="text-xs text-slate-400">Historical records of all macro triggers, durations, and exit statuses.</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <button id="exportLogsCsvBtn" class="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-medium flex items-center gap-1">
+            <i data-lucide="download" class="w-3.5 h-3.5"></i> Export CSV
+          </button>
+          <button id="clearLogsBtn" class="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-rose-400 text-xs font-medium flex items-center gap-1">
+            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> Clear Logs
+          </button>
+        </div>
+      </div>
+
+      <div class="overflow-x-auto rounded-2xl border border-slate-800 bg-slate-950">
+        <table class="w-full text-left text-xs font-mono">
+          <thead class="bg-slate-900/80 border-b border-slate-800 text-slate-400 text-[11px]">
+            <tr>
+              <th class="p-3">Timestamp</th>
+              <th class="p-3">Macro Name / ID</th>
+              <th class="p-3">Trigger Source</th>
+              <th class="p-3">Target</th>
+              <th class="p-3">Duration</th>
+              <th class="p-3">Status</th>
+              <th class="p-3">Result Details</th>
+            </tr>
+          </thead>
+          <tbody id="logsTableBody" class="divide-y divide-slate-800/80 text-slate-300"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- MODAL: ADD / EDIT TIMELY AUTOMATION -->
+  <div id="automationModal" class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm hidden items-center justify-center p-4">
+    <div class="w-full max-w-lg rounded-2xl bg-nexus-surface border border-nexus-border p-5 sm:p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2">
+          <i data-lucide="clock" class="w-5 h-5 text-cyan-400"></i>
+          <h3 class="font-bold text-sm sm:text-base text-white">Configure Timely Automation</h3>
+        </div>
+        <button id="closeAutomationModalBtn" class="text-slate-400 hover:text-white p-1 rounded-lg">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <div class="space-y-3 text-xs">
+        <div>
+          <label class="block font-semibold text-slate-300 mb-1">Automation Title</label>
+          <input type="text" id="modalAutoTitle" placeholder="e.g. Hourly Fleet Health Check" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 text-xs focus:border-cyan-500 focus:outline-none">
+        </div>
+
+        <div>
+          <label class="block font-semibold text-slate-300 mb-1">Attached Macro Recipe</label>
+          <select id="modalAutoMacroSelect" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 text-xs focus:border-cyan-500 focus:outline-none"></select>
+        </div>
+
+        <div>
+          <label class="block font-semibold text-slate-300 mb-1">Schedule Trigger Mode</label>
+          <div class="grid grid-cols-3 gap-2">
+            <button type="button" class="sched-type-btn active p-2 rounded-lg bg-slate-900 border border-cyan-500/40 text-cyan-300 text-center font-medium" data-type="CRON">
+              CRON Pattern
+            </button>
+            <button type="button" class="sched-type-btn p-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 text-center font-medium" data-type="INTERVAL">
+              Interval Loop
+            </button>
+            <button type="button" class="sched-type-btn p-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 text-center font-medium" data-type="ONE_SHOT">
+              One-Shot Timer
+            </button>
+          </div>
+        </div>
+
+        <div id="modalScheduleInputContainer" class="p-3 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2"></div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block font-semibold text-slate-300 mb-1">Target Device</label>
+            <select id="modalAutoTarget" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 text-xs focus:border-cyan-500 focus:outline-none">
+              <option value="CLOUD">Cloud (Auto / Edge)</option>
+              <option value="DESKTOP">Desktop Workstation</option>
+              <option value="MOBILE">Mobile Termux</option>
+              <option value="ALL">All Fleet Devices</option>
+            </select>
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-300 mb-1">Alerts</label>
+            <label class="flex items-center gap-2 p-2 rounded-lg bg-slate-950 border border-slate-800 cursor-pointer select-none mt-0.5">
+              <input type="checkbox" id="modalAutoChime" checked class="rounded border-slate-700 bg-slate-900 text-cyan-500 focus:ring-0">
+              <span class="text-slate-300">Notification &bull; Chime</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+        <button id="cancelAutomationModalBtn" class="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium">Cancel</button>
+        <button id="saveAutomationModalBtn" class="px-5 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold">Save Automation</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST CONTAINER -->
+  <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+  <script src="macros.js"></script>
+</body>
+</html>

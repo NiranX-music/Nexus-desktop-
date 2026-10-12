@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Kinematics Master Formula Sheet — Nexus AI</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body, {delimiters: [{left: '$$', right: '$$', display: true}, {left: '$', right: '$', display: false}]});"></script>
+  <style>
+    @page { margin: 15mm; size: A4 portrait; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #0f172a;
+      background: #ffffff;
+      line-height: 1.5;
+      font-size: 13px;
+      margin: 0;
+      padding: 0;
+    }
+    .header {
+      border-bottom: 2px solid #10b981;
+      padding-bottom: 12px;
+      margin-bottom: 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+    }
+    .title {
+      font-size: 24px;
+      font-weight: 800;
+      color: #020617;
+      margin: 0;
+      letter-spacing: -0.5px;
+    }
+    .badge {
+      background: #10b981;
+      color: white;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    .card {
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      background: #f8fafc;
+      padding: 14px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+      break-inside: avoid;
+    }
+    .card-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #047857;
+      border-bottom: 1px solid #cbd5e1;
+      padding-bottom: 4px;
+      margin-top: 0;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .formula-row {
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+    .label {
+      font-weight: 600;
+      color: #475569;
+      font-size: 11.5px;
+    }
+    .eq {
+      color: #0f172a;
+      font-size: 13px;
+    }
+    .full-width {
+      grid-column: span 2;
+    }
+    .footer {
+      margin-top: 20px;
+      border-top: 1px solid #e2e8f0;
+      padding-top: 8px;
+      font-size: 10px;
+      color: #94a3b8;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <h1 class="title">⚡ Kinematics Formula Sheet</h1>
+      <div style="font-size: 12px; color: #64748b; margin-top: 4px;">Physics • Class 11 / JEE Main & Advanced / NEET</div>
+    </div>
+    <div class="badge">Nexus AI Verified</div>
+  </div>
+
+  <div class="grid">
+    <!-- 1D Motion -->
+    <div class="card">
+      <h2 class="card-title">1. Motion in a Straight Line (1D)</h2>
+      <div class="formula-row"><span class="label">1st Equation:</span><span class="eq">$v = u + at$</span></div>
+      <div class="formula-row"><span class="label">2nd Equation:</span><span class="eq">$s = ut + \frac{1}{2}at^2$</span></div>
+      <div class="formula-row"><span class="label">3rd Equation:</span><span class="eq">$v^2 = u^2 + 2as$</span></div>
+      <div class="formula-row"><span class="label">Dist. in $n^{\text{th}}$ sec:</span><span class="eq">$s_n = u + \frac{a}{2}(2n - 1)$</span></div>
+      <div class="formula-row"><span class="label">Average Velocity:</span><span class="eq">$v_{\text{avg}} = \frac{u + v}{2} = \frac{\Delta x}{\Delta t}$</span></div>
+      <div class="formula-row"><span class="label">Displacement:</span><span class="eq">$s = \left(\frac{u+v}{2}\right)t$</span></div>
+    </div>
+
+    <!-- Motion Under Gravity -->
+    <div class="card">
+      <h2 class="card-title">2. Free Fall & Vertical Motion ($g$)</h2>
+      <div class="formula-row"><span class="label">Max Height ($u$ upwards):</span><span class="eq">$H = \frac{u^2}{2g}$</span></div>
+      <div class="formula-row"><span class="label">Time of Ascent:</span><span class="eq">$t_a = \frac{u}{g}$</span></div>
+      <div class="formula-row"><span class="label">Total Flight Time:</span><span class="eq">$T = \frac{2u}{g}$</span></div>
+      <div class="formula-row"><span class="label">Velocity at Ground ($h$):</span><span class="eq">$v = \sqrt{2gh}$</span></div>
+      <div class="formula-row"><span class="label">Drop from Rest ($t$):</span><span class="eq">$h = \frac{1}{2}gt^2$</span></div>
+      <div class="formula-row"><span class="label">Galileo's Odd Ratio:</span><span class="eq">$1 : 3 : 5 : 7 : \dots$</span></div>
+    </div>
+
+    <!-- Projectile Motion -->
+    <div class="card full-width">
+      <h2 class="card-title">3. Oblique Projectile Motion (Angle $\theta$ with Horizon)</h2>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+        <div>
+          <div class="formula-row"><span class="label">Time of Flight:</span><span class="eq">$T = \frac{2u\sin\theta}{g} = \frac{2u_y}{g}$</span></div>
+          <div class="formula-row"><span class="label">Maximum Height:</span><span class="eq">$H_{\text{max}} = \frac{u^2\sin^2\theta}{2g} = \frac{u_y^2}{2g}$</span></div>
+          <div class="formula-row"><span class="label">Horizontal Range:</span><span class="eq">$R = \frac{u^2\sin 2\theta}{g} = \frac{2u_x u_y}{g}$</span></div>
+          <div class="formula-row"><span class="label">Max Range ($\theta = 45^\circ$):</span><span class="eq">$R_{\text{max}} = \frac{u^2}{g} = 4 H_{\text{max}}$</span></div>
+        </div>
+        <div>
+          <div class="formula-row"><span class="label">Trajectory Equation:</span><span class="eq">$y = x\tan\theta - \frac{g x^2}{2u^2\cos^2\theta}$</span></div>
+          <div class="formula-row"><span class="label">Range Form:</span><span class="eq">$y = x\tan\theta \left(1 - \frac{x}{R}\right)$</span></div>
+          <div class="formula-row"><span class="label">Velocity at time $t$:</span><span class="eq">$\vec{v} = (u\cos\theta)\hat{i} + (u\sin\theta - gt)\hat{j}$</span></div>
+          <div class="formula-row"><span class="label">Speed at height $h$:</span><span class="eq">$v = \sqrt{u^2 - 2gh}$</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Relative Motion -->
+    <div class="card">
+      <h2 class="card-title">4. Relative Velocity & Vectors</h2>
+      <div class="formula-row"><span class="label">Relative Velocity:</span><span class="eq">$\vec{v}_{A/B} = \vec{v}_A - \vec{v}_B$</span></div>
+      <div class="formula-row"><span class="label">Relative Accel.:</span><span class="eq">$\vec{a}_{A/B} = \vec{a}_A - \vec{a}_B$</span></div>
+      <div class="formula-row"><span class="label">River (Shortest Time):</span><span class="eq">$t_{\text{min}} = \frac{d}{v_{br}}$ (at $90^\circ$)</span></div>
+      <div class="formula-row"><span class="label">River (Zero Drift):</span><span class="eq">$\sin\theta = \frac{v_r}{v_{br}}$ ($v_{br} > v_r$)</span></div>
+      <div class="formula-row"><span class="label">Rain-Man Problem:</span><span class="eq">$\vec{v}_{rm} = \vec{v}_r - \vec{v}_m$</span></div>
+    </div>
+
+    <!-- Circular Motion -->
+    <div class="card">
+      <h2 class="card-title">5. Circular Motion Kinematics</h2>
+      <div class="formula-row"><span class="label">Angular Velocity:</span><span class="eq">$\omega = \frac{d\theta}{dt} = \frac{v}{r}$</span></div>
+      <div class="formula-row"><span class="label">Angular Accel.:</span><span class="eq">$\alpha = \frac{d\omega}{dt} = \frac{a_t}{r}$</span></div>
+      <div class="formula-row"><span class="label">Centripetal Accel.:</span><span class="eq">$a_c = \frac{v^2}{r} = \omega^2 r$</span></div>
+      <div class="formula-row"><span class="label">Tangential Accel.:</span><span class="eq">$a_t = \frac{dv}{dt} = \alpha r$</span></div>
+      <div class="formula-row"><span class="label">Net Acceleration:</span><span class="eq">$a_{\text{net}} = \sqrt{a_c^2 + a_t^2}$</span></div>
+      <div class="formula-row"><span class="label">Rotational Eq.:</span><span class="eq">$\omega = \omega_0 + \alpha t$</span></div>
+    </div>
+  </div>
+
+  <div class="footer">
+    Compiled by Nexus AI Engine • Resolute Nexus System • Formatted for instant revision
+  </div>
+</body>
+</html>

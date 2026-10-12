@@ -70,6 +70,8 @@ const state = {
   tasks: [],
   devices: [],
   expandedTaskId: null,
+  isAgentSpeaking: false,
+  activeSpeechUtterance: null,
 };
 
 // -----------------------------------------------------------------------------
@@ -401,7 +403,16 @@ function escapeHtml(str) {
 // -----------------------------------------------------------------------------
 async function startAudioRecording() {
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const savedMic = localStorage.getItem("nexus_audio_input_device_id");
+    const audioConstraints = savedMic && savedMic !== "default"
+      ? { deviceId: { ideal: savedMic } }
+      : true;
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+    } catch {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    }
     state.audioChunks = [];
     state.isRecording = true;
 
@@ -568,8 +579,83 @@ function getEnabledEngines() {
   return eng;
 }
 
+const INTERRUPTION_REGEX = /\b(wait(\s+(a\s+)?(second|minute|moment|sec|min))?|listen(\s+(to\s+)?me|\s+here)?|hear\s+me(\s+out)?|stop(\s+(talking|speaking|it|now))?|hold\s+(on|up)|hang\s+on|pause|quiet|shut\s*up|be\s+quiet|silence|cancel|halt)\b/i;
+
+function checkInterruptionIntent(text) {
+  if (!text || typeof text !== "string") return false;
+  return INTERRUPTION_REGEX.test(text);
+}
+
+function stopAgentSpeaking(reason = "user interruption") {
+  if ("speechSynthesis" in window) {
+    window.speechSynthesis.cancel();
+  }
+  state.isAgentSpeaking = false;
+  state.activeSpeechUtterance = null;
+  logToTerminal(`[Speech] AI speaking halted (${reason})`, "info");
+  showToast("AI Agent speech paused by user command", "info");
+}
+
+function speakVoiceResponse(rawText) {
+  if (!("speechSynthesis" in window) || !rawText) return;
+
+  // Clean formatting for spoken voice
+  let text = String(rawText)
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/```[\s\S]*?```/g, " Code snippet generated. ")
+    .replace(/#+\s*/g, "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, "")
+    .trim();
+
+  if (!text) return;
+
+  window.speechSynthesis.cancel();
+  state.isAgentSpeaking = true;
+
+  // Split into sentences to prevent browser speechSynthesis from stalling on long responses (>15s)
+  const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [text];
+  let idx = 0;
+
+  function speakNext() {
+    if (!state.isAgentSpeaking || idx >= sentences.length) {
+      state.isAgentSpeaking = false;
+      return;
+    }
+    const chunk = sentences[idx++].trim();
+    if (!chunk) {
+      speakNext();
+      return;
+    }
+
+    const utt = new SpeechSynthesisUtterance(chunk);
+    utt.rate = 1.05;
+    utt.pitch = 1.0;
+
+    const voices = window.speechSynthesis.getVoices();
+    const naturalVoice = voices.find(v => (v.name.includes("Natural") || v.name.includes("Online") || v.name.includes("Google") || v.name.includes("Aria") || v.name.includes("Jenny")) && v.lang.startsWith("en")) || voices.find(v => v.lang.startsWith("en"));
+    if (naturalVoice) utt.voice = naturalVoice;
+
+    utt.onend = () => {
+      speakNext();
+    };
+    utt.onerror = (e) => {
+      console.warn("Speech synthesis chunk error:", e);
+      speakNext();
+    };
+
+    state.activeSpeechUtterance = utt;
+    window.speechSynthesis.speak(utt);
+  }
+
+  speakNext();
+}
+
 async function handleAudioTranscription(audioBlob) {
   showToast("Transcribing audio...", "info");
+  let transcribedText = "";
 
   // 1. Try Client / Developer Mode AI if configured
   if (DEV_CONFIG.enabled && DEV_CONFIG.provider !== "edge") {
@@ -577,9 +663,7 @@ async function handleAudioTranscription(audioBlob) {
       const client = buildClientAI();
       const res = await client.transcribeAudio(audioBlob, { mimeType: audioBlob.type || "audio/webm" });
       if (res && res.text) {
-        document.getElementById("commandInput").value = res.text;
-        showToast(`Transcribed via ${res.provider || client.name}: "${res.text}"`, "success");
-        return;
+        transcribedText = res.text.trim();
       }
     } catch (e) {
       console.warn("Client transcription failed, falling back to edge:", e);
@@ -587,39 +671,61 @@ async function handleAudioTranscription(audioBlob) {
   }
 
   // 2. Try Edge API (Workers AI Whisper Large v3 Turbo, free tier)
-  try {
-    const edge = new EdgeAdapter({ apiUrl: CONFIG.apiUrl, authToken: CONFIG.authToken });
-    const res = await edge.transcribeAudio(audioBlob, { mimeType: audioBlob.type || "audio/webm" });
-    if (res && res.text) {
-      document.getElementById("commandInput").value = res.text;
-      showToast(`Transcribed via Workers AI: "${res.text}"`, "success");
-      return;
+  if (!transcribedText) {
+    try {
+      const edge = new EdgeAdapter({ apiUrl: CONFIG.apiUrl, authToken: CONFIG.authToken });
+      const res = await edge.transcribeAudio(audioBlob, { mimeType: audioBlob.type || "audio/webm" });
+      if (res && res.text) {
+        transcribedText = res.text.trim();
+      }
+    } catch (e) {
+      console.warn("Workers AI transcription failed, trying Modal fallback:", e);
     }
-  } catch (e) {
-    console.warn("Workers AI transcription failed, trying Modal fallback:", e);
   }
 
   // 3. Fallback: Modal GPU (Whisper)
-  const modalEndpoint = CONFIG.modalUrl.replace(/\/+$/, "");
-  if (modalEndpoint) {
-    try {
-      const formData = new FormData();
-      formData.append("file", audioBlob, "command.webm");
-      const resp = await fetch(`${modalEndpoint}/transcribe`, { method: "POST", body: formData });
-      if (resp.ok) {
-        const data = await resp.json();
-        if (data.text) {
-          document.getElementById("commandInput").value = data.text;
-          showToast(`Transcribed on Modal: "${data.text}"`, "success");
-          return;
+  if (!transcribedText) {
+    const modalEndpoint = CONFIG.modalUrl.replace(/\/+$/, "");
+    if (modalEndpoint) {
+      try {
+        const formData = new FormData();
+        formData.append("file", audioBlob, "command.webm");
+        const resp = await fetch(`${modalEndpoint}/transcribe`, { method: "POST", body: formData });
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.text) {
+            transcribedText = data.text.trim();
+          }
         }
+      } catch (e) {
+        console.warn("Modal transcription failed:", e);
       }
-    } catch (e) {
-      console.warn("Modal transcription failed:", e);
     }
   }
 
-  // 4. Fallback: Upload to R2 and populate
+  // 4. Disturbance & Interruption Evaluation
+  if (transcribedText) {
+    // If agent is currently speaking, evaluate if user intentionally asked to wait / listen / stop
+    if (state.isAgentSpeaking) {
+      if (checkInterruptionIntent(transcribedText)) {
+        stopAgentSpeaking(`User commanded: "${transcribedText}"`);
+        document.getElementById("commandInput").value = transcribedText;
+        return;
+      } else {
+        // Ambient noise or non-interruption speech: DO NOT CLOSE, CONTINUE SPEAKING
+        logToTerminal(`[Voice Monitor] Ambient disturbance / background speech ('${transcribedText}'). Ignored. Agent continues speaking uninterrupted.`, "info");
+        return;
+      }
+    }
+
+    // Normal command population
+    document.getElementById("commandInput").value = transcribedText;
+    showToast(`Transcribed: "${transcribedText}"`, "success");
+    logToTerminal(`[Voice Input] "${transcribedText}"`, "cmd");
+    return;
+  }
+
+  // 5. Fallback: Upload to R2 and populate
   try {
     const uploadRes = await fetch(`${CONFIG.apiUrl}/upload?filename=voice-${Date.now()}.webm`, {
       method: "POST",
@@ -810,6 +916,8 @@ function setupEventListeners() {
   document.getElementById("openSettingsBtn").addEventListener("click", () => {
     modal.classList.remove("hidden");
     modal.classList.add("flex");
+    loadConfigToModal();
+    populateMediaDevicesUI();
   });
   document.getElementById("closeSettingsBtn").addEventListener("click", () => {
     modal.classList.add("hidden");
@@ -817,6 +925,25 @@ function setupEventListeners() {
   });
   document.getElementById("saveSettingsBtn").addEventListener("click", saveSettings);
   document.getElementById("resetSettingsBtn").addEventListener("click", resetSettings);
+
+  const refreshDevBtn = document.getElementById("refreshMediaDevicesBtn");
+  if (refreshDevBtn) {
+    refreshDevBtn.addEventListener("click", async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true }).catch(() => null);
+        if (stream) stream.getTracks().forEach((t) => t.stop());
+      } catch {}
+      populateMediaDevicesUI();
+      showToast("Scanned audio and video devices", "info");
+    });
+  }
+
+  const testAudioBtn = document.getElementById("testAudioOutputBtn");
+  if (testAudioBtn) {
+    testAudioBtn.addEventListener("click", () => {
+      testWebAudioChime();
+    });
+  }
 
   // Master Account Profile Modal
   const accountModal = document.getElementById("accountModal");
@@ -924,9 +1051,16 @@ async function handleDispatchTask() {
         showToast("Cloud Task Completed (Account: NiranX)", "success");
         logToTerminal(`[Cloud Edge] COMPLETED (ID: ${tId})`, "success");
         logToTerminal(`Output: ${typeof out === "object" ? JSON.stringify(out, null, 2) : out}`, "info");
+        if (state.activeCommandType === "VOICE_PROMPT") {
+          const speakTxt = typeof out === "object" ? (out.summary || out.message || out.output || JSON.stringify(out)) : out;
+          speakVoiceResponse(speakTxt);
+        }
       } else {
         showToast(`Task assigned to ${tgt}`, "success");
         logToTerminal(`[Dispatch] Task queued for ${tgt} (ID: ${tId}): "${promptText}"`, "cmd");
+        if (state.activeCommandType === "VOICE_PROMPT") {
+          speakVoiceResponse(`Task assigned to ${tgt}. Executing command.`);
+        }
       }
 
       if (clientPlan) {
@@ -1060,11 +1194,84 @@ function saveSettings() {
 
   localStorage.setItem("nexus_dev_settings", JSON.stringify(DEV_CONFIG));
 
+  // Save selected Media Devices
+  const selectedMic = document.getElementById("cfgAudioInputDevice")?.value || "default";
+  const selectedSpk = document.getElementById("cfgAudioOutputDevice")?.value || "default";
+  const selectedCam = document.getElementById("cfgVideoInputDevice")?.value || "default";
+  localStorage.setItem("nexus_audio_input_device_id", selectedMic);
+  localStorage.setItem("nexus_audio_output_device_id", selectedSpk);
+  localStorage.setItem("nexus_video_input_device_id", selectedCam);
+
   document.getElementById("settingsModal").classList.add("hidden");
   document.getElementById("settingsModal").classList.remove("flex");
 
-  showToast("Settings & Developer Mode saved", "success");
+  showToast("Settings & Device Routing saved", "success");
   startLivePolling();
+}
+
+async function populateMediaDevicesUI() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const micSelect = document.getElementById("cfgAudioInputDevice");
+    const spkSelect = document.getElementById("cfgAudioOutputDevice");
+    const camSelect = document.getElementById("cfgVideoInputDevice");
+
+    if (!micSelect || !spkSelect || !camSelect) return;
+
+    const savedMic = localStorage.getItem("nexus_audio_input_device_id") || "default";
+    const savedSpk = localStorage.getItem("nexus_audio_output_device_id") || "default";
+    const savedCam = localStorage.getItem("nexus_video_input_device_id") || "default";
+
+    micSelect.innerHTML = '<option value="default">Default Microphone</option>';
+    spkSelect.innerHTML = '<option value="default">Default Speaker</option>';
+    camSelect.innerHTML = '<option value="default">Default Camera</option>';
+
+    let micIndex = 1, spkIndex = 1, camIndex = 1;
+    devices.forEach((d) => {
+      const opt = document.createElement("option");
+      opt.value = d.deviceId;
+      if (d.kind === "audioinput") {
+        opt.textContent = d.label || `Microphone ${micIndex++}`;
+        if (d.deviceId === savedMic) opt.selected = true;
+        micSelect.appendChild(opt);
+      } else if (d.kind === "audiooutput") {
+        opt.textContent = d.label || `Speaker ${spkIndex++}`;
+        if (d.deviceId === savedSpk) opt.selected = true;
+        spkSelect.appendChild(opt);
+      } else if (d.kind === "videoinput") {
+        opt.textContent = d.label || `Camera ${camIndex++}`;
+        if (d.deviceId === savedCam) opt.selected = true;
+        camSelect.appendChild(opt);
+      }
+    });
+  } catch (e) {
+    console.warn("Failed to enumerate media devices:", e);
+  }
+}
+
+async function testWebAudioChime() {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+  const ctx = new AudioContextClass();
+  const selectedSpk = localStorage.getItem("nexus_audio_output_device_id");
+  if (selectedSpk && selectedSpk !== "default" && typeof ctx.setSinkId === "function") {
+    try { await ctx.setSinkId(selectedSpk); } catch {}
+  }
+  const now = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.01, now);
+  gain.gain.exponentialRampToValueAtTime(0.3, now + 0.05);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(587.33, now); // D5
+  osc.frequency.setValueAtTime(880.00, now + 0.15); // A5
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(now);
+  osc.stop(now + 0.45);
+  setTimeout(() => ctx.close().catch(() => {}), 500);
 }
 
 function resetSettings() {
@@ -1073,6 +1280,9 @@ function resetSettings() {
   localStorage.removeItem("nexus_auth_token");
   localStorage.removeItem("nexus_poll_interval");
   localStorage.removeItem("nexus_dev_settings");
+  localStorage.removeItem("nexus_audio_input_device_id");
+  localStorage.removeItem("nexus_audio_output_device_id");
+  localStorage.removeItem("nexus_video_input_device_id");
 
   CONFIG.apiUrl = "/api";
   CONFIG.modalUrl = "https://barhateniranjan725--nexus-ai-core-nexusaicore-fastapi-app.modal.run";
@@ -1090,6 +1300,7 @@ function resetSettings() {
   };
 
   loadConfigToModal();
+  populateMediaDevicesUI();
   showToast("Settings reset", "info");
 }
 

@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+  <title>Nexus Macros & Timely Automations — Official Documentation & Guide</title>
+  
+  <meta name="description" content="Official documentation, guide, and API reference for Nexus Macros and Timely Automations. Build autonomous, cross-device workflows across Cloudflare Edge, Win32 Desktop, and Android Termux.">
+  <meta name="keywords" content="Nexus Macros, Timely Automations, Cron Scheduler, Autonomous AI Workflows, Cloudflare Workers, Cross-Device Matrix">
+  <meta name="author" content="Nexdune / Nexus Architecture">
+  
+  <!-- Open Graph -->
+  <meta property="og:title" content="Nexus Macros & Timely Automations — Documentation & Guide">
+  <meta property="og:description" content="Comprehensive manual for building autonomous multi-step macros, timely crons, interval schedulers, and cross-device actions.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://niranx-music.github.io/Nexus-desktop-/">
+  
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <link rel="stylesheet" href="style.css">
+  
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Plus Jakarta Sans', 'Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            brand: {
+              400: '#34d399',
+              500: '#10b981',
+              600: '#059669',
+            },
+            nexus: {
+              bg: '#03050c',
+              surface: '#0c111e',
+              card: '#111827',
+              border: 'rgba(255, 255, 255, 0.08)',
+              accent: '#06b6d4',
+            }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-[#03050c] text-slate-100 min-h-screen font-sans selection:bg-emerald-500 selection:text-black">
+
+  <!-- TOP HEADER -->
+  <header class="sticky top-0 z-50 backdrop-blur-xl bg-[#03050c]/85 border-b border-white/10 px-4 lg:px-8 py-3 transition-all">
+    <div class="max-w-7xl mx-auto flex items-center justify-between gap-4">
+      
+      <!-- Brand & Version -->
+      <div class="flex items-center gap-3">
+        <a href="#hero" class="flex items-center gap-3 group">
+          <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-500 via-cyan-500 to-indigo-600 p-[1.5px] shadow-lg shadow-emerald-500/20 group-hover:scale-105 transition-transform">
+            <div class="w-full h-full bg-[#03050c] rounded-[10px] flex items-center justify-center">
+              <i data-lucide="zap" class="w-4 h-4 text-emerald-400"></i>
+            </div>
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="font-bold text-sm sm:text-base tracking-tight bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
+                Nexus Macros
+              </span>
+              <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                v4.2 Docs
+              </span>
+            </div>
+            <p class="text-[11px] text-slate-400 hidden sm:block">Automations &bull; Timely Schedulers &bull; Cross-Device Matrix</p>
+          </div>
+        </a>
+      </div>
+
+      <!-- Search Bar -->
+      <div class="flex-1 max-w-md hidden md:block">
+        <div class="relative">
+          <i data-lucide="search" class="w-4 h-4 text-slate-400 absolute left-3 top-2.5"></i>
+          <input 
+            type="text" 
+            id="docsSearchInput" 
+            placeholder="Search docs, crons, actions, dynamic tokens..." 
+            class="w-full bg-slate-900/80 border border-white/10 rounded-xl pl-9 pr-4 py-2 text-xs font-mono text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500/80 focus:ring-1 focus:ring-emerald-500/50 transition-all"
+          >
+          <span class="absolute right-3 top-2 text-[10px] font-mono text-slate-500 bg-slate-800/80 px-1.5 py-0.5 rounded border border-white/5">ESC</span>
+        </div>
+      </div>
+
+      <!-- Quick Actions / Links -->
+      <div class="flex items-center gap-3">
+        <a 
+          href="https://ecosystem-landing.pages.dev/macros.html" 
+          target="_blank" 
+          rel="noopener" 
+          class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 text-xs font-semibold shadow-lg shadow-emerald-500/20 active:scale-95 transition-all"
+        >
+          <i data-lucide="play" class="w-3.5 h-3.5"></i>
+          <span class="hidden sm:inline">Launch Macro Studio</span>
+          <span class="sm:hidden">App</span>
+        </a>
+
+        <a 
+          href="https://github.com/NiranX-music/Nexus-desktop-" 
+          target="_blank" 
+          rel="noopener" 
+          class="p-2 rounded-xl bg-slate-900 border border-white/10 hover:border-white/20 text-slate-300 hover:text-white transition-colors"
+          title="GitHub Repository"
+        >
+          <i data-lucide="github" class="w-4 h-4"></i>
+        </a>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- MAIN LAYOUT -->
+  <div class="max-w-7xl mx-auto px-4 lg:px-8 py-8 flex gap-8 relative">
+    
+    <!-- LEFT SIDEBAR NAVIGATION -->
+    <aside class="w-64 shrink-0 hidden lg:block sticky top-20 h-[calc(100vh-6rem)] overflow-y-auto pr-3 space-y-6 text-xs custom-scrollbar">
+      
+      <div>
+        <h4 class="font-bold text-slate-400 uppercase tracking-wider text-[11px] mb-2.5 flex items-center gap-1.5">
+          <i data-lucide="book-open" class="w-3.5 h-3.5 text-emerald-400"></i> Getting Started
+        </h4>
+        <ul class="space-y-1 font-medium">
+          <li><a href="#overview" class="docs-nav-link active flex items-center justify-between px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5">Overview & Architecture</a></li>
+          <li><a href="#quickstart" class="docs-nav-link flex items-center justify-between px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5">60-Second Quickstart</a></li>
+          <li><a href="#cross-device" class="docs-nav-link flex items-center justify-between px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5">Cross-Device Matrix</a></li>
+        </ul>
+      </div>
+
+      <div>
+        <h4 class="font-bold text-slate-400 uppercase tracking-wider text-[11px] mb-2.5 flex items-center gap-1.5">
+          <i data-lucide="clock" class="w-3.5 h-3.5 text-cyan-400"></i> Timely Automations
+        </h4>
+        <ul class="space-y-1 font-medium">
+          <li><a href="#timely-engine" class="docs-nav-link flex items-center justify-between px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5">Scheduler Engine Core</a></li>
+          <li><a href="#cron-syntax" class="docs-nav-link flex items-center justify-between px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5">Cron Patterns & Syntax</a></li>
+          <li><a href="#interval-timers" class="docs-nav-link flex items-center justify-between px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5">Intervals & Countdown</a></li>
+          <li><a href="#interactive-cron" class="docs-nav-link flex items-center justify-between px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5">Interactive Calculator <span class="text-[9px] bg-cyan-500/20 text-cyan-300 px-1 rounded">LIVE</span></a></li>
+        </ul>
+      </div>
+
+      <div>
+        <h4 class="font-bold text-slate-400 uppercase tracking-wider text-[11px] mb-2.5 flex items-center gap-1.5">
+          <i data-lucide="sliders" class="w-3.5 h-3.5 text-purple-400"></i> Triggers & Actions
+        </h4>
+        <ul class="space-y-1 font-medium">
+          <li><a href="#triggers-catalog" class="docs-nav-link flex items-center justify-between px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5">Triggers Specification</a></li>
+          <li><a href="#actions-catalog" class="docs-nav-link flex items-center justify-between px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5">Action Steps Catalog</a></li>
+          <li><a href="#dynamic-tokens" class="docs-nav-link flex items-center justify-between px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5">Dynamic Tokens & Variables</a></li>
+        </ul>
+      </div>
+
+      <div>
+        <h4 class="font-bold text-slate-400 uppercase tracking-wider text-[11px] mb-2.5 flex items-center gap-1.5">
+          <i data-lucide="code" class="w-3.5 h-3.5 text-amber-400"></i> API & Recipes
+        </h4>
+        <ul class="space-y-1 font-medium">
+          <li><a href="#api-webhook" class="docs-nav-link flex items-center justify-between px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5">REST API & Webhooks</a></li>
+          <li><a href="#recipe-library" class="docs-nav-link flex items-center justify-between px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5">Pre-built Recipe Library</a></li>
+          <li><a href="#json-validator" class="docs-nav-link flex items-center justify-between px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5">Macro JSON Validator</a></li>
+          <li><a href="#troubleshooting" class="docs-nav-link flex items-center justify-between px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5">FAQ & Diagnostics</a></li>
+        </ul>
+      </div>
+
+    </aside>
+
+    <!-- MAIN CONTENT BODY -->
+    <main class="flex-1 min-w-0 space-y-14">
+      
+      <!-- HERO SECTION -->
+      <section id="hero" class="space-y-4 pt-2">
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-mono">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+          <span>Nexus Autonomous Execution Standard</span>
+        </div>
+        <h1 class="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-white">
+          Nexus Macros &amp; Timely Automations Guide
+        </h1>
+        <p class="text-slate-400 text-sm sm:text-base leading-relaxed max-w-3xl">
+          A unified, cross-device automation and macro execution engine connecting 
+          <strong>Cloudflare Edge Workers</strong>, <strong>Windows Win32 Desktop</strong>, and 
+          <strong>Android Termux</strong> with cron scheduling, interval countdowns, and dynamic AI execution.
+        </p>
+
+        <!-- Live Route Pills -->
+        <div class="flex flex-wrap items-center gap-2.5 pt-2">
+          <span class="text-xs text-slate-400 font-mono">Dedicated Guide Portals:</span>
+          <a href="./nexusai/marco/docs/" class="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-xs font-mono transition-all">
+            <i data-lucide="zap" class="w-3.5 h-3.5"></i>
+            <span>/nexusai/marco/docs</span>
+          </a>
+          <a href="./nexusai/macro/docs/" class="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 text-xs font-mono transition-all">
+            <i data-lucide="clock" class="w-3.5 h-3.5"></i>
+            <span>/nexusai/macro/docs</span>
+          </a>
+        </div>
+
+        <!-- Hero Stats Cards -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-4 font-mono text-xs">
+          <div class="p-3 rounded-xl bg-slate-900/60 border border-white/10">
+            <div class="text-slate-400 text-[10px] uppercase">Supported Triggers</div>
+            <div class="text-base font-bold text-white mt-1">7 Types</div>
+            <div class="text-[10px] text-emerald-400">Cron, Timer, Event, API</div>
+          </div>
+          <div class="p-3 rounded-xl bg-slate-900/60 border border-white/10">
+            <div class="text-slate-400 text-[10px] uppercase">Execution Targets</div>
+            <div class="text-base font-bold text-white mt-1">3 Platforms</div>
+            <div class="text-[10px] text-cyan-400">Cloud &bull; PC &bull; Mobile</div>
+          </div>
+          <div class="p-3 rounded-xl bg-slate-900/60 border border-white/10">
+            <div class="text-slate-400 text-[10px] uppercase">Zero Card Tier</div>
+            <div class="text-base font-bold text-white mt-1">100% Free</div>
+            <div class="text-[10px] text-purple-400">D1 SQLite + KV + Edge</div>
+          </div>
+          <div class="p-3 rounded-xl bg-slate-900/60 border border-white/10">
+            <div class="text-slate-400 text-[10px] uppercase">AI Orchestrator</div>
+            <div class="text-base font-bold text-white mt-1">Gemini 3.8</div>
+            <div class="text-[10px] text-amber-400">Autonomous Reasoner</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION: OVERVIEW & ARCHITECTURE -->
+      <section id="overview" class="space-y-5 scroll-mt-24 border-t border-white/10 pt-8">
+        <div class="flex items-center gap-2">
+          <span class="p-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+            <i data-lucide="layers" class="w-4 h-4"></i>
+          </span>
+          <h2 class="text-xl sm:text-2xl font-bold text-white tracking-tight">Overview &amp; Architecture</h2>
+        </div>
+
+        <p class="text-slate-300 text-xs sm:text-sm leading-relaxed">
+          A <strong>Nexus Macro</strong> is a deterministic, multi-step pipeline that chains together AI reasoning, operating system commands, desktop automation, mobile actions, and Cloudflare edge functions into a single autonomous unit.
+        </p>
+
+        <!-- Architecture Flow Diagram Card -->
+        <div class="p-5 rounded-2xl bg-slate-950/80 border border-white/10 space-y-4">
+          <div class="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center justify-between">
+            <span>Macro Execution Flow Topology</span>
+            <span class="font-mono text-[10px] text-emerald-400">EVENT_LOOP // V4.2</span>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs font-mono">
+            <div class="p-3 rounded-xl bg-slate-900/90 border border-cyan-500/30">
+              <div class="text-cyan-400 font-bold mb-1 flex items-center gap-1.5">
+                <i data-lucide="bell" class="w-3.5 h-3.5"></i> 1. Triggers
+              </div>
+              <ul class="text-[11px] text-slate-300 space-y-1">
+                <li>&bull; Cron schedule</li>
+                <li>&bull; Interval timer</li>
+                <li>&bull; Hotkey shortcut</li>
+                <li>&bull; HTTP Webhook</li>
+                <li>&bull; Battery / Device event</li>
+              </ul>
+            </div>
+
+            <div class="p-3 rounded-xl bg-slate-900/90 border border-purple-500/30">
+              <div class="text-purple-400 font-bold mb-1 flex items-center gap-1.5">
+                <i data-lucide="cpu" class="w-3.5 h-3.5"></i> 2. Edge / Planner
+              </div>
+              <ul class="text-[11px] text-slate-300 space-y-1">
+                <li>&bull; Variable interpolation</li>
+                <li>&bull; Condition check</li>
+                <li>&bull; Gemini 3.8 reasoning</li>
+                <li>&bull; D1 task registration</li>
+                <li>&bull; Zero-Card dispatch</li>
+              </ul>
+            </div>
+
+            <div class="p-3 rounded-xl bg-slate-900/90 border border-emerald-500/30">
+              <div class="text-emerald-400 font-bold mb-1 flex items-center gap-1.5">
+                <i data-lucide="terminal" class="w-3.5 h-3.5"></i> 3. Device Execution
+              </div>
+              <ul class="text-[11px] text-slate-300 space-y-1">
+                <li>&bull; <strong>Cloud</strong>: V8 Worker / AI</li>
+                <li>&bull; <strong>Desktop</strong>: Win32, Shell</li>
+                <li>&bull; <strong>Mobile</strong>: Termux Intent</li>
+                <li>&bull; <strong>Web</strong>: Notification</li>
+              </ul>
+            </div>
+
+            <div class="p-3 rounded-xl bg-slate-900/90 border border-amber-500/30">
+              <div class="text-amber-400 font-bold mb-1 flex items-center gap-1.5">
+                <i data-lucide="check-circle" class="w-3.5 h-3.5"></i> 4. Telemetry &amp; Sync
+              </div>
+              <ul class="text-[11px] text-slate-300 space-y-1">
+                <li>&bull; D1 Telemetry Log</li>
+                <li>&bull; SSE Live Broadcast</li>
+                <li>&bull; Failure retry policy</li>
+                <li>&bull; Next run calculation</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION: 60-SECOND QUICKSTART -->
+      <section id="quickstart" class="space-y-5 scroll-mt-24 border-t border-white/10 pt-8">
+        <div class="flex items-center gap-2">
+          <span class="p-1 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+            <i data-lucide="play" class="w-4 h-4"></i>
+          </span>
+          <h2 class="text-xl sm:text-2xl font-bold text-white tracking-tight">60-Second Quickstart</h2>
+        </div>
+
+        <p class="text-slate-300 text-xs sm:text-sm">
+          Here is how to define, register, and trigger a simple macro with timely execution in under one minute:
+        </p>
+
+        <!-- Code Snippet Box -->
+        <div class="rounded-2xl bg-slate-950 border border-white/10 overflow-hidden font-mono text-xs">
+          <div class="flex items-center justify-between px-4 py-2.5 bg-slate-900 border-b border-white/10">
+            <span class="text-slate-400 text-[11px]">quickstart-macro.json</span>
+            <button class="copy-code-btn px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] flex items-center gap-1">
+              <i data-lucide="copy" class="w-3 h-3"></i> Copy
+            </button>
+          </div>
+          <pre class="p-4 text-emerald-300 overflow-x-auto leading-relaxed"><code>{
+  "id": "macro_daily_morning_brief",
+  "name": "Daily Morning AI Intelligence Brief",
+  "description": "Gathers device telemetry, summarizes pending tasks, and displays morning notification",
+  "schedule": {
+    "type": "CRON",
+    "expression": "30 8 * * *",
+    "timezone": "Local",
+    "enabled": true
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "type": "D1_QUERY",
+      "target": "CLOUD",
+      "params": {
+        "query": "SELECT count(*) as pending_tasks FROM tasks WHERE status = 'QUEUED'"
+      }
+    },
+    {
+      "step_id": 2,
+      "type": "AI_REASON",
+      "target": "CLOUD",
+      "params": {
+        "prompt": "Create an uplifting 2-sentence morning briefing for NiranX. Date: {date}, Pending Tasks: {step_1_output}"
+      }
+    },
+    {
+      "step_id": 3,
+      "type": "NOTIFY",
+      "target": "DESKTOP",
+      "params": {
+        "title": "Nexus Morning Briefing",
+        "message": "{step_2_output}",
+        "chime": true
+      }
+    }
+  ]
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- SECTION: TIMELY AUTOMATIONS & CRON ENGINE -->
+      <section id="timely-engine" class="space-y-5 scroll-mt-24 border-t border-white/10 pt-8">
+        <div class="flex items-center gap-2">
+          <span class="p-1 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+            <i data-lucide="clock" class="w-4 h-4"></i>
+          </span>
+          <h2 class="text-xl sm:text-2xl font-bold text-white tracking-tight">Timely Automations &amp; Scheduler Engine</h2>
+        </div>
+
+        <p class="text-slate-300 text-xs sm:text-sm leading-relaxed">
+          Nexus includes an intelligent, drift-compensated scheduling engine. Unlike traditional browser timers that throttle when tabs lose focus, the Nexus Scheduler utilizes Web Workers and background heartbeat sync combined with Cloudflare Edge cron triggers.
+        </p>
+
+        <!-- Schedulers Comparison Table -->
+        <div class="overflow-x-auto rounded-xl border border-white/10 bg-slate-950">
+          <table class="w-full text-left text-xs font-mono">
+            <thead class="bg-slate-900 border-b border-white/10 text-slate-300">
+              <tr>
+                <th class="p-3">Schedule Mode</th>
+                <th class="p-3">Pattern Format</th>
+                <th class="p-3">Behavior</th>
+                <th class="p-3">Ideal Use Cases</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-white/5 text-slate-400">
+              <tr>
+                <td class="p-3 text-emerald-400 font-semibold">CRON</td>
+                <td class="p-3 text-slate-200"><code>m h dom mon dow</code></td>
+                <td class="p-3">Fires at precise wall-clock times matching 5-part cron syntax</td>
+                <td class="p-3">Daily morning reports, midnight backups, weekday alarms</td>
+              </tr>
+              <tr>
+                <td class="p-3 text-cyan-400 font-semibold">INTERVAL</td>
+                <td class="p-3 text-slate-200"><code>every N min/sec</code></td>
+                <td class="p-3">Repeats continuously with drift correction every interval</td>
+                <td class="p-3">Fleet ping sweeps, telemetry polling, battery safeguard</td>
+              </tr>
+              <tr>
+                <td class="p-3 text-purple-400 font-semibold">ONE_SHOT</td>
+                <td class="p-3 text-slate-200"><code>ISO 8601 or delay</code></td>
+                <td class="p-3">Fires once at future time or after countdown, then disables</td>
+                <td class="p-3">Delayed compilation, timed reminders, meeting follow-ups</td>
+              </tr>
+              <tr>
+                <td class="p-3 text-amber-400 font-semibold">EVENT_BOUND</td>
+                <td class="p-3 text-slate-200"><code>ON_BATTERY_LOW</code></td>
+                <td class="p-3">Fires when device telemetry state breaches threshold</td>
+                <td class="p-3">Auto-power saver, critical system alerts, Wi-Fi disconnect</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- SECTION: INTERACTIVE CRON CALCULATOR -->
+      <section id="interactive-cron" class="space-y-5 scroll-mt-24 border-t border-white/10 pt-8">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="p-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              <i data-lucide="calculator" class="w-4 h-4"></i>
+            </span>
+            <h2 class="text-xl sm:text-2xl font-bold text-white tracking-tight">Interactive Cron Calculator &amp; Explainer</h2>
+          </div>
+          <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">LIVE DEMO</span>
+        </div>
+
+        <p class="text-slate-300 text-xs sm:text-sm">
+          Type any 5-field cron expression or choose a preset below. The engine translates it into plain English and calculates the next 5 execution timestamps in real time.
+        </p>
+
+        <!-- Interactive Widget Card -->
+        <div class="p-5 rounded-2xl bg-gradient-to-br from-slate-900 to-slate-950 border border-cyan-500/30 space-y-4 shadow-xl">
+          
+          <!-- Preset Chips -->
+          <div class="flex flex-wrap items-center gap-2 text-xs">
+            <span class="text-slate-400 text-[11px] font-mono">Presets:</span>
+            <button class="cron-preset-btn px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30" data-cron="*/5 * * * *">Every 5 Minutes</button>
+            <button class="cron-preset-btn px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30" data-cron="0 * * * *">Hourly at :00</button>
+            <button class="cron-preset-btn px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30" data-cron="30 8 * * *">Daily 8:30 AM</button>
+            <button class="cron-preset-btn px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30" data-cron="0 18 * * 1-5">Weekdays 6:00 PM</button>
+            <button class="cron-preset-btn px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30" data-cron="0 0 * * *">Midnight Daily</button>
+          </div>
+
+          <!-- Cron Input Field -->
+          <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
+            <div class="sm:col-span-3">
+              <label class="block text-[11px] font-mono text-slate-400 mb-1">Cron Expression (5 fields: min hour day-of-month month day-of-week)</label>
+              <input 
+                type="text" 
+                id="interactiveCronInput" 
+                value="30 8 * * *" 
+                class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-base font-mono text-emerald-400 tracking-wider focus:outline-none focus:border-cyan-500"
+              >
+            </div>
+            <div>
+              <label class="block text-[11px] font-mono text-slate-400 mb-1">Target Timezone</label>
+              <select id="interactiveTzSelect" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500">
+                <option value="Local">Local Browser Time</option>
+                <option value="UTC">UTC (Universal Coordinated)</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Human-Readable Translation -->
+          <div class="p-3.5 rounded-xl bg-slate-950/90 border border-white/10 flex items-start gap-3">
+            <i data-lucide="info" class="w-4 h-4 text-cyan-400 shrink-0 mt-0.5"></i>
+            <div>
+              <div class="text-[11px] font-mono uppercase text-slate-400">Plain English Translation:</div>
+              <div id="interactiveCronHuman" class="text-sm font-semibold text-white mt-0.5">
+                At 08:30 AM every day
+              </div>
+            </div>
+          </div>
+
+          <!-- Next 5 Runs Schedule -->
+          <div>
+            <div class="text-[11px] font-mono text-slate-400 mb-2 flex items-center justify-between">
+              <span>Next 5 Execution Timestamps:</span>
+              <span class="text-emerald-400" id="cronTickingClock">Calculating...</span>
+            </div>
+            <div id="interactiveNextRunsList" class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-mono">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+
+          <!-- Action Launch Button -->
+          <div class="pt-2 flex justify-end">
+            <a 
+              id="openInAppCronBtn" 
+              href="https://ecosystem-landing.pages.dev/macros.html?cron=30%208%20*%20*%20*" 
+              target="_blank" 
+              class="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold text-xs transition-colors"
+            >
+              <i data-lucide="calendar" class="w-3.5 h-3.5"></i> Use This Schedule in Macro Studio
+            </a>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- SECTION: DYNAMIC TOKENS & VARIABLES -->
+      <section id="dynamic-tokens" class="space-y-5 scroll-mt-24 border-t border-white/10 pt-8">
+        <div class="flex items-center gap-2">
+          <span class="p-1 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20">
+            <i data-lucide="hash" class="w-4 h-4"></i>
+          </span>
+          <h2 class="text-xl sm:text-2xl font-bold text-white tracking-tight">Dynamic Tokens &amp; Context Variables</h2>
+        </div>
+
+        <p class="text-slate-300 text-xs sm:text-sm">
+          Any macro step prompt or command can reference live system context via double curly braces <code>{token}</code>. The engine interpolates them immediately prior to step dispatch:
+        </p>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono">
+          <div class="p-3 rounded-xl bg-slate-900 border border-white/10 space-y-1">
+            <div class="text-emerald-400 font-bold">{timestamp}</div>
+            <div class="text-slate-300 text-[11px]">ISO 8601 current UTC timestamp</div>
+            <div class="text-[10px] text-slate-500">Output: <code>2026-10-12T22:30:00Z</code></div>
+          </div>
+
+          <div class="p-3 rounded-xl bg-slate-900 border border-white/10 space-y-1">
+            <div class="text-emerald-400 font-bold">{date} / {time}</div>
+            <div class="text-slate-300 text-[11px]">Local formatted date and 24h clock</div>
+            <div class="text-[10px] text-slate-500">Output: <code>2026-10-12</code> / <code>22:30:00</code></div>
+          </div>
+
+          <div class="p-3 rounded-xl bg-slate-900 border border-white/10 space-y-1">
+            <div class="text-cyan-400 font-bold">{device_name} / {device_id}</div>
+            <div class="text-slate-300 text-[11px]">Target node identifier and host name</div>
+            <div class="text-[10px] text-slate-500">Output: <code>PC-NIRANX-WORKSTATION</code></div>
+          </div>
+
+          <div class="p-3 rounded-xl bg-slate-900 border border-white/10 space-y-1">
+            <div class="text-cyan-400 font-bold">{battery_pct}</div>
+            <div class="text-slate-300 text-[11px]">Mobile / Laptop current battery level (0-100)</div>
+            <div class="text-[10px] text-slate-500">Output: <code>92%</code></div>
+          </div>
+
+          <div class="p-3 rounded-xl bg-slate-900 border border-white/10 space-y-1">
+            <div class="text-purple-400 font-bold">{step_N_output}</div>
+            <div class="text-slate-300 text-[11px]">Output stdout/result from preceding step N</div>
+            <div class="text-[10px] text-slate-500">Allows chaining AI outputs into shell scripts</div>
+          </div>
+
+          <div class="p-3 rounded-xl bg-slate-900 border border-white/10 space-y-1">
+            <div class="text-purple-400 font-bold">{user_email}</div>
+            <div class="text-slate-300 text-[11px]">Master account authenticated email</div>
+            <div class="text-[10px] text-slate-500">Output: <code>barhateniranjan725@gmail.com</code></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION: ACTION STEPS CATALOG -->
+      <section id="actions-catalog" class="space-y-5 scroll-mt-24 border-t border-white/10 pt-8">
+        <div class="flex items-center gap-2">
+          <span class="p-1 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20">
+            <i data-lucide="terminal" class="w-4 h-4"></i>
+          </span>
+          <h2 class="text-xl sm:text-2xl font-bold text-white tracking-tight">Action Steps Catalog</h2>
+        </div>
+
+        <p class="text-slate-300 text-xs sm:text-sm">
+          Nexus provides 8 fundamental action primitives. Each step executes on its assigned target and returns its structured payload to the pipeline:
+        </p>
+
+        <div class="space-y-3 text-xs font-mono">
+          <!-- Step 1 -->
+          <div class="p-3.5 rounded-xl bg-slate-900 border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 text-[10px] font-bold">AI_REASON</span>
+                <span class="text-white font-semibold">Gemini 3.8 / Workers AI Prompt Inference</span>
+              </div>
+              <p class="text-[11px] text-slate-400 font-sans mt-1">Executes multimodal or text prompt, formats output, generates code or JSON structures.</p>
+            </div>
+            <span class="text-[10px] text-slate-400 bg-slate-950 px-2 py-1 rounded border border-white/5">Target: CLOUD</span>
+          </div>
+
+          <!-- Step 2 -->
+          <div class="p-3.5 rounded-xl bg-slate-900 border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-bold">SHELL_EXEC</span>
+                <span class="text-white font-semibold">Native Terminal &amp; PowerShell / Bash Execution</span>
+              </div>
+              <p class="text-[11px] text-slate-400 font-sans mt-1">Runs command in daemon sandbox with stdout/stderr capture and exit code checks.</p>
+            </div>
+            <span class="text-[10px] text-slate-400 bg-slate-950 px-2 py-1 rounded border border-white/5">Target: DESKTOP</span>
+          </div>
+
+          <!-- Step 3 -->
+          <div class="p-3.5 rounded-xl bg-slate-900 border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 text-[10px] font-bold">DESKTOP_GUI</span>
+                <span class="text-white font-semibold">Win32 GUI Automation, Hotkeys &amp; Screenshots</span>
+              </div>
+              <p class="text-[11px] text-slate-400 font-sans mt-1">Simulates keyboard shortcuts (e.g. WIN+D, CTRL+SHIFT+ESC) or captures screen frame.</p>
+            </div>
+            <span class="text-[10px] text-slate-400 bg-slate-950 px-2 py-1 rounded border border-white/5">Target: DESKTOP</span>
+          </div>
+
+          <!-- Step 4 -->
+          <div class="p-3.5 rounded-xl bg-slate-900 border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="px-2 py-0.5 rounded bg-green-500/20 text-green-300 text-[10px] font-bold">MOBILE_TERMUX</span>
+                <span class="text-white font-semibold">Android Termux System Call &amp; Sensor Sweep</span>
+              </div>
+              <p class="text-[11px] text-slate-400 font-sans mt-1">Termux API intent commands: vibration, toast, sensor queries, battery level.</p>
+            </div>
+            <span class="text-[10px] text-slate-400 bg-slate-950 px-2 py-1 rounded border border-white/5">Target: MOBILE</span>
+          </div>
+
+          <!-- Step 5 -->
+          <div class="p-3.5 rounded-xl bg-slate-900 border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="px-2 py-0.5 rounded bg-orange-500/20 text-orange-300 text-[10px] font-bold">D1_QUERY</span>
+                <span class="text-white font-semibold">Cloudflare D1 Serverless SQLite Edge Query</span>
+              </div>
+              <p class="text-[11px] text-slate-400 font-sans mt-1">Zero-Card database read/write query with parameterized bindings.</p>
+            </div>
+            <span class="text-[10px] text-slate-400 bg-slate-950 px-2 py-1 rounded border border-white/5">Target: CLOUD</span>
+          </div>
+
+          <!-- Step 6 -->
+          <div class="p-3.5 rounded-xl bg-slate-900 border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="px-2 py-0.5 rounded bg-pink-500/20 text-pink-300 text-[10px] font-bold">NOTIFY</span>
+                <span class="text-white font-semibold">Desktop / Web Push Notification &amp; Web Audio Chime</span>
+              </div>
+              <p class="text-[11px] text-slate-400 font-sans mt-1">Displays native notification card and synthesizes synthesized audio chime.</p>
+            </div>
+            <span class="text-[10px] text-slate-400 bg-slate-950 px-2 py-1 rounded border border-white/5">Target: ALL</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION: REST API & WEBHOOKS -->
+      <section id="api-webhook" class="space-y-5 scroll-mt-24 border-t border-white/10 pt-8">
+        <div class="flex items-center gap-2">
+          <span class="p-1 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+            <i data-lucide="network" class="w-4 h-4"></i>
+          </span>
+          <h2 class="text-xl sm:text-2xl font-bold text-white tracking-tight">REST API &amp; Webhook Trigger Reference</h2>
+        </div>
+
+        <p class="text-slate-300 text-xs sm:text-sm">
+          You can trigger any macro remotely from GitHub Actions, curl scripts, Python backend services, or webhooks:
+        </p>
+
+        <!-- API Code Snippet -->
+        <div class="rounded-2xl bg-slate-950 border border-white/10 overflow-hidden font-mono text-xs">
+          <div class="flex items-center justify-between px-4 py-2.5 bg-slate-900 border-b border-white/10">
+            <span class="text-slate-400 text-[11px]">POST /api/macros/run (Cloudflare Edge)</span>
+            <button class="copy-code-btn px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] flex items-center gap-1">
+              <i data-lucide="copy" class="w-3 h-3"></i> Copy
+            </button>
+          </div>
+          <pre class="p-4 text-cyan-300 overflow-x-auto leading-relaxed"><code>curl -X POST "https://ecosystem-landing.pages.dev/api/macros/run" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer NEXUS_SECRET_KEY" \
+  -d '{
+    "macro_id": "macro_daily_morning_brief",
+    "trigger_source": "WEBHOOK_EXTERNAL",
+    "params": {
+      "priority": "HIGH"
+    }
+  }'</code></pre>
+        </div>
+      </section>
+
+      <!-- SECTION: MACRO JSON VALIDATOR -->
+      <section id="json-validator" class="space-y-5 scroll-mt-24 border-t border-white/10 pt-8">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="p-1 rounded-lg bg-pink-500/10 text-pink-400 border border-pink-500/20">
+              <i data-lucide="check-square" class="w-4 h-4"></i>
+            </span>
+            <h2 class="text-xl sm:text-2xl font-bold text-white tracking-tight">Live Macro JSON Schema Validator</h2>
+          </div>
+          <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-pink-500/20 text-pink-300 border border-pink-500/40">TOOL</span>
+        </div>
+
+        <p class="text-slate-300 text-xs sm:text-sm">
+          Paste any macro JSON specification below to validate schema compliance and step configurations:
+        </p>
+
+        <div class="p-4 rounded-2xl bg-slate-950 border border-white/10 space-y-3 font-mono text-xs">
+          <textarea 
+            id="jsonValidatorInput" 
+            rows="8" 
+            class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-emerald-300 focus:outline-none focus:border-pink-500 font-mono text-xs resize-y"
+            placeholder="Paste your Macro JSON definition here..."
+          >{
+  "id": "macro_test_example",
+  "name": "Sample Fleet Health Check",
+  "schedule": { "type": "INTERVAL", "interval_sec": 300, "enabled": true },
+  "steps": [
+    { "step_id": 1, "type": "SHELL_EXEC", "target": "DESKTOP", "params": { "command": "git status" } }
+  ]
+}</textarea>
+          
+          <div class="flex items-center justify-between">
+            <div id="validatorFeedback" class="text-emerald-400 flex items-center gap-1.5 text-[11px]">
+              <i data-lucide="check-circle" class="w-4 h-4"></i> Valid Nexus Macro v4.2 Schema!
+            </div>
+            <button id="runValidationBtn" class="px-4 py-1.5 rounded-lg bg-pink-500 hover:bg-pink-400 text-slate-950 font-semibold text-xs transition-colors">
+              Validate Schema
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- FOOTER -->
+      <footer class="border-t border-white/10 pt-8 pb-12 text-xs text-slate-500 font-mono flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div>
+          &copy; 2026 NEXUS OS &bull; Built with Cloudflare Pages &amp; Edge Workers
+        </div>
+        <div class="flex items-center gap-4">
+          <a href="https://ecosystem-landing.pages.dev" class="hover:text-emerald-400 transition-colors">Landing Hub</a>
+          <a href="https://ecosystem-landing.pages.dev/macros.html" class="hover:text-cyan-400 transition-colors">Macro Studio</a>
+          <a href="https://github.com/NiranX-music/Nexus-desktop-" class="hover:text-white transition-colors">GitHub</a>
+        </div>
+      </footer>
+
+    </main>
+  </div>
+
+  <script src="docs.js"></script>
+</body>
+</html>

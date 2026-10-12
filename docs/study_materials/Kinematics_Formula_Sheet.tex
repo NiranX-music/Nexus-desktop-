@@ -1,0 +1,58 @@
+\documentclass[a4paper,10pt]{article}
+\usepackage[margin=1.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{multicol}
+\usepackage{tcolorbox}
+
+\title{\textbf{⚡ Kinematics Master Formula Sheet}}
+\author{Nexus AI Engine -- Physics Class 11 / JEE / NEET}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{multicols*}{2}
+
+\begin{tcolorbox}[title=1. Motion in a Straight Line (1D), colback=white, colframe=teal]
+\textbf{Equations of Motion (Constant $a$):}
+\begin{align*}
+v &= u + at \\
+s &= ut + \frac{1}{2}at^2 \\
+v^2 &= u^2 + 2as \\
+s_n &= u + \frac{a}{2}(2n - 1) \\
+s &= \left(\frac{u+v}{2}\right)t
+\end{align*}
+\end{tcolorbox}
+
+\begin{tcolorbox}[title=2. Motion Under Gravity (Free Fall), colback=white, colframe=teal]
+\textbf{Vertical Projection ($u$ upwards):}
+\begin{align*}
+H_{\max} &= \frac{u^2}{2g} \\
+t_{\text{ascent}} &= \frac{u}{g} \\
+T_{\text{total}} &= \frac{2u}{g} \\
+v_{\text{ground}} &= \sqrt{2gh}
+\end{align*}
+\end{tcolorbox}
+
+\begin{tcolorbox}[title=3. Oblique Projectile Motion, colback=white, colframe=teal]
+\begin{align*}
+T &= \frac{2u\sin\theta}{g} \\
+H &= \frac{u^2\sin^2\theta}{2g} \\
+R &= \frac{u^2\sin 2\theta}{g} \\
+R_{\max} &= \frac{u^2}{g} \quad (\theta = 45^\circ) \\
+y &= x\tan\theta\left(1 - \frac{x}{R}\right)
+\end{align*}
+\end{tcolorbox}
+
+\begin{tcolorbox}[title=4. Circular Motion Kinematics, colback=white, colframe=teal]
+\begin{align*}
+v &= \omega r \\
+a_c &= \frac{v^2}{r} = \omega^2 r \\
+a_t &= \alpha r = \frac{dv}{dt} \\
+a_{\text{net}} &= \sqrt{a_c^2 + a_t^2} \\
+\omega &= \omega_0 + \alpha t
+\end{align*}
+\end{tcolorbox}
+
+\end{multicols*}
+\end{document}

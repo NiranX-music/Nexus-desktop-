@@ -1,0 +1,36 @@
+/* Nexus Docs Custom Styles */
+
+/* Custom smooth dark scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #03050c;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+/* Sidebar active states */
+.docs-nav-link.active {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.1);
+  border-left: 2px solid #10b981;
+}
+
+/* Code block line styles */
+pre code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
