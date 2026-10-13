@@ -2,12 +2,9 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 're
 import {
   Editor,
   Tldraw,
-  TLDefaultColorStyle,
-  TLGeoShapeGeoStyle,
   TLShapePartial,
   createShapeId,
-  getSnapshot,
-  toRichText
+  getSnapshot
 } from 'tldraw'
 import 'tldraw/tldraw.css'
 import {
@@ -16,156 +13,78 @@ import {
   RiPencilLine,
   RiRefreshLine,
   RiSendPlane2Line,
-  RiShapesLine
+  RiShapesLine,
+  RiSparklingLine
 } from 'react-icons/ri'
 import {
   WHITEBOARD_WRITE_EVENT,
+  WhiteboardColor,
+  WhiteboardMode,
   WhiteboardWritePayload,
   createWhiteboardPayload,
   saveWhiteboardDocument
 } from '@renderer/services/whiteboard'
+import {
+  BoardColor,
+  StrokeSize,
+  composeWhiteboardElements,
+  createArrowShape,
+  createGeoShape,
+  createHandwrittenTextShapes,
+  buildArchitectureDiagram,
+  buildChemistryBenzene,
+  buildCoordinateGraph,
+  buildElectricCircuitDiagram,
+  buildFlowchart,
+  buildMindMap,
+  buildNeuralNetworkDiagram,
+  buildOpticsLensDiagram,
+  buildPythagoreanGeometry
+} from '@renderer/services/whiteboard-pen-engine'
 
 const glassPanel = 'bg-zinc-950/40 backdrop-blur-xl border border-white/5 rounded-2xl shadow-xl'
 const boardStoreKey = 'nexus_tldraw_board_snapshot'
 
-const normalizeLines = (value: string) =>
-  value
-    .replace(/\r/g, '')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-
-const stripDiagramMarker = (line: string) => line.replace(/^\[diagram:\s*[\w-]+\]\s*/i, '').trim()
-const boardColors = ['black', 'green', 'blue', 'red', 'orange', 'violet'] as const
-void boardColors
-type BoardColor = (typeof boardColors)[number]
-
-const detectDiagram = (text: string) => {
-  const explicit = text.match(/\[diagram:\s*([\w-]+)\]/i)?.[1]?.toLowerCase()
-  if (explicit) return explicit
-  if (/lens|mirror|ray|optic/i.test(text)) return 'lens'
-  if (/triangle|angle|geometry|geo/i.test(text)) return 'triangle'
-  if (/circle|radius|diameter/i.test(text)) return 'circle'
-  if (/graph|axis|plot/i.test(text)) return 'graph'
-  if (/flow|process|steps/i.test(text)) return 'flow'
-  return ''
+interface DrawOptions {
+  mode?: WhiteboardMode
+  color?: WhiteboardColor
+  size?: StrokeSize
+  diagram?: string
+  append?: boolean
 }
 
-const shapeText = (text: string, x: number, y: number, w = 680, size: 's' | 'm' | 'l' | 'xl' = 'm') =>
-  ({
-    id: createShapeId(),
-    type: 'text',
-    x,
-    y,
-    props: {
-      autoSize: false,
-      color: 'black',
-      font: 'draw',
-      richText: toRichText(text),
-      scale: 1,
-      size,
-      w
-    }
-  }) satisfies TLShapePartial
+const PRESET_TEMPLATES = [
+  { label: '🖊️ Marker Ink', prompt: 'Write "Welcome to Nexus AI" in authentic marker handwriting' },
+  { label: '🔀 Auth Flowchart', prompt: 'Create a user authentication flowchart with decision diamond' },
+  { label: '📐 Pythagoras Proof', prompt: 'Draw Pythagorean theorem right-triangle and proof' },
+  { label: '📊 Math Coordinates', prompt: 'Plot y = sin(x) and y = x^2 coordinate graph' },
+  { label: '⚡ Physics Lens', prompt: 'Convex lens ray tracing diagram with focal points' },
+  { label: '🧠 Neural Network', prompt: 'Deep learning neural network architecture with synapses' },
+  { label: '☁️ System Arch', prompt: 'Cloudflare edge to desktop agent system architecture' },
+  { label: '🧪 Benzene Molecule', prompt: 'Chemistry benzene C6H6 aromatic ring resonance' },
+  { label: '💡 Mind Map', prompt: 'Autonomous agent core concept mind map' },
+  { label: '🔌 DC Circuit', prompt: 'DC electric circuit with battery, resistor, and switch' }
+]
 
-const geoShape = (
-  geo: TLGeoShapeGeoStyle,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  label = '',
-  color: BoardColor = 'green'
-) =>
-  ({
-    id: createShapeId(),
-    type: 'geo',
-    x,
-    y,
-    props: {
-      color: color as TLDefaultColorStyle,
-      dash: 'draw',
-      fill: 'none',
-      font: 'draw',
-      geo,
-      h,
-      labelColor: 'black' as TLDefaultColorStyle,
-      richText: toRichText(label),
-      size: 'm',
-      w
-    }
-  }) satisfies TLShapePartial
-
-const arrowShape = (x: number, y: number, startX: number, startY: number, endX: number, endY: number) =>
-  ({
-    id: createShapeId(),
-    type: 'arrow',
-    x,
-    y,
-    props: {
-      color: 'green',
-      dash: 'draw',
-      end: { x: endX, y: endY },
-      arrowheadEnd: 'arrow',
-      richText: toRichText(''),
-      size: 'm',
-      start: { x: startX, y: startY },
-      arrowheadStart: 'none'
-    }
-  }) satisfies TLShapePartial
-
-function buildDiagramShapes(kind: string, baseX: number, baseY: number): TLShapePartial[] {
-  if (kind === 'lens') {
-    return [
-      geoShape('ellipse', baseX + 280, baseY + 25, 42, 230, 'lens'),
-      arrowShape(baseX, baseY + 140, 0, 0, 650, 0),
-      arrowShape(baseX + 70, baseY + 78, 0, 0, 565, 62),
-      arrowShape(baseX + 70, baseY + 202, 0, 0, 565, -62),
-      shapeText('principal axis', baseX + 350, baseY + 112, 230, 's')
-    ]
-  }
-
-  if (kind === 'circle') {
-    return [
-      geoShape('ellipse', baseX + 30, baseY + 18, 210, 210, ''),
-      arrowShape(baseX + 135, baseY + 123, 0, 0, 104, 0),
-      shapeText('r', baseX + 174, baseY + 91, 60, 'm')
-    ]
-  }
-
-  if (kind === 'graph') {
-    return [
-      arrowShape(baseX + 35, baseY + 240, 0, 0, 0, -220),
-      arrowShape(baseX + 35, baseY + 240, 0, 0, 360, 0),
-      geoShape('rectangle', baseX + 108, baseY + 118, 55, 122, '', 'blue'),
-      geoShape('rectangle', baseX + 195, baseY + 75, 55, 165, '', 'blue'),
-      geoShape('rectangle', baseX + 282, baseY + 38, 55, 202, '', 'blue')
-    ]
-  }
-
-  if (kind === 'flow') {
-    return [
-      geoShape('rectangle', baseX + 10, baseY + 42, 150, 72, 'Start'),
-      arrowShape(baseX + 170, baseY + 78, 0, 0, 100, 0),
-      geoShape('diamond', baseX + 280, baseY + 22, 150, 112, 'Check'),
-      arrowShape(baseX + 438, baseY + 78, 0, 0, 100, 0),
-      geoShape('rectangle', baseX + 548, baseY + 42, 150, 72, 'Result')
-    ]
-  }
-
-  return [
-    geoShape('triangle', baseX + 30, baseY + 25, 320, 250, ''),
-    geoShape('ellipse', baseX + 12, baseY + 214, 76, 52, 'A'),
-    shapeText('B', baseX + 358, baseY + 242, 50, 'm'),
-    shapeText('C', baseX + 180, baseY - 5, 50, 'm')
-  ]
-}
+const COLOR_SWATCHES: { label: string; value: BoardColor; bg: string }[] = [
+  { label: 'Emerald', value: 'green', bg: 'bg-emerald-500' },
+  { label: 'Cyan', value: 'blue', bg: 'bg-sky-500' },
+  { label: 'Violet', value: 'violet', bg: 'bg-purple-500' },
+  { label: 'Amber', value: 'orange', bg: 'bg-amber-500' },
+  { label: 'Crimson', value: 'red', bg: 'bg-rose-500' },
+  { label: 'Black', value: 'black', bg: 'bg-zinc-800' }
+]
 
 export default function WhiteboardView() {
   const editorRef = useRef<Editor | null>(null)
   const [question, setQuestion] = useState('')
-  const [status, setStatus] = useState('tldraw ready')
+  const [status, setStatus] = useState('tldraw board online')
   const [lastTitle, setLastTitle] = useState('Open board')
+  const [selectedMode, setSelectedMode] = useState<WhiteboardMode>('marker_ink')
+  const [selectedColor, setSelectedColor] = useState<BoardColor>('green')
+  const [selectedSize, setSelectedSize] = useState<StrokeSize>('m')
+  const [appendMode, setAppendMode] = useState(false)
+  const [isDrawing, setIsDrawing] = useState(false)
 
   const components = useMemo(
     () => ({
@@ -225,65 +144,162 @@ export default function WhiteboardView() {
     setStatus('Board view fitted')
   }, [])
 
+  // Universal Whiteboard Writer & Artist
   const writeOnBoard = useCallback(
-    async (prompt: string, content?: string) => {
+    async (prompt: string, content?: string, options: DrawOptions = {}) => {
       const editor = editorRef.current
       if (!editor) return
 
-      const text = [content || '', !content ? prompt : ''].filter(Boolean).join('\n')
-      const lines = normalizeLines(text)
-        .map(stripDiagramMarker)
-        .filter(Boolean)
-      const title = prompt || lines[0] || 'Nexus Whiteboard'
-      const diagram = detectDiagram([prompt, content || ''].join('\n'))
-      const shapes: TLShapePartial[] = []
+      setIsDrawing(true)
+      setStatus('🖊️ AI drawing on board...')
 
-      shapes.push(shapeText(title, 80, 70, 760, 'xl'))
-      shapes.push(
-        geoShape('rectangle', 62, 55, 820, 78, '', 'green'),
-        shapeText(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), 715, 82, 130, 's')
-      )
+      try {
+        const mode = options.mode || selectedMode
+        const color = (options.color as BoardColor) || selectedColor
+        const append = options.append !== undefined ? options.append : appendMode
 
-      let y = 180
-      const boardLines = lines.length
-        ? lines
-        : [
-            'Given information goes here.',
-            'Pick the correct relation.',
-            'Substitute values carefully.',
-            'Simplify and box the final result.'
-          ]
+        let shapes: TLShapePartial[] = []
+        let title = prompt || 'Nexus Whiteboard'
 
-      boardLines.slice(0, 16).forEach((line, index) => {
-        const prefix = /^\d+[.)]/.test(line) || /^[-*]/.test(line) ? '' : `${index + 1}. `
-        shapes.push(shapeText(`${prefix}${line}`, 115, y, 900, index === 0 ? 'l' : 'm'))
-        y += line.length > 92 ? 86 : 58
-      })
+        // Check for specific diagram explicit request
+        const lower = `${prompt} ${content || ''}`.toLowerCase()
+        const explicitDiagram = options.diagram || ''
 
-      if (diagram) {
-        shapes.push(...buildDiagramShapes(diagram, 130, y + 35))
-        y += 350
+        if (explicitDiagram === 'flow' || /flowchart|process flow/i.test(lower)) {
+          shapes = buildFlowchart(100, 80)
+          title = 'Flowchart'
+        } else if (explicitDiagram === 'architecture' || /architecture|system design/i.test(lower)) {
+          shapes = buildArchitectureDiagram(80, 80)
+          title = 'System Architecture'
+        } else if (explicitDiagram === 'neural' || /neural network|deep learning/i.test(lower)) {
+          shapes = buildNeuralNetworkDiagram(80, 80)
+          title = 'Neural Network'
+        } else if (explicitDiagram === 'graph' || /coordinate|sin\(x\)|parabola/i.test(lower)) {
+          shapes = buildCoordinateGraph(100, 80)
+          title = 'Math Graph'
+        } else if (explicitDiagram === 'lens' || /optic|lens|ray tracing/i.test(lower)) {
+          shapes = buildOpticsLensDiagram(100, 80)
+          title = 'Optics Lens Diagram'
+        } else if (explicitDiagram === 'circuit' || /circuit|resistor|dc circuit/i.test(lower)) {
+          shapes = buildElectricCircuitDiagram(100, 80)
+          title = 'DC Circuit'
+        } else if (explicitDiagram === 'geometry' || /pythagor|right triangle/i.test(lower)) {
+          shapes = buildPythagoreanGeometry(100, 80)
+          title = 'Pythagorean Geometry'
+        } else if (explicitDiagram === 'chemistry' || /benzene|molecule/i.test(lower)) {
+          shapes = buildChemistryBenzene(100, 80)
+          title = 'Benzene Ring'
+        } else if (explicitDiagram === 'mindmap' || /mind map|concept tree/i.test(lower)) {
+          shapes = buildMindMap(100, 80)
+          title = 'Mind Map'
+        } else {
+          // Use Master Composer (handles pure marker ink, shapes, and hybrid)
+          const comp = composeWhiteboardElements(
+            prompt,
+            content || '',
+            mode === 'text' ? 'hybrid' : mode,
+            color
+          )
+          shapes = comp.shapes
+          title = comp.title
+        }
+
+        // Calculate offset if appending to existing canvas
+        if (append) {
+          const existingBounds = editor.getCurrentPageBounds()
+          if (existingBounds) {
+            const offsetY = existingBounds.maxY + 80
+            shapes = shapes.map((shape) => ({
+              ...shape,
+              y: (shape.y || 0) + offsetY
+            }))
+          }
+        }
+
+        editor.run(() => {
+          if (!append) {
+            const existingIds = Array.from(editor.getCurrentPageShapeIds())
+            if (existingIds.length) editor.deleteShapes(existingIds)
+          }
+          editor.createShapes(shapes)
+          editor.select(...shapes.map((s) => s.id!).filter(Boolean))
+          editor.zoomToFit()
+        })
+
+        setLastTitle(title)
+        setStatus(`✓ Drawn: ${title} (${shapes.length} elements)`)
+        saveSnapshot()
+
+        const payload = createWhiteboardPayload(
+          title,
+          [prompt, content].filter(Boolean).join('\n\n'),
+          'whiteboard',
+          { mode, color, append }
+        )
+        const result = await saveWhiteboardDocument(payload)
+        if (result.success) setStatus('✓ Board auto-saved to Docs')
+      } catch (err: any) {
+        setStatus(`Drawing error: ${err?.message || 'unknown'}`)
+      } finally {
+        setIsDrawing(false)
+      }
+    },
+    [appendMode, saveSnapshot, selectedColor, selectedMode]
+  )
+
+  // Direct quick shape insertion
+  const insertQuickShape = useCallback(
+    (shapeType: 'rectangle' | 'circle' | 'arrow' | 'star' | 'diamond' | 'cloud' | 'handwriting') => {
+      const editor = editorRef.current
+      if (!editor) return
+
+      const bounds = editor.getViewportPageBounds()
+      const cx = bounds.midX - 80
+      const cy = bounds.midY - 40
+
+      let shape: TLShapePartial | null = null
+
+      if (shapeType === 'handwriting') {
+        const textShapes = createHandwrittenTextShapes('Nexus Marker', cx, cy, {
+          color: selectedColor,
+          size: selectedSize,
+          scale: 1.5,
+          underline: true
+        })
+        editor.createShapes(textShapes)
+        editor.select(...textShapes.map((s) => s.id!).filter(Boolean))
+        setStatus('Inserted marker handwriting')
+        return
       }
 
-      shapes.push(geoShape('rectangle', 95, y + 30, 620, 86, 'Final answer', 'green'))
+      switch (shapeType) {
+        case 'rectangle':
+          shape = createGeoShape({ geo: 'rectangle', x: cx, y: cy, w: 160, h: 90, color: selectedColor })
+          break
+        case 'circle':
+          shape = createGeoShape({ geo: 'ellipse', x: cx, y: cy, w: 120, h: 120, color: selectedColor })
+          break
+        case 'arrow':
+          shape = createArrowShape(cx, cy, 140, 0, '', selectedColor)
+          break
+        case 'star':
+          shape = createGeoShape({ geo: 'star', x: cx, y: cy, w: 120, h: 120, color: selectedColor, fill: 'semi' })
+          break
+        case 'diamond':
+          shape = createGeoShape({ geo: 'diamond', x: cx, y: cy, w: 140, h: 90, color: selectedColor })
+          break
+        case 'cloud':
+          shape = createGeoShape({ geo: 'cloud', x: cx, y: cy, w: 180, h: 110, color: selectedColor, fill: 'semi' })
+          break
+      }
 
-      const existingIds = Array.from(editor.getCurrentPageShapeIds())
-      editor.run(() => {
-        if (existingIds.length) editor.deleteShapes(existingIds)
-        editor.createShapes(shapes)
-        editor.select(...shapes.map((shape) => shape.id!).filter(Boolean))
-        editor.zoomToFit()
-      })
-
-      setLastTitle(title)
-      setStatus('AI wrote editable tldraw board')
-      saveSnapshot()
-
-      const payload = createWhiteboardPayload(title, [prompt, content || text].filter(Boolean).join('\n\n'), 'whiteboard')
-      const result = await saveWhiteboardDocument(payload)
-      if (result.success) setStatus('AI board saved to Docs')
+      if (shape) {
+        editor.createShapes([shape])
+        editor.select(shape.id!)
+        setStatus(`Inserted ${shapeType}`)
+      }
     },
-    [saveSnapshot]
+    [selectedColor, selectedSize]
   )
 
   useEffect(() => {
@@ -294,7 +310,14 @@ export default function WhiteboardView() {
 
     const writeHandler = (event: Event) => {
       const payload = (event as CustomEvent<WhiteboardWritePayload>).detail
-      if (payload?.prompt || payload?.content) void writeOnBoard(payload.prompt, payload.content)
+      if (payload?.prompt || payload?.content) {
+        void writeOnBoard(payload.prompt, payload.content, {
+          mode: payload.mode,
+          color: payload.color,
+          diagram: payload.diagram,
+          append: payload.append
+        })
+      }
     }
 
     window.addEventListener('nexus-whiteboard-request', handler)
@@ -304,7 +327,7 @@ export default function WhiteboardView() {
     if (pending) {
       try {
         const parsed = JSON.parse(pending)
-        if (parsed?.prompt) void writeOnBoard(parsed.prompt)
+        if (parsed?.prompt) void writeOnBoard(parsed.prompt, parsed?.content)
         localStorage.removeItem('nexus_whiteboard_request')
       } catch {}
     }
@@ -326,99 +349,291 @@ export default function WhiteboardView() {
   const solveOnBoard = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!question.trim()) return
-    void writeOnBoard(question)
+    void writeOnBoard(question, undefined, {
+      mode: selectedMode,
+      color: selectedColor,
+      size: selectedSize,
+      append: appendMode
+    })
     setQuestion('')
   }
 
   return (
     <div className="h-full w-full overflow-hidden p-4 grid grid-cols-12 gap-4 bg-white/2 animate-in fade-in duration-300">
-      <div className="col-span-12 lg:col-span-3 flex flex-col gap-4 min-h-0 overflow-y-auto pr-1 scrollbar-small">
+      {/* LEFT SIDEBAR: BOARD CONTROLS & AI WRITING */}
+      <div className="col-span-12 lg:col-span-3 flex flex-col gap-3 min-h-0 overflow-y-auto pr-1 pb-28 scrollbar-small">
+        {/* HEADER PANEL */}
         <div className={`${glassPanel} p-4 border-emerald-500/10`}>
-          <div className="flex items-center gap-3 mb-4">
-            <div className="h-11 w-11 rounded-xl border border-emerald-500/30 bg-emerald-500/10 flex items-center justify-center text-emerald-300">
-              <RiPencilLine size={20} />
-            </div>
-            <div>
-              <div className="text-xs font-black tracking-[0.22em] text-emerald-300 uppercase">
-                Nexus Board
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div className="flex items-center gap-2.5">
+              <div className="h-10 w-10 rounded-xl border border-emerald-500/30 bg-emerald-500/10 flex items-center justify-center text-emerald-300">
+                <RiPencilLine size={19} />
               </div>
-              <div className="text-[9px] font-mono tracking-widest text-zinc-500 uppercase">
-                tldraw + AI writing
+              <div>
+                <div className="text-xs font-black tracking-[0.22em] text-emerald-300 uppercase">
+                  Nexus Board
+                </div>
+                <div className="text-[9px] font-mono tracking-widest text-zinc-500 uppercase">
+                  Marker Ink & Shape Engine
+                </div>
+              </div>
+            </div>
+            {isDrawing && (
+              <span className="flex h-2 w-2 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+            )}
+          </div>
+
+          {/* MODE SELECTOR */}
+          <div className="mb-3 space-y-1.5">
+            <div className="text-[9px] font-mono text-zinc-400 tracking-wider uppercase">Style Mode</div>
+            <div className="grid grid-cols-3 gap-1 bg-black/50 p-1 rounded-xl border border-white/5 text-[9px] font-bold">
+              <button
+                type="button"
+                onClick={() => setSelectedMode('marker_ink')}
+                className={`py-1.5 rounded-lg transition-all ${
+                  selectedMode === 'marker_ink'
+                    ? 'bg-emerald-500 text-black shadow-sm'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                🖊️ Marker
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedMode('hybrid')}
+                className={`py-1.5 rounded-lg transition-all ${
+                  selectedMode === 'hybrid'
+                    ? 'bg-emerald-500 text-black shadow-sm'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                ✨ Hybrid
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedMode('diagram')}
+                className={`py-1.5 rounded-lg transition-all ${
+                  selectedMode === 'diagram'
+                    ? 'bg-emerald-500 text-black shadow-sm'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                📐 Diagram
+              </button>
+            </div>
+          </div>
+
+          {/* COLOR & TIP SIZE SELECTOR */}
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <div>
+              <div className="text-[9px] font-mono text-zinc-400 tracking-wider uppercase mb-1">Color</div>
+              <div className="flex items-center gap-1.5 bg-black/50 p-1.5 rounded-xl border border-white/5">
+                {COLOR_SWATCHES.map((swatch) => (
+                  <button
+                    key={swatch.value}
+                    type="button"
+                    title={swatch.label}
+                    onClick={() => setSelectedColor(swatch.value)}
+                    className={`h-5 w-5 rounded-full transition-all ${swatch.bg} ${
+                      selectedColor === swatch.value
+                        ? 'ring-2 ring-white scale-110'
+                        : 'opacity-60 hover:opacity-100'
+                    }`}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[9px] font-mono text-zinc-400 tracking-wider uppercase mb-1">Tip Size</div>
+              <div className="grid grid-cols-4 gap-1 bg-black/50 p-1 rounded-xl border border-white/5 text-[9px] font-black text-center">
+                {(['s', 'm', 'l', 'xl'] as StrokeSize[]).map((sz) => (
+                  <button
+                    key={sz}
+                    type="button"
+                    onClick={() => setSelectedSize(sz)}
+                    className={`py-1 rounded-lg uppercase ${
+                      selectedSize === sz
+                        ? 'bg-emerald-500 text-black'
+                        : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    {sz}
+                  </button>
+                ))}
               </div>
             </div>
           </div>
 
-          <form onSubmit={solveOnBoard} className="space-y-3">
+          {/* PROMPT FORM */}
+          <form onSubmit={solveOnBoard} className="space-y-2">
             <textarea
               value={question}
               onChange={(event) => setQuestion(event.target.value)}
-              className="h-32 w-full resize-none rounded-xl border border-white/10 bg-black/60 p-3 text-xs leading-relaxed text-zinc-200 outline-none focus:border-emerald-400/50 scrollbar-small"
-              placeholder="Ask Nexus to write, solve, or draw on the board..."
+              className="h-24 w-full resize-none rounded-xl border border-white/10 bg-black/60 p-2.5 text-xs leading-relaxed text-zinc-200 outline-none focus:border-emerald-400/50 scrollbar-small placeholder:text-zinc-600"
+              placeholder="Ask Nexus to write in marker handwriting, draw shapes, or sketch diagrams..."
             />
+
+            <div className="flex items-center justify-between px-1">
+              <label className="flex items-center gap-2 cursor-pointer text-[10px] text-zinc-400 select-none">
+                <input
+                  type="checkbox"
+                  checked={appendMode}
+                  onChange={(e) => setAppendMode(e.target.checked)}
+                  className="rounded border-zinc-700 bg-zinc-900 text-emerald-500 focus:ring-emerald-500/20"
+                />
+                Append to canvas
+              </label>
+            </div>
+
             <button
               type="submit"
-              className="h-11 w-full rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-[10px] font-black tracking-widest text-emerald-300 hover:bg-emerald-400 hover:text-black flex items-center justify-center gap-2"
+              disabled={isDrawing}
+              className="h-10 w-full rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-[10px] font-black tracking-widest text-emerald-300 hover:bg-emerald-400 hover:text-black flex items-center justify-center gap-2 transition-all disabled:opacity-50"
             >
-              <RiSendPlane2Line size={16} /> WRITE ON BOARD
+              <RiSendPlane2Line size={15} /> WRITE & DRAW ON BOARD
             </button>
           </form>
         </div>
 
-        <div className={`${glassPanel} p-4 flex-1 min-h-0 border-white/5`}>
-          <div className="flex items-center justify-between gap-3 mb-3">
-            <div className="text-[10px] font-black tracking-widest text-zinc-400">BOARD CONTROLS</div>
-            <RiShapesLine className="text-emerald-300" />
+        {/* QUICK SHAPES TOOLBAR */}
+        <div className={`${glassPanel} p-3 border-white/5`}>
+          <div className="text-[9px] font-mono tracking-widest text-zinc-400 uppercase mb-2 flex items-center justify-between">
+            <span>Instant Shape Drawer</span>
+            <RiShapesLine className="text-emerald-400" />
+          </div>
+          <div className="grid grid-cols-4 gap-1.5 text-[9px] font-bold text-zinc-300">
+            <button
+              type="button"
+              onClick={() => insertQuickShape('rectangle')}
+              className="py-1.5 px-1 rounded-lg border border-white/5 bg-black/40 hover:border-emerald-500/30 hover:text-emerald-300 transition-all text-center"
+            >
+              Box
+            </button>
+            <button
+              type="button"
+              onClick={() => insertQuickShape('circle')}
+              className="py-1.5 px-1 rounded-lg border border-white/5 bg-black/40 hover:border-emerald-500/30 hover:text-emerald-300 transition-all text-center"
+            >
+              Circle
+            </button>
+            <button
+              type="button"
+              onClick={() => insertQuickShape('arrow')}
+              className="py-1.5 px-1 rounded-lg border border-white/5 bg-black/40 hover:border-emerald-500/30 hover:text-emerald-300 transition-all text-center"
+            >
+              Arrow
+            </button>
+            <button
+              type="button"
+              onClick={() => insertQuickShape('star')}
+              className="py-1.5 px-1 rounded-lg border border-white/5 bg-black/40 hover:border-emerald-500/30 hover:text-emerald-300 transition-all text-center"
+            >
+              Star
+            </button>
+            <button
+              type="button"
+              onClick={() => insertQuickShape('diamond')}
+              className="py-1.5 px-1 rounded-lg border border-white/5 bg-black/40 hover:border-emerald-500/30 hover:text-emerald-300 transition-all text-center"
+            >
+              Diamond
+            </button>
+            <button
+              type="button"
+              onClick={() => insertQuickShape('cloud')}
+              className="py-1.5 px-1 rounded-lg border border-white/5 bg-black/40 hover:border-emerald-500/30 hover:text-emerald-300 transition-all text-center"
+            >
+              Cloud
+            </button>
+            <button
+              type="button"
+              onClick={() => insertQuickShape('handwriting')}
+              className="col-span-2 py-1.5 px-1 rounded-lg border border-emerald-500/20 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-400 hover:text-black transition-all text-center"
+            >
+              🖊️ Pen Text
+            </button>
+          </div>
+        </div>
+
+        {/* PRESET EDUCATIONAL & DIAGRAM PROMPTS */}
+        <div className={`${glassPanel} p-3 border-white/5 flex-1 min-h-0 flex flex-col`}>
+          <div className="text-[9px] font-mono tracking-widest text-zinc-400 uppercase mb-2 flex items-center justify-between">
+            <span>Specialized Templates</span>
+            <RiSparklingLine className="text-amber-400" />
+          </div>
+          <div className="flex-1 overflow-y-auto space-y-1 scrollbar-small pr-1">
+            {PRESET_TEMPLATES.map((tmpl) => (
+              <button
+                key={tmpl.label}
+                type="button"
+                onClick={() => void writeOnBoard(tmpl.prompt)}
+                className="w-full text-left p-1.5 rounded-lg border border-white/5 bg-black/30 hover:border-emerald-500/30 hover:bg-emerald-500/5 transition-all text-[10px] text-zinc-300 flex items-center justify-between group"
+              >
+                <span>{tmpl.label}</span>
+                <span className="text-[9px] text-zinc-600 group-hover:text-emerald-400">Draw →</span>
+              </button>
+            ))}
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={() => editorRef.current?.setCurrentTool('draw')}
-              className="h-11 rounded-xl border border-emerald-500/40 bg-emerald-500/15 text-emerald-300 flex items-center justify-center gap-2 text-[10px] font-black tracking-widest"
-            >
-              PEN
-            </button>
-            <button
-              onClick={() => editorRef.current?.setCurrentTool('eraser')}
-              className="h-11 rounded-xl border border-white/10 bg-black/40 text-zinc-300 hover:text-red-300 flex items-center justify-center gap-2 text-[10px] font-black tracking-widest"
-            >
-              ERASE
-            </button>
-            <button
-              onClick={resetView}
-              className="h-11 rounded-xl border border-white/10 bg-black/40 text-zinc-300 hover:text-cyan-300 flex items-center justify-center gap-2 text-[10px] font-black tracking-widest"
-            >
-              <RiRefreshLine /> FIT
-            </button>
-            <button
-              onClick={clearBoard}
-              className="h-11 rounded-xl border border-white/10 bg-black/40 text-zinc-300 hover:text-red-300 flex items-center justify-center gap-2 text-[10px] font-black tracking-widest"
-            >
-              <RiDeleteBin6Line /> CLEAR
-            </button>
-          </div>
-
-          <button
-            onClick={saveBoard}
-            className="mt-2 h-11 w-full rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-400 hover:text-black flex items-center justify-center gap-2 text-[10px] font-black tracking-widest"
-          >
-            <RiDownloadLine /> SAVE PDF
-          </button>
-
-          <div className="mt-4 rounded-xl border border-white/10 bg-black/40 p-3 text-[10px] font-mono text-zinc-400">
-            <div className="flex justify-between gap-3">
-              <span>Status</span>
-              <span className="text-emerald-300 text-right">{status}</span>
+          {/* BOARD HARDWARE CONTROLS */}
+          <div className="pt-2 border-t border-white/5 mt-2">
+            <div className="grid grid-cols-2 gap-1.5">
+              <button
+                type="button"
+                onClick={() => editorRef.current?.setCurrentTool('draw')}
+                className="h-9 rounded-xl border border-emerald-500/40 bg-emerald-500/15 text-emerald-300 flex items-center justify-center gap-1 text-[10px] font-black tracking-widest hover:bg-emerald-400 hover:text-black transition-all"
+              >
+                PEN
+              </button>
+              <button
+                type="button"
+                onClick={() => editorRef.current?.setCurrentTool('eraser')}
+                className="h-9 rounded-xl border border-white/10 bg-black/40 text-zinc-300 hover:text-red-300 flex items-center justify-center gap-1 text-[10px] font-black tracking-widest transition-all"
+              >
+                ERASE
+              </button>
+              <button
+                type="button"
+                onClick={resetView}
+                className="h-9 rounded-xl border border-white/10 bg-black/40 text-zinc-300 hover:text-cyan-300 flex items-center justify-center gap-1 text-[10px] font-black tracking-widest transition-all"
+              >
+                <RiRefreshLine /> FIT
+              </button>
+              <button
+                type="button"
+                onClick={clearBoard}
+                className="h-9 rounded-xl border border-white/10 bg-black/40 text-zinc-300 hover:text-red-300 flex items-center justify-center gap-1 text-[10px] font-black tracking-widest transition-all"
+              >
+                <RiDeleteBin6Line /> CLEAR
+              </button>
             </div>
-            <div className="mt-2 text-zinc-500 leading-relaxed">
-              AI output becomes editable tldraw objects, so you can move, erase, annotate, and export.
+
+            <button
+              type="button"
+              onClick={saveBoard}
+              className="mt-2 h-9 w-full rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-400 hover:text-black flex items-center justify-center gap-1.5 text-[10px] font-black tracking-widest transition-all"
+            >
+              <RiDownloadLine /> SAVE PDF
+            </button>
+
+            {/* STATUS FOOTER */}
+            <div className="mt-2.5 rounded-xl border border-white/5 bg-black/40 p-2.5 text-[10px] font-mono text-zinc-400">
+              <div className="flex justify-between gap-2">
+                <span>Status</span>
+                <span className="text-emerald-300 truncate text-right font-medium">{status}</span>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
+      {/* RIGHT CANVAS: TLDRAW WHITEBOARD */}
       <div className="col-span-12 lg:col-span-9 min-h-0">
-        <div className={`${glassPanel} h-full p-4 border-emerald-500/10`}>
-          <div className="h-full overflow-hidden rounded-xl border border-emerald-950 bg-[#f8fff8] shadow-inner">
+        <div className={`${glassPanel} h-full p-4 border-emerald-500/10 flex flex-col`}>
+          <div className="h-full overflow-hidden rounded-xl border border-emerald-950/60 bg-[#f8fff8] shadow-inner relative">
             <div className="h-full min-h-[560px] nexus-tldraw-board">
               <Tldraw
                 autoFocus
