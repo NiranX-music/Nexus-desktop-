@@ -15,7 +15,6 @@ import {
   RiGlobalLine,
   RiPencilLine,
   RiDashboardLine,
-  RiVideoLine,
   RiUserLine
 } from 'react-icons/ri'
 import { getSystemStatus } from '@renderer/services/system-info'
@@ -37,7 +36,6 @@ const ProfileView = lazy(() => import('../views/Profile'))
 const GalleryView = lazy(() => import('../views/Gallery'))
 const BrowserControlView = lazy(() => import('../views/BrowserControl'))
 const WhiteboardView = lazy(() => import('../views/Whiteboard'))
-const VideoStudioView = lazy(() => import('../views/VideoStudio'))
 const AgenticView = lazy(() => import('../views/AgenticView'))
 import VisionSourceModal, { StartVisionOptions } from '../components/VisionSourceModal'
 
@@ -101,10 +99,9 @@ const NEXUS = (props: NexusProps) => {
     { id: 'Apps', icon: <RiFolderOpenLine />, label: 'Apps' },
     { id: 'BROWSER CONTROL', icon: <RiGlobalLine />, label: 'Browser' },
     { id: 'WHITEBOARD', icon: <RiPencilLine />, label: 'Board' },
-    { id: 'VIDEO', icon: <RiVideoLine />, label: 'Video' },
     { id: 'NOTES', icon: <RiFolderOpenLine />, label: 'Notes' },
     { id: 'GALLERY', icon: <RiImageLine />, label: 'Gallery' },
-    { id: 'PHONE', icon: <RiPhoneLine />, label: 'Phone' },
+    // Phone tab temporarily removed from sidebar while bridge link is unlinked
     { id: 'SETTINGS', icon: <RiSettings4Line />, label: 'Settings' }
   ]
 
@@ -124,8 +121,6 @@ const NEXUS = (props: NexusProps) => {
       browser: 'BROWSER CONTROL',
       whiteboard: 'WHITEBOARD',
       board: 'WHITEBOARD',
-      media: 'VIDEO',
-      video: 'VIDEO',
       notes: 'NOTES',
       gallery: 'GALLERY',
       phone: 'PHONE',
@@ -216,6 +211,15 @@ const NEXUS = (props: NexusProps) => {
   ])
 
   useEffect(() => {
+    const handleSwitchTab = (e: any) => {
+      const tabId = e.detail?.tab
+      if (tabId) setActiveTab(tabId)
+    }
+    window.addEventListener('nexus-switch-tab', handleSwitchTab)
+    return () => window.removeEventListener('nexus-switch-tab', handleSwitchTab)
+  }, [])
+
+  useEffect(() => {
     void trackSiteVisit(`nexus-tab:${activeTab}`, {
       surface: 'nexus-tab',
       tab: activeTab
@@ -223,10 +227,10 @@ const NEXUS = (props: NexusProps) => {
   }, [activeTab])
 
   return (
-    <div className="nexus-shell-bg nexus-shell-scan h-screen w-full text-zinc-100 font-sans overflow-hidden select-none flex flex-col relative pb-5">
+    <div className="nexus-shell-bg nexus-shell-scan h-full w-full text-zinc-100 font-sans overflow-hidden select-none flex flex-col relative">
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_right,rgba(255,255,255,0.025)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.018)_1px,transparent_1px)] bg-[size:48px_48px] opacity-35" />
 
-      <div className="group/sidebar fixed left-0 top-14 bottom-5 z-70 w-16 hover:w-56 transition-all duration-200 border-r border-emerald-400/20 bg-zinc-950/82 backdrop-blur-2xl overflow-hidden shadow-[18px_0_35px_rgba(0,0,0,0.55)]">
+      <div className="group/sidebar absolute left-0 top-14 bottom-0 z-70 w-16 hover:w-56 transition-all duration-200 border-r border-emerald-400/20 bg-zinc-950/82 backdrop-blur-2xl overflow-hidden shadow-[18px_0_35px_rgba(0,0,0,0.55)]">
         <div className="border-b border-white/5 p-2">
           <div className="flex h-10 items-center gap-3 rounded-lg border border-emerald-300/15 bg-emerald-300/[0.08] px-2">
             <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-emerald-400 text-[10px] font-black text-black shadow-[0_0_18px_rgba(52,211,153,0.4)]">
@@ -294,7 +298,7 @@ const NEXUS = (props: NexusProps) => {
         </div>
       </div>
 
-      <div className="flex-1 overflow-hidden relative ml-16 bg-[radial-gradient(circle_at_center,#11182780_0%,#020202_62%,#000_100%)]">
+      <div className="flex-1 min-h-0 overflow-hidden relative ml-16 bg-[radial-gradient(circle_at_center,#11182780_0%,#020202_62%,#000_100%)]">
         <div className={`absolute inset-0 ${activeTab === 'DASHBOARD' ? 'block' : 'hidden'}`}>
           <DashboardView
             props={props}
@@ -336,7 +340,6 @@ const NEXUS = (props: NexusProps) => {
             />
           )}
           {activeTab === 'WHITEBOARD' && <WhiteboardView />}
-          {activeTab === 'VIDEO' && <VideoStudioView />}
           {activeTab === 'NOTES' && <NotesView glassPanel={glassPanel} />}
           {activeTab === 'SETTINGS' && <SettingsView isSystemActive={props.isSystemActive} />}
           {activeTab === 'GALLERY' && <GalleryView />}
