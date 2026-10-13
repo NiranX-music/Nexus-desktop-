@@ -11,6 +11,7 @@ import {
   Eye, 
   EyeOff 
 } from "lucide-react";
+import MediaDeviceSettings from "./MediaDeviceSettings";
 
 export interface NexusEngineConfig {
   developerMode: boolean;
@@ -290,6 +291,14 @@ export const Settings: React.FC<{
               </div>
             </div>
           </div>
+        </div>
+
+        {/* Hardware & Media Device Routing */}
+        <div className="rounded-xl border border-slate-800/80 bg-slate-900/50 p-4 space-y-4">
+          <MediaDeviceSettings
+            cardClass="bg-slate-950/80 border border-slate-800 rounded-xl p-4 flex flex-col gap-3"
+            titleClass="text-xs font-mono font-bold tracking-wider text-slate-300 uppercase flex items-center gap-2"
+          />
         </div>
       </div>
     </div>
