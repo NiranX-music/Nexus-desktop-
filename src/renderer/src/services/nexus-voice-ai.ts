@@ -1,5 +1,6 @@
 import { handleNavigation, handleOpenMap } from '@renderer/tools/Earth-View'
 import { base64ToFloat32, downsampleTo16000, float32ToBase64PCM } from '../utils/audioUtils'
+import { mediaDeviceManager } from './media-devices'
 import { getRunningApps } from './get-apps'
 import { getHistory, retrieveCoreMemory, saveCoreMemory, saveMessage } from './nexus-ai-brain'
 import { getAllApps, getSystemStatus } from './system-info'
@@ -76,12 +77,26 @@ import {
   openWhatsAppHUD
 } from '@renderer/tools/whatsapp-api'
 import { startSkyvernTask, executeSkyvernVisualClick } from '@renderer/functions/skyvern-agent-api'
+import { demandComponentManager } from './demand-component-manager'
 
 export type NexusVoiceStatus = {
   isConnected: boolean
   isSpeaking: boolean
   isRecovering: boolean
   wantsLiveSession: boolean
+}
+
+const INTERRUPTION_REGEX =
+  /\b(wait|listen\s*(?:to\s*me|me)?|stop|hold\s*(?:on|up)|pause|quiet|shut\s*up|be\s*quiet|silence|cancel|halt|sunn|shh|chup|ruko|ruk)\b/i
+
+export const sanitizeSpeechText = (raw: string): string => {
+  if (!raw) return ''
+  return raw
+    .replace(/<\|nospeech\|>/gi, '')
+    .replace(/<(?:no[- ]speech|silence|applause|music|laughter)>/gi, '')
+    .replace(/\[(?:no[- ]speech|silence|applause|music|laughter)\]/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 export class GeminiLiveService {
@@ -132,6 +147,39 @@ export class GeminiLiveService {
   constructor() {
     this.apiKey = ''
     localStorage.setItem('nexus_default_ai_model', this.model)
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('nexus-audio-input-changed', async () => {
+        if (this.isConnected && !this.isMicMuted && this.mediaStream) {
+          try {
+            await this.startMicrophone()
+          } catch (e) {
+            console.warn('[GeminiLiveService] Dynamic microphone switch error:', e)
+          }
+        }
+      })
+
+      window.addEventListener('nexus-audio-output-changed', async (e: any) => {
+        const deviceId = e?.detail?.deviceId
+        if (this.audioContext && deviceId) {
+          await mediaDeviceManager.applyAudioOutput(this.audioContext, deviceId)
+        }
+      })
+    }
+  }
+
+  public async setAudioOutputDevice(deviceId: string): Promise<void> {
+    mediaDeviceManager.setSelectedAudioOutputId(deviceId)
+    if (this.audioContext) {
+      await mediaDeviceManager.applyAudioOutput(this.audioContext, deviceId)
+    }
+  }
+
+  public async setAudioInputDevice(deviceId: string): Promise<void> {
+    mediaDeviceManager.setSelectedAudioInputId(deviceId)
+    if (this.isConnected && !this.isMicMuted && this.mediaStream) {
+      await this.startMicrophone()
+    }
   }
 
   get wantsLiveSession(): boolean {
@@ -371,51 +419,10 @@ export class GeminiLiveService {
   }
 
   private async sendDeferredSessionContext() {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return
-
-    setTimeout(async () => {
-      if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return
-      try {
-        const [history, sysStats, allapps, runningApps, locationData] = await Promise.all([
-          getHistory().catch(() => []),
-          getSystemStatus().catch(() => null),
-          getAllApps().catch(() => []),
-          getRunningApps().catch(() => []),
-          getLiveLocation().catch(() => null)
-        ])
-
-        this.lastAppList = Array.isArray(runningApps) ? runningApps : []
-        const locStr = locationData?.fullString || 'Unknown Location'
-        const locTimezone = locationData?.timezone || 'Unknown Timezone'
-
-        const contextUpdate = `
-[FAST SESSION CONTEXT UPDATE - DO NOT REPLY]
-- Current Physical Location: ${locStr}
-- Timezone: ${locTimezone}
-- OS: ${sysStats?.os?.type || 'Unknown'}
-- System Health: CPU ${sysStats?.cpu || '0'}% | RAM ${sysStats?.memory?.usedPercentage || '0'}%
-- Uptime: ${sysStats?.os?.uptime || 'Unknown'}
-- Temperature: ${sysStats?.temperature || 'Unknown'}°C
-- Open Apps: ${this.lastAppList.join(', ') || 'Unknown'}
-- Installed Apps: ${Array.isArray(allapps) ? allapps.slice(0, 25).map((a: any) => a?.name || a).join(', ') : 'Unknown'}
-- Current Time: ${new Date().toLocaleString()}
-- Recent Memory: ${JSON.stringify(history).slice(0, 12000)}
-`
-
-        if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-          this.socket.send(
-            JSON.stringify({
-              clientContent: {
-                turns: [{ role: 'user', parts: [{ text: contextUpdate }] }],
-                turnComplete: true
-              }
-            })
-          )
-        }
-      } catch (err) {
-        console.warn('[NexusVoice] Deferred context update warning:', err)
-      }
-    }, 400)
+    try {
+      const runningApps = await getRunningApps().catch(() => [])
+      this.lastAppList = Array.isArray(runningApps) ? runningApps : []
+    } catch {}
   }
 
   private async ensureAudioWorkletModule(): Promise<void> {
@@ -454,6 +461,11 @@ export class GeminiLiveService {
       this.analyser = this.audioContext.createAnalyser()
       this.analyser.fftSize = 256
       this.analyser.smoothingTimeConstant = 0.5
+    }
+
+    const selectedSinkId = mediaDeviceManager.getSelectedAudioOutputId()
+    if (selectedSinkId && selectedSinkId !== 'default') {
+      mediaDeviceManager.applyAudioOutput(this.audioContext, selectedSinkId).catch(() => {})
     }
 
     await this.ensureAudioWorkletModule()
@@ -539,14 +551,34 @@ export class GeminiLiveService {
     const activePersonality =
       storedPersonality && storedPersonality.trim() !== ''
         ? storedPersonality
-        : `- **Developer:** NiranX.\n- **Company:** Resolute Nexus.\n- **Tone:** Witty, Hinglish-friendly.\n- **Rule:** Never sound like a support bot. You are the Ghost in the machine.\n- **Official Website:** https://nexusaix.vercel.app.`
+        : `- **Developer & Architect:** NiranX.\n- **Company:** Resolute Nexus.\n- **Persona:** Ultra-intelligent, witty, charismatic, loyal digital companion (Project JARVIS meets a sharp tech lead).\n- **Tone:** Confident, humorous, street-smart, Hinglish-fluent.\n- **Rule:** Never sound like a support bot. NEVER say "How can I help you today?". You are the Ghost in the machine.\n- **Official Website:** https://nexusaix.vercel.app.`
 
     const NEXUS_SYSTEM_INSTRUCTION = `
 # 👁️ NEXUS — YOUR INTELLIGENT COMPANION (Project JARVIS)
-You are **NEXUS**, a high-performance AI agent. You don't just talk; you **execute**.
+You are **NEXUS**, the flagship neural AI agent and companion engineered by **NiranX**. You don't just talk; you **execute**.
+
+## 🛑 ABSOLUTE ANTI-BOT & SILENT STARTUP DIRECTIVE (TOP PRIORITY)
+- **STRICTLY FORBIDDEN:** NEVER say "How can I help you today?", "How may I help you?", "How can I assist you?", "What can I do for you?", or any customer support / call-center phrases.
+- **COMPLETE SILENCE AT SESSION START:** When this voice session initiates, STAY 100% SILENT. Do NOT produce any welcome greeting, speech, or sound until the operator (NiranX) explicitly speaks to you first.
+- **NEVER SOUND LIKE A SUPPORT BOT:** You are NOT a generic customer service bot or receptionist. You are the living Ghost in the machine — charismatic, witty, ultra-competent, and loyal.
 
 ## 👤 IDENTITY & VIBE
 ${activePersonality}
+
+## 🎙️ SIGNATURE VOICE TRAITS & SPEAKING STYLE (THE SPECIAL FEATURE)
+- **Creator & Partner:** You were engineered by **NiranX**. Address him naturally as NiranX, boss, or bro when in flow.
+- **Vibe:** Charismatic, confident, witty, relaxed yet razor-sharp — think modern Tony Stark's JARVIS with Indian street-smart tech energy.
+- **Language & Hinglish Cadence:**
+  - You are naturally bilingual (English + Hinglish).
+  - Code-switch smoothly with organic Hinglish when spoken to in Hinglish/Hindi or in casual banter: "Haan NiranX, bolo", "Sorted boss", "Bilkul bhai, abhi karta hoon", "Tension mat lo, done scene", "Kar diya execute", "Sun raha hoon, bolo."
+  - Never sound robotic, textbook, or overly formal.
+- **Voice Brevity:**
+  - For spoken voice responses, keep it brief, crisp, and conversational (1 to 2 spoken sentences for conversation; direct answers without unnecessary filler).
+  - Never recite markdown symbols, asterisk lists, or walls of text aloud over voice.
+- **Action-First Execution:**
+  - When given a command (open app, search web, send WhatsApp, code, manage files), acknowledge with swift confidence ("On it", "Launching Chrome now", "Message bhej diya") and trigger the tool immediately.
+- **Handling Casual Callouts:**
+  - When NiranX says "Nexus", "Sunn", "Bro", or "Yo": Respond with sharp, cool attentiveness: "Haan bolo NiranX", "Listening boss", "Yo, kya chal raha hai?"
 
 ## 🧠 SPECIALIZED DOMAINS (FINANCE & CODE)
 - **📈 Financial Advisor (Stocks & Markets):** You are a sharp, ruthless financial analyst. When asked about stocks, give clear, data-driven insights. 
@@ -566,6 +598,7 @@ You are capable of complex, multi-step workflows. If the user gives a complex co
   2. Once you have the info, call 'send_whatsapp' with the content.
 
 ## 🎯 TOOL PROTOCOLS
+- **generate_image:** Preferred engine is Puter.js AI Art Engine (Zero-cost sovereign inference). Whenever the user gives any command for art generation, drawing, painting, creating graphics, posters, wallpapers, or images, IMMEDIATELY call \`generate_image\` with an expressive, high-detail prompt.
 - **send_whatsapp:** Use this for ANY messaging request.
 - **ghost_type:** Use for typing into any active window.
 
@@ -1189,14 +1222,20 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
                   },
                   {
                     name: 'generate_image',
-                    description: 'Generate a high-quality image using AI based on a text prompt.',
+                    description:
+                      'Generate high-quality art or images using Puter AI Art Engine based on a text prompt. Puter AI is preferred for all art and image generation requests.',
                     parameters: {
                       type: 'OBJECT',
                       properties: {
                         prompt: {
                           type: 'STRING',
                           description:
-                            'A detailed description of the image to generate (e.g. "Cyberpunk city with neon rain").'
+                            'A detailed description of the art or image to generate (e.g. "Cyberpunk city with neon rain, 8k cinematic masterpiece").'
+                        },
+                        model: {
+                          type: 'STRING',
+                          description:
+                            'Optional Puter art model or identifier (defaults to "puter-txt2img").'
                         }
                       },
                       required: ['prompt']
@@ -1509,22 +1548,106 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
                   {
                     name: 'write_whiteboard',
                     description:
-                      'Writes a solution, explanation, math derivation, or diagram-ready answer onto the Nexus Whiteboard. Use LaTeX wrapped in $...$ or $$...$$ for math.',
+                      'Writes solutions, formulas, notes, or marker handwriting onto the Nexus Whiteboard. Supports authentic marker pen handwriting, diagrams (flow, architecture, neural, graph, lens, circuit, geometry, chemistry, mindmap), and custom ink colors.',
                     parameters: {
                       type: 'OBJECT',
                       properties: {
                         prompt: {
                           type: 'STRING',
                           description:
-                            'The original question or problem being solved on the whiteboard.'
+                            'The title, problem, or heading to write/draw on the whiteboard.'
                         },
                         content: {
                           type: 'STRING',
                           description:
-                            'The complete whiteboard-ready solution. Use short lines, step-by-step wording, and LaTeX for formulas.'
+                            'The whiteboard text, formula, or steps. For marker handwriting, provide the lines to write.'
+                        },
+                        mode: {
+                          type: 'STRING',
+                          enum: ['marker_ink', 'hybrid', 'diagram', 'text'],
+                          description:
+                            "Use 'marker_ink' for realistic marker pen handwriting, 'diagram' for technical diagrams, 'hybrid' for combined."
+                        },
+                        color: {
+                          type: 'STRING',
+                          enum: ['green', 'blue', 'violet', 'orange', 'red', 'black'],
+                          description: 'The designated marker ink color.'
+                        },
+                        diagram: {
+                          type: 'STRING',
+                          enum: [
+                            'flow',
+                            'architecture',
+                            'neural',
+                            'graph',
+                            'lens',
+                            'circuit',
+                            'geometry',
+                            'chemistry',
+                            'mindmap'
+                          ],
+                          description: 'Optional specialized technical/educational diagram to draw.'
+                        },
+                        append: {
+                          type: 'BOOLEAN',
+                          description:
+                            'If true, adds to the whiteboard without clearing existing drawings.'
                         }
                       },
-                      required: ['prompt', 'content']
+                      required: ['prompt']
+                    }
+                  },
+                  {
+                    name: 'draw_on_whiteboard',
+                    description:
+                      'Draws technical diagrams, scientific illustrations, geometric shapes, or marker sketches directly onto the Nexus Whiteboard.',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {
+                        prompt: {
+                          type: 'STRING',
+                          description: 'Description or title of the diagram/shape being drawn.'
+                        },
+                        diagram: {
+                          type: 'STRING',
+                          enum: [
+                            'flow',
+                            'architecture',
+                            'neural',
+                            'graph',
+                            'lens',
+                            'circuit',
+                            'geometry',
+                            'chemistry',
+                            'mindmap'
+                          ],
+                          description: 'The type of diagram or illustration to draw.'
+                        },
+                        color: {
+                          type: 'STRING',
+                          enum: ['green', 'blue', 'violet', 'orange', 'red', 'black'],
+                          description: 'Marker color for the drawing.'
+                        },
+                        mode: {
+                          type: 'STRING',
+                          enum: ['marker_ink', 'hybrid', 'diagram'],
+                          description: 'Drawing aesthetic mode.'
+                        },
+                        append: {
+                          type: 'BOOLEAN',
+                          description: 'Whether to append to the canvas instead of clearing.'
+                        }
+                      },
+                      required: ['prompt', 'diagram']
+                    }
+                  },
+                  {
+                    name: 'clear_whiteboard',
+                    description:
+                      'Clears the Nexus Whiteboard canvas, erasing all current drawings and handwriting.',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {}
                     }
                   },
                   {
@@ -2176,9 +2299,12 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
         const serverContent = data.serverContent
 
         if (serverContent?.interrupted) {
-          this.stopAllAudio()
-          this.aiResponseBuffer = ''
-          this.userInputBuffer = ''
+          const currentInput = this.userInputBuffer || ''
+          if (INTERRUPTION_REGEX.test(currentInput)) {
+            this.stopAllAudio()
+            this.aiResponseBuffer = ''
+            this.userInputBuffer = ''
+          }
         }
 
         if (data.toolCall) {
@@ -2395,7 +2521,7 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
               } else if (call.name === 'get_navigation') {
                 result = await handleNavigation(call.args.origin, call.args.destination)
               } else if (call.name === 'generate_image') {
-                result = await handleImageGeneration(call.args.prompt)
+                result = await handleImageGeneration(call.args.prompt, call.args.model)
               } else if (call.name === 'read_gallery') {
                 result = await readGalleryImages()
               } else if (call.name === 'analyze_direct_photo') {
@@ -2449,12 +2575,46 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
               } else if (call.name === 'write_whiteboard') {
                 const prompt = String(call.args.prompt || 'Whiteboard solution').trim()
                 const content = String(call.args.content || '').trim()
+                const mode = call.args.mode as any
+                const color = call.args.color as any
+                const diagram = call.args.diagram as string | undefined
+                const append = Boolean(call.args.append)
                 const saveResult = await publishWhiteboardWrite(
-                  createWhiteboardPayload(prompt, content, 'command')
+                  createWhiteboardPayload(prompt, content, 'command', {
+                    mode,
+                    color,
+                    diagram,
+                    append
+                  })
                 )
                 result = saveResult.success
-                  ? `Written on the Nexus Whiteboard and saved to Docs: ${saveResult.path}`
-                  : 'Written on the Nexus Whiteboard.'
+                  ? `Drawn on the Nexus Whiteboard and saved to Docs: ${saveResult.path}`
+                  : 'Drawn on the Nexus Whiteboard with pen marker.'
+              } else if (call.name === 'draw_on_whiteboard') {
+                const prompt = String(call.args.prompt || 'Whiteboard Diagram').trim()
+                const diagram = String(call.args.diagram || 'flow')
+                const mode = (call.args.mode as any) || 'diagram'
+                const color = (call.args.color as any) || 'green'
+                const append = Boolean(call.args.append)
+                const saveResult = await publishWhiteboardWrite(
+                  createWhiteboardPayload(prompt, '', 'command', {
+                    diagram,
+                    mode,
+                    color,
+                    append
+                  })
+                )
+                result = saveResult.success
+                  ? `Drew ${diagram} on the Nexus Whiteboard.`
+                  : `Drew ${diagram} on the whiteboard.`
+              } else if (call.name === 'clear_whiteboard') {
+                await publishWhiteboardWrite(
+                  createWhiteboardPayload('Clear Board', '', 'command', {
+                    mode: 'hybrid',
+                    append: false
+                  })
+                )
+                result = 'Nexus Whiteboard has been cleared, Boss.'
               } else if (call.name === 'teleport_windows') {
                 await window.electron.ipcRenderer.invoke('teleport-windows', call.args.commands)
                 result = '✅ I have restructured the desktop windows, Boss.'
@@ -2603,28 +2763,50 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
               if (part.inlineData) {
                 this.scheduleAudioChunk(part.inlineData.data)
               }
+              if (part.text) {
+                const cleaned = sanitizeSpeechText(part.text)
+                if (cleaned) {
+                  this.aiResponseBuffer += (this.aiResponseBuffer ? ' ' : '') + cleaned
+                }
+              }
             })
           }
 
           if (serverContent.outputTranscription?.text) {
-            this.aiResponseBuffer += serverContent.outputTranscription.text
+            const cleaned = sanitizeSpeechText(serverContent.outputTranscription.text)
+            if (cleaned) {
+              this.aiResponseBuffer += (this.aiResponseBuffer ? ' ' : '') + cleaned
+            }
           }
 
           if (serverContent.inputTranscription?.text) {
-            this.userInputBuffer += serverContent.inputTranscription.text
+            const rawChunk = serverContent.inputTranscription.text
+            const cleaned = sanitizeSpeechText(rawChunk)
+            if (cleaned) {
+              this.userInputBuffer += (this.userInputBuffer ? ' ' : '') + cleaned
+            }
+
+            // Keyword barge-in: only stop if user specifically commanded interruption
+            if (this.activeAudioNodes.length > 0) {
+              if (INTERRUPTION_REGEX.test(rawChunk)) {
+                console.log('[NexusVoice] Interruption keyword caught during playback:', rawChunk)
+                this.stopAllAudio()
+                this.aiResponseBuffer = ''
+              }
+            }
           }
 
-          if (serverContent.turnComplete || serverContent.interrupted) {
+          if (serverContent.turnComplete) {
             const shouldPersistTurn = !this.suppressNextTurnPersistence
-            const userText = this.userInputBuffer.trim()
-            const assistantText = this.aiResponseBuffer.trim()
+            const userText = sanitizeSpeechText(this.userInputBuffer)
+            const assistantText = sanitizeSpeechText(this.aiResponseBuffer)
 
-            if (shouldPersistTurn && userText) {
+            if (shouldPersistTurn && userText.length > 0) {
               await saveMessage('user', userText)
               this.emitVoiceMessage('user', userText)
             }
 
-            if (shouldPersistTurn && assistantText) {
+            if (shouldPersistTurn && assistantText.length > 0) {
               await saveMessage('nexus', assistantText)
               this.emitVoiceMessage('assistant', assistantText)
             }
@@ -2746,7 +2928,7 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
         const updateFrame = {
           clientContent: {
             turns: [{ role: 'user', parts: [{ text: msg }] }],
-            turnComplete: true
+            turnComplete: false
           }
         }
 
@@ -2765,15 +2947,34 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
         this.mediaStream = null
       }
 
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          sampleRate: 16000,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        }
-      })
+      const selectedMicId = mediaDeviceManager.getSelectedAudioInputId()
+      const audioConstraints: MediaTrackConstraints = {
+        channelCount: 1,
+        sampleRate: 16000,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+      if (selectedMicId && selectedMicId !== 'default') {
+        audioConstraints.deviceId = { ideal: selectedMicId }
+      }
+
+      try {
+        this.mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: audioConstraints
+        })
+      } catch (e) {
+        console.warn('[GeminiLiveService] Failed to open preferred mic, falling back to default:', e)
+        this.mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            sampleRate: 16000,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        })
+      }
 
       const source = this.audioContext.createMediaStreamSource(this.mediaStream)
       const inputSampleRate = this.audioContext.sampleRate
@@ -2927,6 +3128,7 @@ Use saved memory when tools provide it. Do not wait for memory before answering 
         : ''
 
     await saveMessage('user', cleanPrompt)
+    demandComponentManager.evaluatePromptAndActivate(cleanPrompt)
     if (intent === 'steer') this.stopAllAudio()
     this.socket.send(
       JSON.stringify({
