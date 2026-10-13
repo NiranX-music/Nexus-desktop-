@@ -1,9 +1,14 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Activity,
+  AlertCircle,
+  Archive,
+  ArrowRight,
+  CheckCircle2,
   Cpu,
   Database,
+  FileText,
   KeyRound,
   Lock,
   LogIn,
@@ -11,6 +16,7 @@ import {
   Network,
   ShieldCheck,
   TerminalSquare,
+  Upload,
   User,
   UserPlus
 } from 'lucide-react'
@@ -27,6 +33,7 @@ import {
   saveCloudData,
   syncLocalSettingsToCloud
 } from '../services/cloud-data'
+import { importNexusBackup } from '../services/backup-service'
 
 type Mode = 'signin' | 'create'
 
@@ -44,6 +51,13 @@ export default function LoginPage() {
   const [notice, setNotice] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isCloudConfigured] = useState(() => Boolean(configureCloudSupabase()))
+
+  // Backup restore prompt on login
+  const [showBackupModal, setShowBackupModal] = useState(false)
+  const [rememberChoice, setRememberChoice] = useState(false)
+  const [isRestoring, setIsRestoring] = useState(false)
+  const [restoreNotice, setRestoreNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const backupFileInputRef = useRef<HTMLInputElement>(null)
 
   const authStateLabel = useMemo(() => (isCloudConfigured ? 'CLOUD' : 'SETUP'), [isCloudConfigured])
 
@@ -125,7 +139,7 @@ export default function LoginPage() {
           setAuthSession({ token: res.token, mode: 'app', user: res.user })
         }
 
-        navigate('/', { replace: true })
+        handlePostLoginSuccess()
         return
       }
 
@@ -199,12 +213,84 @@ export default function LoginPage() {
         ])
       }
 
-      navigate('/', { replace: true })
+      handlePostLoginSuccess()
     } catch (err: any) {
       setError(err.message || 'Authentication failed.')
     } finally {
       setIsSubmitting(false)
     }
+  }
+
+  const handlePostLoginSuccess = () => {
+    const skip = localStorage.getItem('nexus_skip_login_backup_prompt') === 'true'
+    if (skip) {
+      navigate('/', { replace: true })
+    } else {
+      setShowBackupModal(true)
+    }
+  }
+
+  const handleModalImport = async (file: File) => {
+    if (!file.name.toLowerCase().endsWith('.zip')) {
+      setRestoreNotice({ type: 'error', message: 'Please select a valid .zip backup archive.' })
+      return
+    }
+    setIsRestoring(true)
+    setRestoreNotice(null)
+    try {
+      const res = await importNexusBackup(file)
+      if (!res.success) {
+        throw new Error(res.error || 'Failed to restore backup archive.')
+      }
+      setRestoreNotice({
+        type: 'success',
+        message: `Restored ${res.stats?.notesCount ?? 0} notes, ${res.stats?.memoriesCount ?? 0} memories, and settings! Launching...`
+      })
+      if (rememberChoice) {
+        localStorage.setItem('nexus_skip_login_backup_prompt', 'true')
+      }
+      setTimeout(() => {
+        navigate('/', { replace: true })
+      }, 1200)
+    } catch (err: any) {
+      setRestoreNotice({ type: 'error', message: err.message || 'Restoration failed.' })
+      setIsRestoring(false)
+    }
+  }
+
+  const handleNativeModalBrowse = async () => {
+    setIsRestoring(true)
+    setRestoreNotice(null)
+    try {
+      const res = await importNexusBackup(undefined, { useDialog: true })
+      if (res.canceled) {
+        setIsRestoring(false)
+        return
+      }
+      if (!res.success) {
+        throw new Error(res.error || 'Failed to restore backup archive.')
+      }
+      setRestoreNotice({
+        type: 'success',
+        message: `Restored ${res.stats?.notesCount ?? 0} notes, ${res.stats?.memoriesCount ?? 0} memories, and settings! Launching...`
+      })
+      if (rememberChoice) {
+        localStorage.setItem('nexus_skip_login_backup_prompt', 'true')
+      }
+      setTimeout(() => {
+        navigate('/', { replace: true })
+      }, 1200)
+    } catch (err: any) {
+      setRestoreNotice({ type: 'error', message: err.message || 'Restoration failed.' })
+      setIsRestoring(false)
+    }
+  }
+
+  const handleSkipBackup = () => {
+    if (rememberChoice) {
+      localStorage.setItem('nexus_skip_login_backup_prompt', 'true')
+    }
+    navigate('/', { replace: true })
   }
 
   const handleLocalBypass = async () => {
@@ -233,7 +319,7 @@ export default function LoginPage() {
         persistStoredAppAuthToken(res.token)
         localStorage.setItem('nexus_user_name', res.user.name || localName)
         setAuthSession({ token: res.token, mode: 'app', user: res.user })
-        navigate('/', { replace: true })
+        handlePostLoginSuccess()
       } else {
         throw new Error(res?.error || 'Failed to initialize local operator session.')
       }
@@ -532,6 +618,122 @@ export default function LoginPage() {
           </div>
         </motion.div>
       </motion.div>
+
+      {/* Backup Restoration Prompt Modal on Login */}
+      <AnimatePresence>
+        {showBackupModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.92, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 15 }}
+              className="w-full max-w-lg rounded-2xl border border-emerald-400/40 bg-zinc-950 p-6 shadow-[0_0_60px_rgba(16,185,129,0.25)] text-zinc-100"
+            >
+              <div className="flex items-center gap-3 border-b border-white/10 pb-4 mb-4">
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-emerald-400/40 bg-emerald-400/15 text-emerald-300 shadow-[0_0_15px_rgba(16,185,129,0.3)]">
+                  <Archive size={22} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold uppercase tracking-wider text-white">
+                    Nexus Backup Archive
+                  </h3>
+                  <p className="text-[11px] font-mono text-emerald-400">
+                    OPERATOR INITIALIZATION // RESTORE CHECK
+                  </p>
+                </div>
+              </div>
+
+              <p className="text-xs text-zinc-300 mb-5 leading-relaxed">
+                Welcome, Operator. Do you have an existing Nexus system backup archive (<span className="text-emerald-400 font-mono font-bold">.zip</span>) with your notes, memories, AI API keys, and settings to restore into this instance?
+              </p>
+
+              {restoreNotice && (
+                <div
+                  className={`mb-4 flex items-center gap-2 rounded-lg border p-3 text-xs font-mono ${
+                    restoreNotice.type === 'error'
+                      ? 'border-red-500/30 bg-red-500/10 text-red-200'
+                      : 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200'
+                  }`}
+                >
+                  {restoreNotice.type === 'error' ? <AlertCircle size={15} /> : <CheckCircle2 size={15} />}
+                  <span>{restoreNotice.message}</span>
+                </div>
+              )}
+
+              <input
+                ref={backupFileInputRef}
+                type="file"
+                accept=".zip"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) void handleModalImport(file)
+                  e.target.value = ''
+                }}
+              />
+
+              <div
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  const file = e.dataTransfer.files?.[0]
+                  if (file) void handleModalImport(file)
+                }}
+                onClick={() => !isRestoring && backupFileInputRef.current?.click()}
+                className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-emerald-400/30 bg-black/40 p-6 text-center transition hover:border-emerald-400 hover:bg-emerald-950/20 cursor-pointer"
+              >
+                <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-xl border border-emerald-400/30 bg-emerald-400/10 text-emerald-300">
+                  <Upload size={22} className={isRestoring ? 'animate-bounce' : ''} />
+                </div>
+                <span className="text-xs font-bold uppercase tracking-wider text-zinc-200">
+                  {isRestoring ? 'Restoring Archive...' : 'Import Nexus Backup (.zip)'}
+                </span>
+                <span className="mt-1 text-[11px] text-zinc-500">
+                  Drag & drop your .zip file here or click to browse
+                </span>
+              </div>
+
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleNativeModalBrowse}
+                  disabled={isRestoring}
+                  className="flex-1 inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] text-[11px] font-bold uppercase tracking-wider text-zinc-300 hover:border-emerald-400/40 hover:text-emerald-200 transition"
+                >
+                  <FileText size={13} /> Native File Dialog
+                </button>
+              </div>
+
+              <div className="mt-5 flex items-center justify-between border-t border-white/10 pt-4">
+                <label className="flex items-center gap-2 cursor-pointer text-[11px] text-zinc-400 select-none">
+                  <input
+                    type="checkbox"
+                    checked={rememberChoice}
+                    onChange={(e) => setRememberChoice(e.target.checked)}
+                    className="rounded border-white/20 bg-black text-emerald-500 focus:ring-0"
+                  />
+                  <span>Don&apos;t ask again on login</span>
+                </label>
+
+                <button
+                  type="button"
+                  onClick={handleSkipBackup}
+                  disabled={isRestoring}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.05] px-4 text-xs font-bold uppercase tracking-wider text-zinc-300 hover:bg-white/10 hover:text-white transition"
+                >
+                  <span>Skip / Start Fresh</span>
+                  <ArrowRight size={14} />
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
