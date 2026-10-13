@@ -9,6 +9,7 @@ import MiniOverlay from '@renderer/components/MiniOverlay'
 import { getScreenSourceId } from '@renderer/hooks/CaptureDesktop'
 import { useNexusRequestQueue } from '@renderer/hooks/useNexusRequestQueue'
 import { nexusService } from '@renderer/services/nexus-voice-ai'
+import { mediaDeviceManager } from '@renderer/services/media-devices'
 import { saveMessage } from '@renderer/services/nexus-ai-brain'
 import { generateWithNexusGeminiClient } from '@renderer/services/nexus-gemini-api'
 import {
@@ -389,9 +390,16 @@ export default function TrialRoot() {
       let stream: MediaStream
 
       if (mode === 'camera') {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 480 }
-        })
+        const videoConstraints = mediaDeviceManager.getVideoConstraints({ width: 640, height: 480 })
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: videoConstraints
+          })
+        } catch {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { width: 640, height: 480 }
+          })
+        }
       } else {
         const sourceId = await getScreenSourceId()
         if (!sourceId) return
