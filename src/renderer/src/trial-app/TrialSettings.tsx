@@ -39,6 +39,9 @@ export default function TrialSettings({ isSystemActive }: TrialSettingsProps) {
   const [hfKey, setHfKey] = useState(localStorage.getItem('nexus_hf_api_key') || '')
   const [tailvyKey, setTailvyKey] = useState(localStorage.getItem('nexus_tailvy_api_key') || '')
   const [nvidiaKey, setNvidiaKey] = useState(localStorage.getItem('nexus_nvidia_api_key') || '')
+  const [puterToken, setPuterToken] = useState(
+    localStorage.getItem('nexus_puter_token') || ''
+  )
   const [aiProviderMode, setAiProviderMode] = useState(
     localStorage.getItem('nexus_ai_provider_mode') || 'nexus'
   )
@@ -113,6 +116,7 @@ export default function TrialSettings({ isSystemActive }: TrialSettingsProps) {
     localStorage.setItem('nexus_hf_api_key', hfKey)
     localStorage.setItem('nexus_tailvy_api_key', tailvyKey)
     localStorage.setItem('nexus_nvidia_api_key', cleanNvidiaKey)
+    localStorage.setItem('nexus_puter_token', puterToken)
     localStorage.setItem('nexus_ai_provider_mode', aiProviderMode)
 
     if (window.electron?.ipcRenderer) {
@@ -120,7 +124,8 @@ export default function TrialSettings({ isSystemActive }: TrialSettingsProps) {
         await window.electron.ipcRenderer.invoke('secure-save-keys', {
           groqKey,
           geminiKey,
-          nvidiaKey: cleanNvidiaKey
+          nvidiaKey: cleanNvidiaKey,
+          puterToken
         })
       } catch {}
     }
@@ -329,6 +334,27 @@ export default function TrialSettings({ isSystemActive }: TrialSettingsProps) {
                 placeholder="tlv_..."
                 className={inputClass}
               />
+            </label>
+
+            <label className="flex flex-col gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-amber-400 md:col-span-2">
+              <span className="inline-flex items-center justify-between">
+                <span className="inline-flex items-center gap-2">
+                  <RiKey2Line /> Puter.js AI Engine (Primary Sovereign Free LLMs & Art)
+                </span>
+                <span className="text-[9px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                  Primary Engine
+                </span>
+              </span>
+              <input
+                type="password"
+                value={puterToken}
+                onChange={(event) => setPuterToken(event.target.value)}
+                placeholder="Optional Puter auth token (Puter works zero-auth in browser)..."
+                className={inputClass}
+              />
+              <span className="text-[9px] text-zinc-500 font-mono">
+                Primary access to GPT-4o, Claude 3.7 Sonnet, DeepSeek R1, and Puter txt2img without subscriptions.
+              </span>
             </label>
           </div>
         </section>
