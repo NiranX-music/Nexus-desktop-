@@ -1,26 +1,17 @@
 import { useState, useEffect, useRef } from 'react'
 import MiniOverlay from './components/MiniOverlay'
 import { nexusService } from './services/nexus-voice-ai'
+import { mediaDeviceManager } from './services/media-devices'
 import { getScreenSourceId } from './hooks/CaptureDesktop'
 import NEXUS from './UI/nexus'
-import TerminalOverlay from './components/TerminalOverlay'
-import LeafletMapWidget from './Widgets/MapView'
-import ImageWidget from './Widgets/ImageWidget'
-import EmailWidget from './Widgets/EmailWidget'
-import WeatherWidget from './Widgets/WeatherWidget'
-import StockWidget from './Widgets/StockWidget'
-import LiveCodingWidget from './Widgets/LiveCodingWidget'
-import WormholeWidget from './Widgets/WormholeWidget'
-import OracleWidget from './Widgets/RagOrcaleWidget'
-import ResearchWidget from './Widgets/DeepResearch'
-import SemanticWidget from './Widgets/SematicSearch'
-import SmartDropZonesWidget from './Widgets/SmartZoneWidget'
-import AgentFleetWidget from './Widgets/AgentFleetWidget'
-import WallpaperWidget from './Widgets/WallpaperWidget'
-import WhatsAppWidget from './Widgets/WhatsAppWidget'
-import DocForgeWidget from './Widgets/DocForgeWidget'
-import FocusWidget from './Widgets/FocusWidget'
+import OnDemandWidgetHost from './components/OnDemandWidgetHost'
+import DemandResourceHUD from './components/DemandResourceHUD'
+import { demandComponentManager } from './services/demand-component-manager'
 import TitleBar from './components/Titlebar'
+import UpdatePromptModal, { UpdateInfo } from './components/UpdatePromptModal'
+import DockSetupModal from './components/DockSetupModal'
+import NexusContextMenu from './components/NexusContextMenu'
+import { useNexusShortcuts } from './hooks/useNexusShortcuts'
 
 export type VisionMode = 'camera' | 'screen' | 'dual' | 'none'
 
@@ -41,6 +32,11 @@ const IndexRoot = () => {
   const [visionMode, setVisionMode] = useState<VisionMode>('none')
   const [toastError, setToastError] = useState<string | null>(null)
 
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
+  const [showUpdateModal, setShowUpdateModal] = useState(false)
+  const [showDockSetup, setShowDockSetup] = useState(false)
+  const [hasDownloadedUpdate, setHasDownloadedUpdate] = useState(false)
+
   const [activeStream, setActiveStream] = useState<MediaStream | null>(null)
   const [activeCameraStream, setActiveCameraStream] = useState<MediaStream | null>(null)
 
@@ -49,6 +45,28 @@ const IndexRoot = () => {
   const activeStreamRef = useRef<MediaStream | null>(null)
   const cameraStreamRef = useRef<MediaStream | null>(null)
   const aiIntervalRef = useRef<NodeJS.Timeout | null>(null)
+
+  const {
+    zoomFactor,
+    zoomIn,
+    zoomOut,
+    resetZoom,
+    zoomHud,
+    refreshHud,
+    isRefreshing,
+    handleRefreshAll,
+    contextMenu,
+    closeContextMenu
+  } = useNexusShortcuts({
+    onNavigateTab: (tabId) =>
+      window.dispatchEvent(new CustomEvent('nexus-switch-tab', { detail: { tab: tabId } })),
+    toggleMic: () => toggleMic(),
+    toggleSystem: () => void toggleSystem(),
+    isMicMuted,
+    isSystemActive,
+    isVideoOn,
+    onToggleVision: () => (isVideoOn ? stopVision() : startVision('screen'))
+  })
 
   useEffect(() => {
     window.electron.ipcRenderer.on('overlay-mode', (_e, mode) => setIsOverlay(mode))
@@ -120,12 +138,69 @@ const IndexRoot = () => {
   }, [isSystemActive, isSystemStarting, isMicMuted])
 
   useEffect(() => {
+    const checkDockSetup = async () => {
+      try {
+        const config = await window.electron.ipcRenderer.invoke('get-dock-config')
+        const localDone = localStorage.getItem('nexus_dock_setup_completed') === 'true'
+        if (!config?.setupCompleted && !localDone) {
+          setShowDockSetup(true)
+        }
+      } catch {
+        // fallback
+      }
+    }
+    checkDockSetup()
+
+    const handleOpenDockSetup = () => setShowDockSetup(true)
+    window.addEventListener('nexus-open-dock-setup', handleOpenDockSetup)
+    return () => {
+      window.removeEventListener('nexus-open-dock-setup', handleOpenDockSetup)
+    }
+  }, [])
+
+  useEffect(() => {
     window.electron.ipcRenderer.send('dock-command', 'session-state', {
       active: isSystemActive,
       starting: isSystemStarting,
       muted: isMicMuted
     })
   }, [isSystemActive, isSystemStarting, isMicMuted])
+
+  useEffect(() => {
+    if (!window.electron?.ipcRenderer) return
+
+    const handleUpdaterEvent = (_e: any, { status, data }: any) => {
+      if (status === 'downloaded' && data) {
+        setUpdateInfo(data)
+        setHasDownloadedUpdate(true)
+        if (!data.deferred) {
+          setShowUpdateModal(true)
+        }
+      }
+      if (status === 'update-deferred') {
+        setShowUpdateModal(false)
+      }
+    }
+
+    window.electron.ipcRenderer.on('updater-event', handleUpdaterEvent)
+
+    window.electron.ipcRenderer
+      .invoke('get-update-status')
+      .then((res: any) => {
+        if (res?.isDownloaded && res?.status === 'downloaded') {
+          setUpdateInfo(res)
+          setHasDownloadedUpdate(true)
+          if (!res.deferred) {
+            setShowUpdateModal(true)
+          }
+        }
+      })
+      .catch(() => {})
+
+    return () => {
+      window.electron.ipcRenderer.removeAllListeners('updater-event')
+    }
+  }, [])
 
   useEffect(() => {
     const timer = setInterval(async () => {
@@ -140,6 +215,30 @@ const IndexRoot = () => {
     }, 1500)
 
     return () => clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    // In Demand-Driven Mode, heavy systems stay dormant until the user requests them
+    if (demandComponentManager.isDemandModeEnabled()) {
+      console.log('[Nexus Demand Engine] Zero-Waste Demand Mode engaged. Systems dormant on boot until requested.')
+      return undefined
+    }
+
+    const autoLaunchEnabled = localStorage.getItem('nexus_auto_launch_systems') === 'true'
+    if (!autoLaunchEnabled) return undefined
+
+    const bootTimer = setTimeout(async () => {
+      if (!nexusService.isConnected && !isSystemActive && !isSystemStarting) {
+        console.log('[Nexus Ecosystem] Auto-launching all systems on startup...')
+        try {
+          await toggleSystem()
+        } catch (e) {
+          console.warn('[Nexus Ecosystem] Auto-launch warning:', e)
+        }
+      }
+    }, 1500)
+
+    return () => clearTimeout(bootTimer)
   }, [])
 
   const startingSinceRef = useRef<number | null>(null)
@@ -242,9 +341,16 @@ const IndexRoot = () => {
       let camStream: MediaStream | null = null
 
       if (mode === 'camera') {
-        primaryStream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 480 }
-        })
+        const videoConstraints = mediaDeviceManager.getVideoConstraints({ width: 640, height: 480 })
+        try {
+          primaryStream = await navigator.mediaDevices.getUserMedia({
+            video: videoConstraints
+          })
+        } catch {
+          primaryStream = await navigator.mediaDevices.getUserMedia({
+            video: { width: 640, height: 480 }
+          })
+        }
         activeStreamRef.current = primaryStream
         setActiveStream(primaryStream)
         setActiveCameraStream(null)
@@ -306,9 +412,16 @@ const IndexRoot = () => {
 
         if (mode === 'dual' || options?.dualCamera) {
           try {
-            camStream = await navigator.mediaDevices.getUserMedia({
-              video: { width: 640, height: 480 }
-            })
+            const camConstraints = mediaDeviceManager.getVideoConstraints({ width: 640, height: 480 })
+            try {
+              camStream = await navigator.mediaDevices.getUserMedia({
+                video: camConstraints
+              })
+            } catch {
+              camStream = await navigator.mediaDevices.getUserMedia({
+                video: { width: 640, height: 480 }
+              })
+            }
             cameraStreamRef.current = camStream
             setActiveCameraStream(camStream)
 
@@ -449,7 +562,27 @@ const IndexRoot = () => {
 
   return (
     <div className="flex flex-col h-screen w-screen bg-black overflow-hidden relative border border-emerald-500/20 rounded-xl">
-      <TitleBar />
+      <TitleBar
+        hasDownloadedUpdate={hasDownloadedUpdate}
+        updateVersion={updateInfo?.version}
+        onOpenUpdateModal={() => setShowUpdateModal(true)}
+      />
+
+      {/* Floating Zoom HUD Badge */}
+      {zoomHud && (
+        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-[99999] pointer-events-none flex items-center gap-2 rounded-full border border-cyan-400/40 bg-zinc-950/95 px-4 py-1.5 font-mono text-xs font-bold text-cyan-300 shadow-[0_0_25px_rgba(6,182,212,0.4)] backdrop-blur-xl animate-in fade-in zoom-in-95">
+          <span className="h-2 w-2 rounded-full bg-cyan-400 animate-pulse" />
+          <span>{zoomHud}</span>
+        </div>
+      )}
+
+      {/* Floating System & Agents Refresh Notification Banner */}
+      {refreshHud && (
+        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-[99999] pointer-events-none max-w-xl rounded-2xl border border-emerald-400/40 bg-zinc-950/95 px-5 py-2.5 font-mono text-xs text-emerald-200 shadow-[0_0_35px_rgba(16,185,129,0.4)] backdrop-blur-2xl animate-in fade-in slide-in-from-top-2 whitespace-pre-line text-center leading-relaxed">
+          {refreshHud}
+        </div>
+      )}
+
       {toastError && (
         <div className="absolute top-12 left-1/2 -translate-x-1/2 z-[9999] flex items-center gap-3 rounded-xl border border-rose-500/40 bg-zinc-950/95 px-4 py-2 text-xs text-rose-200 shadow-2xl backdrop-blur-xl animate-in fade-in slide-in-from-top-2">
           <div className="h-2 w-2 rounded-full bg-rose-400 animate-ping shrink-0" />
@@ -462,7 +595,7 @@ const IndexRoot = () => {
           </button>
         </div>
       )}
-      <div className="flex-1 relative">
+      <div className="flex-1 min-h-0 relative h-full">
         <NEXUS
           isSystemActive={isSystemActive}
           isSystemStarting={isSystemStarting}
@@ -477,23 +610,44 @@ const IndexRoot = () => {
           activeCameraStream={activeCameraStream}
         />
       </div>
-      <SmartDropZonesWidget />
-      <SemanticWidget />
-      <OracleWidget />
-      <WormholeWidget />
-      <LeafletMapWidget />
-      <StockWidget />
-      <WeatherWidget />
-      <ImageWidget />
-      <EmailWidget />
-      <TerminalOverlay />
-      <LiveCodingWidget />
-      <ResearchWidget />
-      <AgentFleetWidget />
-      <WallpaperWidget />
-      <WhatsAppWidget />
-      <DocForgeWidget />
-      <FocusWidget />
+      <OnDemandWidgetHost />
+      <DemandResourceHUD />
+
+      <UpdatePromptModal
+        isOpen={showUpdateModal}
+        updateInfo={updateInfo}
+        onClose={() => setShowUpdateModal(false)}
+        onInstall={() => setShowUpdateModal(false)}
+        onDefer={() => setShowUpdateModal(false)}
+      />
+
+      <DockSetupModal
+        isOpen={showDockSetup}
+        onClose={() => setShowDockSetup(false)}
+      />
+
+      <NexusContextMenu
+        isOpen={contextMenu.isOpen}
+        x={contextMenu.x}
+        y={contextMenu.y}
+        onClose={closeContextMenu}
+        onRefreshAll={handleRefreshAll}
+        isRefreshing={isRefreshing}
+        zoomFactor={zoomFactor}
+        onZoomIn={zoomIn}
+        onZoomOut={zoomOut}
+        onResetZoom={resetZoom}
+        activeTab="DASHBOARD"
+        onNavigate={(tabId) =>
+          window.dispatchEvent(new CustomEvent('nexus-switch-tab', { detail: { tab: tabId } }))
+        }
+        isSystemActive={isSystemActive}
+        toggleSystem={toggleSystem}
+        isMicMuted={isMicMuted}
+        toggleMic={toggleMic}
+        isVideoOn={isVideoOn}
+        onToggleVision={() => (isVideoOn ? stopVision() : startVision('screen'))}
+      />
     </div>
   )
 }
