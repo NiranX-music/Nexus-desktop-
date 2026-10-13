@@ -9,7 +9,8 @@ import {
   RiMicOffLine,
   RiPhoneFill,
   RiSendPlane2Line,
-  RiSparklingLine
+  RiSparklingLine,
+  RiSettings4Line
 } from 'react-icons/ri'
 
 const sendDockCommand = (command: string, payload?: any) => {
@@ -21,12 +22,24 @@ export default function NexusDock() {
   const [expanded, setExpanded] = useState(false)
   const [sessionState, setSessionState] = useState<'STANDBY' | 'STARTING' | 'ONLINE'>('STANDBY')
   const [voiceState, setVoiceState] = useState<'MUTED' | 'OPEN'>('MUTED')
+  const [dockStyle, setDockStyle] = useState<'pill' | 'line'>('pill')
+  const [dockLocation, setDockLocation] = useState<string>('top-center')
   const startingTimerRef = useRef<number | null>(null)
   const collapseTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
     const api = (window as any).electron?.ipcRenderer
     if (!api) return
+
+    api.invoke('get-dock-config').then((cfg: any) => {
+      if (cfg?.style) setDockStyle(cfg.style)
+      if (cfg?.location) setDockLocation(cfg.location)
+    }).catch(() => {})
+
+    api.on('dock-config-updated', (_event: any, cfg: any) => {
+      if (cfg?.style) setDockStyle(cfg.style)
+      if (cfg?.location) setDockLocation(cfg.location)
+    })
 
     api.on('dock-command', (_event: any, message: any) => {
       if (message?.command === 'session-state') {
@@ -51,6 +64,7 @@ export default function NexusDock() {
     return () => {
       if (startingTimerRef.current) window.clearTimeout(startingTimerRef.current)
       api.removeAllListeners('dock-command')
+      api.removeAllListeners('dock-config-updated')
     }
   }, [])
 
@@ -91,80 +105,136 @@ export default function NexusDock() {
       className="h-full w-full bg-transparent text-zinc-100 select-none overflow-hidden flex flex-col items-center justify-center p-0 font-sans"
     >
       {!expanded ? (
-        /* COLLAPSED DYNAMIC ISLAND PILL - ULTRA CURVED TRANSLUCENT GLASS */
-        <div
-          onClick={() => setDockExpanded(true)}
-          className="group relative flex h-full w-full items-center justify-between rounded-full border border-white/25 bg-slate-950/35 px-2.5 py-1 shadow-[0_8px_32px_rgba(0,0,0,0.35),inset_0_1px_1.5px_rgba(255,255,255,0.35),0_0_18px_rgba(16,185,129,0.15)] backdrop-blur-2xl backdrop-saturate-200 transition-all duration-300 hover:border-emerald-400/50 hover:bg-slate-900/45 hover:shadow-[0_12px_36px_rgba(0,0,0,0.45),inset_0_1px_2px_rgba(255,255,255,0.45),0_0_24px_rgba(16,185,129,0.25)] cursor-pointer drag-region"
-        >
-          {/* Specular Top Rim Reflection */}
-          <div className="pointer-events-none absolute top-0 inset-x-4 h-[1px] bg-gradient-to-r from-transparent via-white/40 to-transparent" />
+        dockStyle === 'line' ? (
+          /* COLLAPSED 2MM CYBER LINE - ULTRA-COMPACT FUTURISTIC LASER STRIP BELOW CAMERA */
+          <div
+            onClick={() => setDockExpanded(true)}
+            className="group relative flex h-full w-full items-center justify-center p-0 cursor-pointer drag-region select-none"
+            title="Nexus Cyber Line (2mm) - Click or hover to open cockpit"
+          >
+            <div className="relative flex items-center justify-center w-full px-1">
+              {/* Left Cyber Bracket */}
+              <span className="text-[8px] font-mono font-bold text-emerald-400/40 group-hover:text-emerald-300 transition-colors select-none mr-1">
+                ‹
+              </span>
 
-          {/* Ambient Frosted Glow */}
-          <div className="pointer-events-none absolute inset-0 rounded-full bg-gradient-to-r from-emerald-500/15 via-white/[0.04] to-cyan-500/15 opacity-70 group-hover:opacity-100 transition-opacity" />
-
-          {/* Left: NX Badge + Status */}
-          <div className="relative z-10 flex items-center gap-1.5 min-w-0 no-drag">
-            <div className="relative flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-gradient-to-tr from-emerald-600/40 to-teal-400/30 border border-emerald-400/60 text-[8.5px] font-black text-emerald-200 shadow-[0_0_8px_rgba(16,185,129,0.35)]">
-              <span>NX</span>
-              <span
-                className={`absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ${
+              {/* The 2mm Glowing Neon Cyber Line */}
+              <div
+                className={`relative h-[3px] w-36 sm:w-40 rounded-full transition-all duration-300 group-hover:h-[4px] group-hover:w-44 ${
                   sessionState === 'ONLINE'
-                    ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]'
+                    ? 'bg-gradient-to-r from-emerald-400 via-teal-200 to-cyan-400 shadow-[0_0_10px_#10b981,0_0_20px_rgba(6,182,212,0.8)] animate-[cyber-glow-pulse_2s_ease-in-out_infinite]'
                     : sessionState === 'STARTING'
-                      ? 'bg-amber-400 shadow-[0_0_6px_#fbbf24] animate-pulse'
-                      : 'bg-zinc-500'
+                      ? 'bg-gradient-to-r from-amber-400 via-yellow-200 to-amber-400 shadow-[0_0_10px_#fbbf24,0_0_18px_rgba(251,191,36,0.7)] animate-pulse'
+                      : 'bg-gradient-to-r from-emerald-500/80 via-teal-400 to-emerald-400/80 shadow-[0_0_8px_rgba(16,185,129,0.7),0_0_14px_rgba(6,182,212,0.4)] group-hover:shadow-[0_0_12px_#10b981,0_0_22px_rgba(6,182,212,0.7)]'
                 }`}
+              >
+                {/* Traveling Cyber Scan Particle */}
+                <div className="pointer-events-none absolute inset-y-0 w-8 bg-gradient-to-r from-transparent via-white/80 to-transparent blur-[0.5px] animate-[cyber-laser-travel_2.5s_ease-in-out_infinite]" />
+
+                {/* Center Micro Status Pip */}
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  {sessionState === 'ONLINE' && voiceState === 'OPEN' ? (
+                    <div className="flex items-center gap-0.5">
+                      <span className="w-0.5 h-1.5 bg-emerald-100 rounded-full animate-[island-wave-1_0.5s_infinite]" />
+                      <span className="w-0.5 h-2 bg-white rounded-full animate-[island-wave-2_0.4s_infinite]" />
+                      <span className="w-0.5 h-1.5 bg-teal-100 rounded-full animate-[island-wave-3_0.6s_infinite]" />
+                    </div>
+                  ) : (
+                    <span
+                      className={`h-1 w-1 rounded-full transition-transform group-hover:scale-125 ${
+                        sessionState === 'ONLINE'
+                          ? 'bg-emerald-300 shadow-[0_0_6px_#34d399]'
+                          : sessionState === 'STARTING'
+                            ? 'bg-amber-300 animate-ping shadow-[0_0_6px_#fbbf24]'
+                            : 'bg-white/70 shadow-[0_0_4px_#ffffff]'
+                      }`}
+                    />
+                  )}
+                </div>
+              </div>
+
+              {/* Right Cyber Bracket */}
+              <span className="text-[8px] font-mono font-bold text-cyan-400/40 group-hover:text-cyan-300 transition-colors select-none ml-1">
+                ›
+              </span>
+            </div>
+          </div>
+        ) : (
+          /* COLLAPSED DYNAMIC ISLAND PILL - ULTRA CURVED TRANSLUCENT GLASS */
+          <div
+            onClick={() => setDockExpanded(true)}
+            className="group relative flex h-full w-full items-center justify-between rounded-full border border-white/25 bg-slate-950/35 px-2.5 py-1 shadow-[0_8px_32px_rgba(0,0,0,0.35),inset_0_1px_1.5px_rgba(255,255,255,0.35),0_0_18px_rgba(16,185,129,0.15)] backdrop-blur-2xl backdrop-saturate-200 transition-all duration-300 hover:border-emerald-400/50 hover:bg-slate-900/45 hover:shadow-[0_12px_36px_rgba(0,0,0,0.45),inset_0_1px_2px_rgba(255,255,255,0.45),0_0_24px_rgba(16,185,129,0.25)] cursor-pointer drag-region"
+          >
+            {/* Specular Top Rim Reflection */}
+            <div className="pointer-events-none absolute top-0 inset-x-4 h-[1px] bg-gradient-to-r from-transparent via-white/40 to-transparent" />
+
+            {/* Ambient Frosted Glow */}
+            <div className="pointer-events-none absolute inset-0 rounded-full bg-gradient-to-r from-emerald-500/15 via-white/[0.04] to-cyan-500/15 opacity-70 group-hover:opacity-100 transition-opacity" />
+
+            {/* Left: NX Badge + Status */}
+            <div className="relative z-10 flex items-center gap-1.5 min-w-0 no-drag">
+              <div className="relative flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-gradient-to-tr from-emerald-600/40 to-teal-400/30 border border-emerald-400/60 text-[8.5px] font-black text-emerald-200 shadow-[0_0_8px_rgba(16,185,129,0.35)]">
+                <span>NX</span>
+                <span
+                  className={`absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ${
+                    sessionState === 'ONLINE'
+                      ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]'
+                      : sessionState === 'STARTING'
+                        ? 'bg-amber-400 shadow-[0_0_6px_#fbbf24] animate-pulse'
+                        : 'bg-zinc-500'
+                  }`}
+                />
+              </div>
+
+              <span className="text-[9px] font-bold tracking-wider text-zinc-200 group-hover:text-emerald-300 transition-colors uppercase truncate">
+                {sessionState === 'ONLINE'
+                  ? 'LIVE'
+                  : sessionState === 'STARTING'
+                    ? 'SYNC'
+                    : 'READY'}
+              </span>
+            </div>
+
+            {/* Center: Soundwave Audio Equalizer */}
+            <div className="relative z-10 flex items-center gap-1 h-3.5 px-0.5 no-drag">
+              {sessionState === 'ONLINE' && voiceState === 'OPEN' ? (
+                <div className="flex items-center gap-1">
+                  <span className="w-0.5 h-3 bg-emerald-400 rounded-full animate-[island-wave-1_0.7s_ease-in-out_infinite]" />
+                  <span className="w-0.5 h-4 bg-emerald-300 rounded-full animate-[island-wave-2_0.5s_ease-in-out_infinite_0.1s]" />
+                  <span className="w-0.5 h-2.5 bg-teal-300 rounded-full animate-[island-wave-3_0.8s_ease-in-out_infinite_0.2s]" />
+                </div>
+              ) : (
+                <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
+                  <span className="h-1 w-1 rounded-full bg-emerald-400" />
+                  <span className="h-1 w-2.5 rounded-full bg-white/30 group-hover:bg-emerald-400/60 transition-colors" />
+                  <span className="h-1 w-1 rounded-full bg-cyan-400" />
+                </div>
+              )}
+            </div>
+
+            {/* Right: Mic Button & Expand Chevron */}
+            <div className="relative z-10 flex items-center gap-1 shrink-0 no-drag">
+              <div
+                onClick={(e) => {
+                  e.stopPropagation()
+                  sendDockCommand('toggle-mute')
+                }}
+                title={voiceState === 'MUTED' ? 'Microphone muted (click to unmute)' : 'Microphone live (click to mute)'}
+                className={`flex h-5 w-5 items-center justify-center rounded-full border text-[11px] transition-all hover:scale-110 active:scale-95 ${
+                  voiceState === 'OPEN'
+                    ? 'border-emerald-400/60 bg-emerald-500/25 text-emerald-300 shadow-[0_0_8px_rgba(52,211,153,0.45)]'
+                    : 'border-white/15 bg-white/10 text-zinc-300 hover:text-white'
+                }`}
+              >
+                {voiceState === 'MUTED' ? <RiMicOffLine size={11} /> : <RiMicLine size={11} />}
+              </div>
+              <RiArrowDownSLine
+                size={13}
+                className="text-zinc-400 group-hover:text-emerald-300 group-hover:translate-y-0.5 transition-all"
               />
             </div>
-
-            <span className="text-[9px] font-bold tracking-wider text-zinc-200 group-hover:text-emerald-300 transition-colors uppercase truncate">
-              {sessionState === 'ONLINE'
-                ? 'LIVE'
-                : sessionState === 'STARTING'
-                  ? 'SYNC'
-                  : 'READY'}
-            </span>
           </div>
-
-          {/* Center: Soundwave Audio Equalizer */}
-          <div className="relative z-10 flex items-center gap-1 h-3.5 px-0.5 no-drag">
-            {sessionState === 'ONLINE' && voiceState === 'OPEN' ? (
-              <div className="flex items-center gap-1">
-                <span className="w-0.5 h-3 bg-emerald-400 rounded-full animate-[island-wave-1_0.7s_ease-in-out_infinite]" />
-                <span className="w-0.5 h-4 bg-emerald-300 rounded-full animate-[island-wave-2_0.5s_ease-in-out_infinite_0.1s]" />
-                <span className="w-0.5 h-2.5 bg-teal-300 rounded-full animate-[island-wave-3_0.8s_ease-in-out_infinite_0.2s]" />
-              </div>
-            ) : (
-              <div className="flex items-center gap-1 opacity-70 group-hover:opacity-100 transition-opacity">
-                <span className="h-1 w-1 rounded-full bg-emerald-400" />
-                <span className="h-1 w-2.5 rounded-full bg-white/30 group-hover:bg-emerald-400/60 transition-colors" />
-                <span className="h-1 w-1 rounded-full bg-cyan-400" />
-              </div>
-            )}
-          </div>
-
-          {/* Right: Mic Button & Expand Chevron */}
-          <div className="relative z-10 flex items-center gap-1 shrink-0 no-drag">
-            <div
-              onClick={(e) => {
-                e.stopPropagation()
-                sendDockCommand('toggle-mute')
-              }}
-              title={voiceState === 'MUTED' ? 'Microphone muted (click to unmute)' : 'Microphone live (click to mute)'}
-              className={`flex h-5 w-5 items-center justify-center rounded-full border text-[11px] transition-all hover:scale-110 active:scale-95 ${
-                voiceState === 'OPEN'
-                  ? 'border-emerald-400/60 bg-emerald-500/25 text-emerald-300 shadow-[0_0_8px_rgba(52,211,153,0.45)]'
-                  : 'border-white/15 bg-white/10 text-zinc-300 hover:text-white'
-              }`}
-            >
-              {voiceState === 'MUTED' ? <RiMicOffLine size={11} /> : <RiMicLine size={11} />}
-            </div>
-            <RiArrowDownSLine
-              size={13}
-              className="text-zinc-400 group-hover:text-emerald-300 group-hover:translate-y-0.5 transition-all"
-            />
-          </div>
-        </div>
+        )
       ) : (
         /* EXPANDED DYNAMIC ISLAND COCKPIT - TRANSLUCENT FROSTED GLASS */
         <div className="relative flex flex-col h-full w-full overflow-hidden rounded-[28px] border border-white/20 bg-slate-950/40 p-3 shadow-[0_24px_60px_rgba(0,0,0,0.5),inset_0_1px_1.5px_rgba(255,255,255,0.35),0_0_30px_rgba(16,185,129,0.15)] backdrop-blur-2xl backdrop-saturate-200 transition-all duration-300">
@@ -214,6 +284,36 @@ export default function NexusDock() {
 
             {/* Window Controls & Session Pill */}
             <div className="flex items-center gap-1.5 no-drag">
+              {/* Style Switcher Pill */}
+              <button
+                type="button"
+                onClick={() => {
+                  const nextStyle = dockStyle === 'line' ? 'pill' : 'line'
+                  setDockStyle(nextStyle)
+                  sendDockCommand('set-dock-config', { style: nextStyle })
+                }}
+                className="h-6 px-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 text-[8px] font-mono font-bold tracking-wider text-emerald-300 flex items-center gap-1 transition-all"
+                title="Toggle between Dynamic Island Pill and 2mm Cyber Line"
+              >
+                {dockStyle === 'line' ? '⚡ 2MM LINE' : '💊 PILL'}
+              </button>
+
+              {/* Location Indicator & Quick Cycle */}
+              <button
+                type="button"
+                onClick={() => {
+                  const locations = ['top-center', 'taskbar-left', 'bottom-center']
+                  const currentIndex = locations.indexOf(dockLocation)
+                  const nextLoc = locations[(currentIndex + 1) % locations.length]
+                  setDockLocation(nextLoc)
+                  sendDockCommand('set-dock-config', { location: nextLoc })
+                }}
+                className="h-6 px-2 rounded-full border border-cyan-500/30 bg-cyan-500/10 hover:bg-cyan-500/20 text-[8px] font-mono font-bold tracking-wider text-cyan-300 flex items-center gap-1 transition-all uppercase"
+                title="Cycle dock location: Camera Notch, Taskbar Slot, Bottom Center"
+              >
+                {dockLocation === 'taskbar-left' ? 'TASKBAR' : dockLocation === 'bottom-center' ? 'BOTTOM' : 'NOTCH'}
+              </button>
+
               <span
                 className={`inline-flex h-6 items-center rounded-full border px-2.5 text-[8px] font-bold tracking-widest transition-all ${
                   sessionState === 'STARTING'
@@ -234,6 +334,19 @@ export default function NexusDock() {
                 />
                 {sessionState}
               </span>
+
+              <button
+                type="button"
+                onClick={() => {
+                  sendDockCommand('open-desktop')
+                  window.dispatchEvent(new CustomEvent('nexus-switch-tab', { detail: { tab: 'SETTINGS' } }))
+                }}
+                className="h-6 w-6 rounded-full border border-white/10 bg-white/5 hover:border-emerald-400/40 hover:bg-emerald-500/20 text-zinc-400 hover:text-emerald-300 transition-all flex items-center justify-center shadow-sm"
+                title="Open Settings"
+              >
+                <RiSettings4Line size={13} />
+              </button>
+
               <button
                 type="button"
                 onClick={() => sendDockCommand('open-desktop')}
