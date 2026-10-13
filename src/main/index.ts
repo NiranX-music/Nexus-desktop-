@@ -11,7 +11,8 @@ import {
   systemPreferences,
   Menu,
   Tray,
-  nativeImage
+  nativeImage,
+  nativeTheme
 } from 'electron'
 import path, { join } from 'path'
 import fs from 'fs'
@@ -60,8 +61,8 @@ import registerIssueReporter from './services/issue-reporter'
 import registerAiGateway from './services/ai-gateway'
 import registerMcpHandlers from './services/mcp-manager'
 import registerAgentFleet from './services/agent-fleet'
-import registerLanceVideo from './services/lance-video'
 import registerMobileCommandBridge from './services/mobile-command-bridge'
+import { registerEcosystemManager } from './services/nexus-ecosystem-manager'
 import registerWidgetMaker from './auto/widget-manager'
 import registerWebsiteBuilder from './auto/website-builder'
 import registerWorkflowManager from './workflow/workflow-manager'
@@ -73,7 +74,11 @@ import registerSandboxManager from './security/sandbox-manager'
 import registerEmailAuth from './security/email-auth'
 import registerLockSystem from './security/lock-system'
 import registerSkyvernAgent from './services/skyvern-screen-agent'
-import { autoUpdater } from 'electron-updater'
+import { registerDemandSystemCoordinator } from './services/demand-system-coordinator'
+import registerBackupManager from './services/backup-manager'
+import registerChatHistoryManager from './logic/chat-history-manager'
+import { nexusUpdater } from './services/nexus-updater'
+import { dockManager } from './logic/dock-manager'
 
 app.commandLine.appendSwitch('use-fake-ui-for-media-stream')
 app.commandLine.appendSwitch('enable-gpu-rasterization')
@@ -81,6 +86,7 @@ app.commandLine.appendSwitch('enable-zero-copy')
 app.commandLine.appendSwitch('enable-features', 'CanvasOopRasterization')
 app.setName('Nexus AI 9.1')
 app.setPath('userData', join(app.getPath('appData'), 'Nexus AI 9.1'))
+nativeTheme.themeSource = 'dark'
 
 if (process.defaultApp) {
   if (process.argv.length >= 2) {
@@ -157,8 +163,6 @@ let tray: Tray | null = null
 let isOverlayMode = false
 let isQuitting = false
 let dockCollapseTimer: NodeJS.Timeout | null = null
-let updateDownloadPromise: Promise<Array<string>> | null = null
-let downloadedUpdateInfo: { version: string; releaseNotes: string } | null = null
 
 const CM_TO_PX = 37.8
 const DOCK_COLLAPSED_WIDTH = 204
@@ -167,8 +171,6 @@ const DOCK_EXPANDED_WIDTH = 620
 const DOCK_EXPANDED_HEIGHT = 188
 const DOCK_TOP_MARGIN = 8
 
-const NEXUS_UPDATE_FEED_URL =
-  process.env.NEXUS_UPDATE_FEED_URL || 'https://nexusaix.vercel.app/updates/win'
 const secureConfigPath = join(app.getPath('userData'), 'nexus_secure_vault.json')
 
 const loadLocalEnvFile = () => {
@@ -198,101 +200,6 @@ const loadLocalEnvFile = () => {
 
 loadLocalEnvFile()
 
-const getUpdaterErrorMessage = (error: unknown) => {
-  if (error instanceof Error) return error.message
-  return String(error || 'Unknown updater error.')
-}
-
-const compareVersions = (left: string, right: string) => {
-  const leftParts = left.split(/[.-]/).map((part) => Number.parseInt(part, 10) || 0)
-  const rightParts = right.split(/[.-]/).map((part) => Number.parseInt(part, 10) || 0)
-  const length = Math.max(leftParts.length, rightParts.length)
-
-  for (let index = 0; index < length; index += 1) {
-    const leftPart = leftParts[index] || 0
-    const rightPart = rightParts[index] || 0
-    if (leftPart > rightPart) return 1
-    if (leftPart < rightPart) return -1
-  }
-
-  return 0
-}
-
-const fetchText = (url: string): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const request = httpsGet(url, { timeout: 8000 }, (response) => {
-      if (
-        response.statusCode &&
-        response.statusCode >= 300 &&
-        response.statusCode < 400 &&
-        response.headers.location
-      ) {
-        resolve(fetchText(new URL(response.headers.location, url).toString()))
-        return
-      }
-
-      if (!response.statusCode || response.statusCode >= 400) {
-        reject(new Error(`Update server returned ${response.statusCode || 'no status'}.`))
-        return
-      }
-
-      let body = ''
-      response.setEncoding('utf8')
-      response.on('data', (chunk) => {
-        body += chunk
-      })
-      response.on('end', () => resolve(body))
-    })
-
-    request.on('timeout', () => {
-      request.destroy(new Error('Update check timed out.'))
-    })
-    request.on('error', reject)
-  })
-
-const getLatestUpdateInfo = async () => {
-  const feedUrl = NEXUS_UPDATE_FEED_URL.replace(/\/+$/, '')
-  const latestYmlUrl = `${feedUrl}/latest.yml`
-  const latestYml = await fetchText(latestYmlUrl)
-  const version = latestYml.match(/^version:\s*['"]?([^'"\r\n]+)['"]?/m)?.[1]?.trim()
-  const releaseDate = latestYml.match(/^releaseDate:\s*['"]?([^'"\r\n]+)['"]?/m)?.[1]?.trim()
-
-  if (!version) throw new Error('Update feed did not include a version.')
-
-  return {
-    version,
-    releaseDate: releaseDate || '',
-    feedUrl,
-    latestYmlUrl,
-    installerUrl: `${feedUrl}/nexus-ai-latest-setup.exe`
-  }
-}
-
-const sendUpdaterEvent = (status: string, data: Record<string, unknown> = {}, error = '') => {
-  mainWindow?.webContents.send('updater-event', { status, data, error })
-}
-
-const canUseUpdaterForRequest = (action: string) => {
-  if (!is.dev || process.env.NEXUS_ALLOW_DEV_UPDATES === 'true') return ''
-  return `${action} are available in the installed desktop app.`
-}
-
-const downloadCheckedUpdate = async () => {
-  if (downloadedUpdateInfo) {
-    sendUpdaterEvent('downloaded', downloadedUpdateInfo)
-    return []
-  }
-
-  if (!updateDownloadPromise) {
-    sendUpdaterEvent('downloading', { percent: 0 })
-    updateDownloadPromise = autoUpdater.downloadUpdate().finally(() => {
-      updateDownloadPromise = null
-    })
-  }
-
-  return updateDownloadPromise
-}
-
 function createWindow(): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     showDesktopApp()
@@ -315,9 +222,13 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
       backgroundThrottling: false,
-      webSecurity: false
+      webSecurity: false,
+      webviewTag: true
     }
   })
+
+  nexusUpdater.setMainWindow(mainWindow)
+  dockManager.setWindows(dockWindow, mainWindow)
 
   mainWindow.on('ready-to-show', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -376,15 +287,13 @@ function createDockWindow(): void {
     return
   }
 
-  const primaryDisplay = screen.getPrimaryDisplay()
-  const { width, x, y } = primaryDisplay.bounds
-  const dockWidth = DOCK_COLLAPSED_WIDTH
+  const initialBounds = dockManager.computeCollapsedBounds()
 
   dockWindow = new BrowserWindow({
-    width: dockWidth,
-    height: DOCK_COLLAPSED_HEIGHT,
-    x: x + Math.floor((width - dockWidth) / 2),
-    y: y + DOCK_TOP_MARGIN,
+    width: initialBounds.width,
+    height: initialBounds.height,
+    x: initialBounds.x,
+    y: initialBounds.y,
     show: false,
     frame: false,
     transparent: true,
@@ -403,11 +312,14 @@ function createDockWindow(): void {
     }
   })
 
+  dockManager.setWindows(dockWindow, mainWindow)
+
   dockWindow.setAlwaysOnTop(true, 'screen-saver')
   dockWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   dockWindow.on('ready-to-show', () => dockWindow?.showInactive())
   dockWindow.on('closed', () => {
     dockWindow = null
+    dockManager.setWindows(null, mainWindow)
   })
 
   loadRendererRoute(dockWindow, '/dock')
@@ -425,37 +337,11 @@ function sendDockCommand(command: string, payload?: any) {
 }
 
 function setDockExpanded(expanded: boolean) {
-  if (!dockWindow || dockWindow.isDestroyed()) return
-  if (dockCollapseTimer) {
-    clearTimeout(dockCollapseTimer)
-    dockCollapseTimer = null
-  }
-  if (!expanded) {
-    dockCollapseTimer = setTimeout(() => {
-      dockCollapseTimer = null
-      setDockBounds(false)
-    }, 280)
-    return
-  }
-  setDockBounds(true)
+  dockManager.setExpanded(expanded)
 }
 
-function setDockBounds(expanded: boolean) {
-  if (!dockWindow || dockWindow.isDestroyed()) return
-  const primaryDisplay = screen.getPrimaryDisplay()
-  const { width, x, y } = primaryDisplay.bounds
-  const nextWidth = expanded
-    ? Math.min(DOCK_EXPANDED_WIDTH, Math.max(DOCK_COLLAPSED_WIDTH, width - 40))
-    : DOCK_COLLAPSED_WIDTH
-  const nextHeight = expanded ? DOCK_EXPANDED_HEIGHT : DOCK_COLLAPSED_HEIGHT
-  const bounds = dockWindow.getBounds()
-  dockWindow.setBounds({
-    ...bounds,
-    width: nextWidth,
-    height: nextHeight,
-    x: x + Math.floor((width - nextWidth) / 2),
-    y: y + DOCK_TOP_MARGIN
-  })
+function setDockBounds(_expanded: boolean) {
+  dockManager.applyCurrentBounds()
 }
 
 function showDesktopApp() {
@@ -540,53 +426,6 @@ function toggleOverlayMode() {
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.nexustech.nexusai91')
 
-  autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = false
-  autoUpdater.allowPrerelease = false
-  autoUpdater.setFeedURL({ provider: 'generic', url: NEXUS_UPDATE_FEED_URL })
-
-  autoUpdater.on('checking-for-update', () => {
-    sendUpdaterEvent('checking')
-  })
-
-  autoUpdater.on('update-available', (info) => {
-    if (downloadedUpdateInfo?.version !== info.version) {
-      downloadedUpdateInfo = null
-    }
-    sendUpdaterEvent('available', {
-      version: info.version,
-      releaseNotes: info.releaseNotes || 'Bug fixes and performance improvements.'
-    })
-  })
-
-  autoUpdater.on('update-not-available', (info) => {
-    downloadedUpdateInfo = null
-    sendUpdaterEvent('not-available', {
-      version: info.version
-    })
-  })
-
-  autoUpdater.on('download-progress', (progress) => {
-    sendUpdaterEvent('downloading', {
-      percent: progress.percent,
-      transferred: progress.transferred,
-      total: progress.total,
-      bytesPerSecond: progress.bytesPerSecond
-    })
-  })
-
-  autoUpdater.on('update-downloaded', (info) => {
-    downloadedUpdateInfo = {
-      version: info.version,
-      releaseNotes: String(info.releaseNotes || 'Update downloaded and ready to install.')
-    }
-    sendUpdaterEvent('downloaded', downloadedUpdateInfo)
-  })
-
-  autoUpdater.on('error', (error) => {
-    updateDownloadPromise = null
-    sendUpdaterEvent('error', {}, getUpdaterErrorMessage(error))
-  })
 
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     const allowedPermissions = [
@@ -625,37 +464,45 @@ app.whenReady().then(() => {
     }
   }
 
-  ipcMain.handle('secure-save-keys', async (_, { groqKey, geminiKey, fireworksKey = '' }) => {
-    try {
-      let groqEncrypted, geminiEncrypted, fireworksEncrypted
+  ipcMain.handle(
+    'secure-save-keys',
+    async (_, { groqKey, geminiKey, fireworksKey = '', puterToken = '' }) => {
+      try {
+        let groqEncrypted, geminiEncrypted, fireworksEncrypted, puterEncrypted
 
-      if (safeStorage.isEncryptionAvailable()) {
-        groqEncrypted = safeStorage.encryptString(groqKey).toString('base64')
-        geminiEncrypted = safeStorage.encryptString(geminiKey).toString('base64')
-        fireworksEncrypted = safeStorage.encryptString(fireworksKey).toString('base64')
-      } else {
-        groqEncrypted = Buffer.from(groqKey).toString('base64')
-        geminiEncrypted = Buffer.from(geminiKey).toString('base64')
-        fireworksEncrypted = Buffer.from(fireworksKey).toString('base64')
+        if (safeStorage.isEncryptionAvailable()) {
+          groqEncrypted = safeStorage.encryptString(groqKey).toString('base64')
+          geminiEncrypted = safeStorage.encryptString(geminiKey).toString('base64')
+          fireworksEncrypted = safeStorage.encryptString(fireworksKey).toString('base64')
+          puterEncrypted = safeStorage.encryptString(puterToken).toString('base64')
+        } else {
+          groqEncrypted = Buffer.from(groqKey).toString('base64')
+          geminiEncrypted = Buffer.from(geminiKey).toString('base64')
+          fireworksEncrypted = Buffer.from(fireworksKey).toString('base64')
+          puterEncrypted = Buffer.from(puterToken).toString('base64')
+        }
+
+        const secureData = {
+          groq: groqEncrypted,
+          gemini: geminiEncrypted,
+          fireworks: fireworksEncrypted,
+          puter: puterEncrypted
+        }
+
+        fs.writeFileSync(secureConfigPath, JSON.stringify(secureData))
+        return { success: true }
+      } catch (error: any) {
+        return { success: false, error: error.message }
       }
-
-      const secureData = {
-        groq: groqEncrypted,
-        gemini: geminiEncrypted,
-        fireworks: fireworksEncrypted
-      }
-
-      fs.writeFileSync(secureConfigPath, JSON.stringify(secureData))
-      return { success: true }
-    } catch (error: any) {
-      return { success: false, error: error.message }
     }
-  })
+  )
 
   ipcMain.handle('secure-get-keys', async () => {
     let groqKey = process.env.GROQ_API_KEY || ''
     let geminiKey = process.env.GEMINI_API_KEY || ''
     let fireworksKey = process.env.FIREWORKS_API_KEY || ''
+    let puterToken =
+      process.env.PUTER_AUTH_TOKEN || process.env.NEXUS_PUTER_TOKEN || ''
 
     if (fs.existsSync(secureConfigPath)) {
       try {
@@ -667,18 +514,24 @@ app.whenReady().then(() => {
           fireworksKey = data.fireworks
             ? safeStorage.decryptString(Buffer.from(data.fireworks, 'base64'))
             : fireworksKey
+          puterToken = data.puter
+            ? safeStorage.decryptString(Buffer.from(data.puter, 'base64'))
+            : puterToken
         } else {
           groqKey = data.groq ? Buffer.from(data.groq, 'base64').toString('utf8') : groqKey
           const decryptedGemini = data.gemini ? Buffer.from(data.gemini, 'base64').toString('utf8') : ''
           geminiKey = decryptedGemini || geminiKey
           fireworksKey = data.fireworks ? Buffer.from(data.fireworks, 'base64').toString('utf8') : fireworksKey
+          puterToken = data.puter
+            ? Buffer.from(data.puter, 'base64').toString('utf8')
+            : puterToken
         }
       } catch (_err) {
         // fallback
       }
     }
 
-    return { groqKey, geminiKey, fireworksKey }
+    return { groqKey, geminiKey, fireworksKey, puterToken }
   })
 
   ipcMain.handle('check-keys-exist', () => {
@@ -734,11 +587,26 @@ app.whenReady().then(() => {
     delete responseHeaders['content-security-policy']
     delete responseHeaders['x-content-security-policy']
     delete responseHeaders['access-control-allow-origin']
+    delete responseHeaders['x-frame-options']
+    delete responseHeaders['X-Frame-Options']
 
     callback({
       responseHeaders,
       statusLine: details.statusLine
     })
+  })
+
+  ipcMain.removeHandler('open-external-url')
+  ipcMain.handle('open-external-url', async (_event, url: string) => {
+    try {
+      if (url && typeof url === 'string') {
+        await shell.openExternal(url)
+        return { success: true }
+      }
+      return { success: false, error: 'Empty or invalid URL' }
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Failed to open external URL' }
+    }
   })
 
   app.on('browser-window-created', (_, window) => {
@@ -752,6 +620,8 @@ app.whenReady().then(() => {
     }
   })
 
+  registerDemandSystemCoordinator(ipcMain)
+  registerBackupManager()
   registerLockSystem()
   registerEmailAuth()
   registerSecurityVault()
@@ -764,9 +634,9 @@ app.whenReady().then(() => {
   registerWebsiteBuilder()
   registerWidgetMaker()
   registerAiGateway(ipcMain)
+  registerChatHistoryManager({ ipcMain, app })
   registerMcpHandlers(ipcMain)
   registerAgentFleet(ipcMain)
-  registerLanceVideo(ipcMain)
   registerMobileCommandBridge({ app, getMainWindow: () => mainWindow })
   registerIssueReporter({
     ipcMain,
@@ -811,6 +681,8 @@ app.whenReady().then(() => {
   registerDocForge(ipcMain)
   registerFocusProtocol(ipcMain)
   registerSkyvernAgent(ipcMain, app)
+  registerEcosystemManager({ app, getMainWindow: () => mainWindow })
+  dockManager.registerIpcHandlers()
 
   ipcMain.handle('get-screen-source', async () => {
     const sources = await desktopCapturer.getSources({ types: ['screen'] })
@@ -841,104 +713,182 @@ app.whenReady().then(() => {
 
   ipcMain.handle('get-app-version', () => app.getVersion())
 
-  ipcMain.handle('check-for-updates', async () => {
-    const guardMessage = canUseUpdaterForRequest('Update checks')
-    if (guardMessage) {
-      try {
-        sendUpdaterEvent('checking')
-        const latest = await getLatestUpdateInfo()
-        if (compareVersions(latest.version, app.getVersion()) > 0) {
-          sendUpdaterEvent('available', {
-            version: latest.version,
-            releaseNotes: `Installer published ${latest.releaseDate || 'on the Nexus updates page'}.`
-          })
-        } else {
-          sendUpdaterEvent('not-available', { version: latest.version })
-        }
-        return { success: true, devPreview: true, latestVersion: latest.version }
-      } catch (error) {
-        const message = getUpdaterErrorMessage(error)
-        sendUpdaterEvent('error', {}, message)
-        return { success: false, error: message }
-      }
-    }
-
+  ipcMain.handle('check-for-updates', async (_event, forceCheck = false) => {
     try {
-      sendUpdaterEvent('checking')
-      await autoUpdater.checkForUpdates()
-      return { success: true }
-    } catch (error) {
-      const message = getUpdaterErrorMessage(error)
-      sendUpdaterEvent('error', {}, message)
-      return { success: false, error: message }
+      const result = await nexusUpdater.checkForUpdates(Boolean(forceCheck))
+      return { success: true, ...result }
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Check failed.' }
     }
   })
 
   ipcMain.handle('download-update', async () => {
-    const guardMessage = canUseUpdaterForRequest('Update downloads')
-    if (guardMessage) {
-      sendUpdaterEvent('error', {}, guardMessage)
-      return { success: false, error: guardMessage }
-    }
-
     try {
-      await downloadCheckedUpdate()
-      return { success: true }
-    } catch (error) {
-      const message = getUpdaterErrorMessage(error)
-      sendUpdaterEvent('error', {}, message)
-      return { success: false, error: message }
+      return await nexusUpdater.downloadUpdate()
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Download failed.' }
     }
   })
 
   ipcMain.handle('install-update', () => {
     try {
-      if (!downloadedUpdateInfo) {
-        const message = 'The update has not finished downloading yet.'
-        sendUpdaterEvent('error', {}, message)
-        return { success: false, error: message }
-      }
-
-      setImmediate(() => {
-        isQuitting = true
-        app.removeAllListeners('window-all-closed')
-        autoUpdater.quitAndInstall(false, true)
-      })
-      return { success: true }
-    } catch (error) {
-      const message = getUpdaterErrorMessage(error)
-      sendUpdaterEvent('error', {}, message)
-      return { success: false, error: message }
+      return nexusUpdater.installUpdate()
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Install failed.' }
     }
+  })
+
+  ipcMain.handle('defer-update', () => {
+    try {
+      return nexusUpdater.deferUpdate()
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Defer failed.' }
+    }
+  })
+
+  ipcMain.handle('get-update-status', () => {
+    return nexusUpdater.getStatus()
+  })
+
+  ipcMain.handle('open-updates-folder', () => {
+    nexusUpdater.openUpdatesFolder()
+    return { success: true }
   })
 
   createWindow()
   createDockWindow()
   createTray()
 
-  setTimeout(() => {
-    void (async () => {
-      const guardMessage = canUseUpdaterForRequest('Update checks')
-      try {
-        sendUpdaterEvent('checking')
-        if (guardMessage) {
-          const latest = await getLatestUpdateInfo()
-          if (compareVersions(latest.version, app.getVersion()) > 0) {
-            sendUpdaterEvent('available', {
-              version: latest.version,
-              releaseNotes: `Installer published ${latest.releaseDate || 'on the Nexus updates page'}.`
-            })
-          } else {
-            sendUpdaterEvent('not-available', { version: latest.version })
+  const appMenu = Menu.buildFromTemplate([
+    {
+      label: 'Nexus AI',
+      submenu: [
+        { label: 'About Nexus AI', role: 'about' },
+        { type: 'separator' },
+        { label: 'Quit App', accelerator: 'CommandOrControl+Q', click: () => requestAppQuit() }
+      ]
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { label: 'Undo', accelerator: 'CommandOrControl+Z', role: 'undo' },
+        { label: 'Redo', accelerator: 'CommandOrControl+Y', role: 'redo' },
+        { type: 'separator' },
+        { label: 'Cut', accelerator: 'CommandOrControl+X', role: 'cut' },
+        { label: 'Copy', accelerator: 'CommandOrControl+C', role: 'copy' },
+        { label: 'Paste', accelerator: 'CommandOrControl+V', role: 'paste' },
+        { label: 'Select All', accelerator: 'CommandOrControl+A', role: 'selectAll' }
+      ]
+    },
+    {
+      label: 'View',
+      submenu: [
+        {
+          label: 'Reload Interface',
+          accelerator: 'CommandOrControl+R',
+          click: () => mainWindow?.webContents.reload()
+        },
+        {
+          label: 'Refresh All Systems & Agents',
+          accelerator: 'CommandOrControl+Shift+R',
+          click: () => {
+            mainWindow?.webContents.send('nexus-trigger-refresh-all')
           }
-          return
+        },
+        {
+          label: 'Toggle Developer Tools',
+          accelerator: 'CommandOrControl+Shift+I',
+          click: () => mainWindow?.webContents.toggleDevTools()
+        },
+        { type: 'separator' },
+        {
+          label: 'Zoom In',
+          accelerator: 'CommandOrControl+=',
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              const current = mainWindow.webContents.getZoomFactor()
+              const next = Math.min(2.0, Math.round((current + 0.1) * 10) / 10)
+              mainWindow.webContents.setZoomFactor(next)
+              mainWindow.webContents.send('zoom-changed', next)
+            }
+          }
+        },
+        {
+          label: 'Zoom Out',
+          accelerator: 'CommandOrControl+-',
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              const current = mainWindow.webContents.getZoomFactor()
+              const next = Math.max(0.5, Math.round((current - 0.1) * 10) / 10)
+              mainWindow.webContents.setZoomFactor(next)
+              mainWindow.webContents.send('zoom-changed', next)
+            }
+          }
+        },
+        {
+          label: 'Reset Zoom',
+          accelerator: 'CommandOrControl+0',
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.setZoomFactor(1.0)
+              mainWindow.webContents.send('zoom-changed', 1.0)
+            }
+          }
+        },
+        { type: 'separator' },
+        {
+          label: 'Toggle Full Screen',
+          accelerator: 'F11',
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.setFullScreen(!mainWindow.isFullScreen())
+            }
+          }
         }
-        await autoUpdater.checkForUpdates()
-      } catch (error) {
-        sendUpdaterEvent('error', {}, getUpdaterErrorMessage(error))
-      }
-    })()
-  }, 1800)
+      ]
+    }
+  ])
+  Menu.setApplicationMenu(appMenu)
+
+  ipcMain.handle('window-set-zoom', (event, factor: number) => {
+    const clamped = Math.max(0.5, Math.min(2.0, Number(factor) || 1.0))
+    event.sender.setZoomFactor(clamped)
+    return event.sender.getZoomFactor()
+  })
+
+  ipcMain.handle('window-get-zoom', (event) => {
+    return event.sender.getZoomFactor()
+  })
+
+  ipcMain.handle('window-reload', (event) => {
+    event.sender.reload()
+    return true
+  })
+
+  ipcMain.handle('window-toggle-devtools', (event) => {
+    event.sender.toggleDevTools()
+    return true
+  })
+
+  ipcMain.handle('window-toggle-fullscreen', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (win) {
+      const isFull = !win.isFullScreen()
+      win.setFullScreen(isFull)
+      return isFull
+    }
+    return false
+  })
+
+  if (mainWindow) {
+    nexusUpdater.init(mainWindow)
+  }
+
+  setTimeout(() => {
+    void nexusUpdater.checkForUpdates().catch((err) => {
+      console.warn('[NexusUpdater] Automatic startup check warning:', err)
+    })
+  }, 3500)
 
   ipcMain.on('window-min', () => mainWindow?.minimize())
   ipcMain.on('window-close', () => hideDesktopApp())
@@ -956,7 +906,11 @@ app.whenReady().then(() => {
     else if (command === 'close-dock') dockWindow?.hide()
     else if (command === 'open-desktop') showDesktopApp()
     else if (command === 'quit-app') requestAppQuit()
-    else sendDockCommand(command, payload)
+    else if (command === 'set-dock-config') {
+      dockManager.saveConfig(payload)
+    } else if (command === 'reposition-dock') {
+      dockManager.applyCurrentBounds()
+    } else sendDockCommand(command, payload)
   })
 
   app.on('activate', function () {
