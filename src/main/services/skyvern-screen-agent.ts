@@ -64,7 +64,7 @@ export interface SkyvernConfig {
 
 const DEFAULT_CONFIG: SkyvernConfig = {
   skyvernApiUrl: 'http://localhost:8000',
-  geminiModel: 'gemini-3.8-flash',
+  geminiModel: 'gemini-2.5-flash',
   maxSteps: 15,
   stepDelayMs: 900,
   smoothMouse: true
@@ -272,7 +272,7 @@ OUTPUT FORMAT: Return PURE JSON ONLY (no markdown code blocks, no other text):
     prompt: string
   ): Promise<any> {
     const ai = new GoogleGenAI({ apiKey })
-    const modelName = this.config.geminiModel || 'gemini-3.8-flash'
+    const modelName = this.config.geminiModel || 'gemini-2.5-flash'
 
     const response = await ai.models.generateContent({
       model: modelName,
