@@ -3,7 +3,7 @@ import { keyboard, Key, mouse, Point, Button } from '@nut-tree-fork/nut-js'
 import screenshot from 'screenshot-desktop'
 import loudness from 'loudness'
 import path from 'path'
-import { exec } from 'child_process'
+import { execFile } from 'child_process'
 
 keyboard.config.autoDelayMs = 20
 
@@ -87,13 +87,15 @@ function generateHumanPath(start: Point, end: Point): Point[] {
 
 export default function registerGhostControl(ipcMain: IpcMain) {
   ipcMain.handle('copy-file-to-clipboard', async (_event, filePath: string) => {
+    if (!filePath || typeof filePath !== 'string') return false
     return new Promise((resolve) => {
-      const cmd = `powershell -command "Set-Clipboard -Path '${filePath}'"`
-      exec(cmd, (error) => {
-        if (error) {
-          resolve(false)
-        } else resolve(true)
-      })
+      execFile(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-Command', 'Set-Clipboard', '-LiteralPath', filePath],
+        (error) => {
+          resolve(!error)
+        }
+      )
     })
   })
 
@@ -137,11 +139,18 @@ export default function registerGhostControl(ipcMain: IpcMain) {
 
   ipcMain.handle('ghost-click-coordinate', async (_event, { x, y, doubleClick }) => {
     try {
+      if (typeof x !== 'number' || typeof y !== 'number' || isNaN(x) || isNaN(y)) {
+        return false
+      }
       const primaryDisplay = screen.getPrimaryDisplay()
-      const scaleFactor = primaryDisplay.scaleFactor
+      const scaleFactor = primaryDisplay.scaleFactor || 1
+      const bounds = primaryDisplay.bounds
 
-      const logicalX = Math.round(x / scaleFactor)
-      const logicalY = Math.round(y / scaleFactor)
+      const clampedRawX = Math.max(0, Math.min(bounds.width * scaleFactor - 1, x))
+      const clampedRawY = Math.max(0, Math.min(bounds.height * scaleFactor - 1, y))
+
+      const logicalX = Math.round(clampedRawX / scaleFactor)
+      const logicalY = Math.round(clampedRawY / scaleFactor)
 
       const startPoint = await mouse.getPosition()
       const endPoint = new Point(logicalX, logicalY)
