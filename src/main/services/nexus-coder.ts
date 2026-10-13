@@ -1,7 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import { IpcMain, App } from 'electron'
-import { exec } from 'child_process'
+import { spawn } from 'child_process'
 import { GoogleGenAI } from '@google/genai'
 import { globalSandboxManager } from '../security/sandbox-manager'
 
@@ -30,7 +30,7 @@ export default function registerNexusCoder({ ipcMain, app }: { ipcMain: IpcMain;
       const ai = new GoogleGenAI({ apiKey: geminiKey })
 
       const response = await ai.models.generateContentStream({
-        model: 'gemini-3-flash-preview',
+        model: 'gemini-2.5-flash',
         contents: `You are an elite developer. Write the code for: "${prompt}". Output ONLY the raw code for the file ${filename}. Do NOT wrap it in markdown blockquotes.`
       })
 
@@ -52,7 +52,12 @@ export default function registerNexusCoder({ ipcMain, app }: { ipcMain: IpcMain;
 
   ipcMain.handle('open-in-vscode', async (_event, filePath) => {
     try {
-      exec(`code "${filePath}"`)
+      if (!filePath || typeof filePath !== 'string') {
+        return { success: false, error: 'Invalid file path' }
+      }
+      const safePath = path.resolve(filePath)
+      const child = spawn('code', [safePath], { shell: true, stdio: 'ignore', windowsHide: true })
+      child.unref()
       return { success: true }
     } catch (err) {
       return { success: false, error: String(err) }
