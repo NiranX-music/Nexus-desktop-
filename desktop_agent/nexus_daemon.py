@@ -96,7 +96,7 @@ CONFIG = load_config()
 # Optional Automation Libraries with Graceful Fallbacks
 try:
     import pyautogui
-    pyautogui.FAILSAFE = False
+    pyautogui.FAILSAFE = True
     HAS_PYAUTOGUI = True
 except ImportError:
     HAS_PYAUTOGUI = False
