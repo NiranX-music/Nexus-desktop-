@@ -14,14 +14,21 @@ export type GeminiModelOption = {
   live: boolean
 }
 
-export const DEFAULT_GEMINI_MODEL = 'models/gemini-3.8-flash'
-export const DEFAULT_LIVE_GEMINI_MODEL = 'models/gemini-3.8-live'
+export const DEFAULT_GEMINI_MODEL = 'models/gemini-2.5-flash'
+export const DEFAULT_LIVE_GEMINI_MODEL = 'models/gemini-2.5-flash-native-audio-latest'
 
 export const GEMINI_MODEL_OPTIONS: GeminiModelOption[] = [
   // Flagship Text & Multimodal Reasoning Models
   {
+    id: 'models/gemini-2.5-flash',
+    label: 'Gemini 2.5 Flash (Production Default)',
+    category: 'Text-out models',
+    limits: 'RPM 15 / TPM 1M / RPD 1,500',
+    live: false
+  },
+  {
     id: 'models/gemini-3.8-flash',
-    label: 'Gemini 3.8 Flash (Latest Flagship)',
+    label: 'Gemini 3.8 Flash (Latest Preview)',
     category: 'Text-out models',
     limits: 'RPM 15 / TPM 1M / RPD 1,500',
     live: false
