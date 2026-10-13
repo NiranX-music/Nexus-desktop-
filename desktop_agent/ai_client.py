@@ -22,7 +22,7 @@ import urllib.request
 import uuid
 from typing import Any, Dict, List, Optional
 
-GLOBAL_GEMINI_API_KEY = "AQ.Ab8RN6JW5yXKyy1RDQlzMCS1TTn3ZMupKyzH7KTtXP7QA9Rqvw"
+GLOBAL_GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # Keep in sync with ENGINE_FOR_ACTION in frontend/ai/providers.js
 ENGINE_FOR_ACTION = {
@@ -36,7 +36,7 @@ ENGINE_FOR_ACTION = {
 }
 
 DEFAULT_MODELS = {
-    "gemini": {"model": "gemini-3.8-flash", "fallback_model": "gemini-3.5-flash", "stt_model": "gemini-3.5-flash"},
+    "gemini": {"model": "gemini-2.5-flash", "fallback_model": "gemini-1.5-flash", "stt_model": "gemini-1.5-flash"},
     "groq": {"model": "llama-3.3-70b-versatile", "stt_model": "whisper-large-v3-turbo", "base_url": "https://api.groq.com/openai/v1"},
     "openai": {"model": "gpt-4o-mini", "stt_model": "whisper-1", "base_url": "https://api.openai.com/v1"},
     "custom": {"model": "llama3.1", "stt_model": "whisper-1", "base_url": "http://localhost:11434/v1"},
@@ -154,11 +154,15 @@ class GeminiAdapter(BaseAdapter):
 
     def __init__(self, api_key: str = "", model: str = "", stt_model: str = "", base_url: str = "",
                  fallback_model: str = "", temperature: Optional[float] = None, max_tokens: Optional[int] = None):
-        self.api_key = api_key or GLOBAL_GEMINI_API_KEY
+        self.api_key = api_key or os.getenv("GEMINI_API_KEY", "") or GLOBAL_GEMINI_API_KEY
         if not self.api_key:
             raise AIError("Gemini API key missing", 401, self.name)
         self.model = model or DEFAULT_MODELS["gemini"]["model"]
+        if self.model in ("gemini-3.8-flash", "gemini-3-flash-preview"):
+            self.model = "gemini-2.5-flash"
         self.fallback_model = fallback_model or DEFAULT_MODELS["gemini"]["fallback_model"]
+        if self.fallback_model in ("gemini-3.5-flash", "gemini-3.8-flash"):
+            self.fallback_model = "gemini-1.5-flash"
         self.stt_model = stt_model or DEFAULT_MODELS["gemini"]["stt_model"]
         self.base_url = (base_url or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
         self.temperature, self.max_tokens = temperature, max_tokens
