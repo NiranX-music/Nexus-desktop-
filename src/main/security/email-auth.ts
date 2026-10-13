@@ -135,4 +135,56 @@ export default function registerEmailAuth() {
     setSessions(getSessions().filter((session) => session.tokenHash !== hash))
     return true
   })
+
+  ipcMain.handle(
+    'email-auth:update-password',
+    async (
+      _,
+      payload: { email: string; newPassword: string; currentPassword?: string }
+    ) => {
+      const email = normalizeEmail(payload.email || '')
+      const newPassword = payload.newPassword || ''
+      if (newPassword.length < 8) {
+        return { ok: false, error: 'Password must be at least 8 characters.' }
+      }
+
+      const users = getUsers()
+      const user = users.find((item) => item.email === email)
+      if (!user) {
+        return { ok: false, error: 'Account not found.' }
+      }
+
+      if (payload.currentPassword) {
+        const matches = await bcrypt.compare(payload.currentPassword, user.passwordHash)
+        if (!matches) {
+          return { ok: false, error: 'Current password is incorrect.' }
+        }
+      }
+
+      user.passwordHash = await bcrypt.hash(newPassword, 12)
+      setUsers(users)
+      return { ok: true }
+    }
+  )
+
+  ipcMain.handle(
+    'email-auth:update-profile',
+    async (_, payload: { email: string; name?: string }) => {
+      const email = normalizeEmail(payload.email || '')
+      const name = payload.name?.trim()
+      if (!name || name.length < 2) {
+        return { ok: false, error: 'Display name must be at least 2 characters.' }
+      }
+
+      const users = getUsers()
+      const user = users.find((item) => item.email === email)
+      if (!user) {
+        return { ok: false, error: 'Account not found.' }
+      }
+
+      user.name = name
+      setUsers(users)
+      return { ok: true, user: publicUser(user) }
+    }
+  )
 }
