@@ -424,8 +424,11 @@ class AutonomousOrchestrator:
                     worktree_ctx,
                     f"feat(agent): {prompt[:50]} [{task_id}]"
                 )
-                self.workspace_mgr.merge_worktree(worktree_ctx)
-                self.workspace_mgr.remove_worktree(worktree_ctx, delete_branch=True)
+                merge_ok = self.workspace_mgr.merge_worktree(worktree_ctx)
+                if merge_ok:
+                    self.workspace_mgr.remove_worktree(worktree_ctx, delete_branch=True)
+                else:
+                    self.workspace_mgr.remove_worktree(worktree_ctx, delete_branch=False)
             else:
                 self.workspace_mgr.remove_worktree(worktree_ctx, delete_branch=False)
 
@@ -483,6 +486,8 @@ class AutonomousOrchestrator:
                 return self.patcher.write_file(file_path, step.args["content"])
             elif "diff" in step.args:
                 return self.patcher.apply_unified_diff(step.args["diff"])
+            elif file_path and "prompt" in step.args and step.args["prompt"] != file_path:
+                return self.patcher.write_file(file_path, step.args["prompt"])
             return {"success": True, "tool": "filesystem", "message": "No-op"}
 
         elif tool == "browser":
@@ -507,9 +512,24 @@ class AutonomousOrchestrator:
             return {"success": True, "tool": "desktop_ufo"}
 
         elif tool == "voice":
-            from bridge.tts_feedback import speak_feedback
             text = step.args.get("text", "Task completed.")
-            speak_feedback(text)
+            try:
+                if self.repo_root not in sys.path:
+                    sys.path.insert(0, self.repo_root)
+                from bridge.tts_feedback import speak_feedback
+                speak_feedback(text)
+            except Exception:
+                if sys.platform == "win32":
+                    try:
+                        import subprocess
+                        escaped = text.replace('"', '`"').replace("'", "’")
+                        subprocess.run(
+                            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                             f"Add-Type -AssemblyName System.Speech; $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer; $synth.Speak('{escaped}')"],
+                            capture_output=True, timeout=15
+                        )
+                    except Exception:
+                        pass
             return {"success": True, "tool": "voice", "text": text}
 
         return {"success": True, "tool": tool}
