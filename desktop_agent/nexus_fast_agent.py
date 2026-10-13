@@ -22,6 +22,8 @@ import os
 import sys
 import time
 import json
+import uuid
+import tempfile
 import asyncio
 import platform
 import subprocess
@@ -98,43 +100,83 @@ class NexusFastAgent:
 
     def speak_locally(self, text: str, voice: str = "en-US-AriaNeural"):
         """Synthesizes voice locally using edge-tts through system audio output without cloud fees."""
-        self.log(f"Speaking: '{text}'")
+        clean_text = text.strip()
+        if not clean_text:
+            return True
+        self.log(f"Speaking: '{clean_text}'")
+        temp_audio = None
         try:
+            temp_id = uuid.uuid4().hex[:8]
+            out_path = os.path.join(tempfile.gettempdir(), f"_speech_temp_{temp_id}.mp3")
+            temp_audio = out_path
+
             async def _synthesize():
-                communicate = edge_tts.Communicate(text, voice)
-                out_path = os.path.join(os.path.dirname(__file__), "_speech_temp.mp3")
+                communicate = edge_tts.Communicate(clean_text, voice)
                 await communicate.save(out_path)
                 return out_path
 
             if edge_tts is not None:
                 audio_path = asyncio.run(_synthesize())
-                # Play audio using native OS player
-                if platform.system() == "Windows":
-                    cmd = f'powershell -c "(New-Object Media.SoundPlayer \'{audio_path}\').PlaySync()"'
-                    res = subprocess.run(cmd, shell=True, capture_output=True)
-                    if res.returncode != 0:
-                        subprocess.run(f'start "" /min wmplayer "{audio_path}"', shell=True)
-                        time.sleep(2.0)
-                else:
-                    subprocess.run(["ffplay", "-nodisp", "-autoexit", audio_path], capture_output=True)
-                return True
+                if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
+                    if platform.system() == "Windows":
+                        norm_path = os.path.abspath(audio_path).replace("'", "''")
+                        ps_play = (
+                            "Add-Type -AssemblyName presentationCore; "
+                            f"$p = New-Object System.Windows.Media.MediaPlayer; "
+                            f"$p.Open([System.Uri]'{norm_path}'); $p.Play(); "
+                            "Start-Sleep -Milliseconds 400; "
+                            "$w = 0; while (-not $p.NaturalDuration.HasTimeSpan -and $w -lt 40) { Start-Sleep -Milliseconds 50; $w++ }; "
+                            "if ($p.NaturalDuration.HasTimeSpan) { Start-Sleep -Seconds ($p.NaturalDuration.TimeSpan.TotalSeconds + 0.3) }; "
+                            "$p.Stop(); $p.Close();"
+                        )
+                        timeout = max(30.0, len(clean_text) * 0.3)
+                        res = subprocess.run(
+                            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_play],
+                            capture_output=True,
+                            timeout=timeout
+                        )
+                        if res.returncode == 0:
+                            return True
+                    else:
+                        subprocess.run(["ffplay", "-nodisp", "-autoexit", audio_path], capture_output=True)
+                        return True
         except Exception as e:
             self.log(f"edge-tts error: {e}. Falling back to system TTS.", "WARN")
+        finally:
+            if temp_audio and os.path.exists(temp_audio):
+                try:
+                    os.remove(temp_audio)
+                except Exception:
+                    pass
 
-        # Fallback to PowerShell SAPI.SpVoice on Windows
+        # Fallback to PowerShell SAPI on Windows
         if platform.system() == "Windows":
-            clean_text = text.replace('"', '""').replace("'", "''")
-            ps_cmd = f"powershell -c \"Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('{clean_text}')\""
-            subprocess.run(ps_cmd, shell=True, capture_output=True)
-            return True
+            try:
+                escaped = clean_text.replace('"', '`"').replace("'", "’")
+                ps_cmd = (
+                    "Add-Type -AssemblyName System.Speech; "
+                    f"$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+                    f"$synth.Rate = 1; "
+                    f"$synth.Speak('{escaped}');"
+                )
+                timeout = max(30.0, len(clean_text) * 0.3)
+                subprocess.run(
+                    ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
+                    capture_output=True,
+                    timeout=timeout
+                )
+                return True
+            except Exception as ex:
+                self.log(f"SAPI fallback error: {ex}", "ERROR")
         return False
 
     def capture_screenshot(self) -> Dict[str, Any]:
         """Captures full screen and saves it locally."""
         self.log("Capturing desktop screenshot...")
-        os.makedirs("screenshots", exist_ok=True)
+        screenshots_dir = os.path.join(os.path.expanduser("~"), ".nexus", "screenshots")
+        os.makedirs(screenshots_dir, exist_ok=True)
         filename = f"screenshot_{int(time.time())}.png"
-        filepath = os.path.join("screenshots", filename)
+        filepath = os.path.join(screenshots_dir, filename)
 
         # Method 1: Try PIL ImageGrab
         try:
@@ -383,7 +425,8 @@ class NexusFastAgent:
             try:
                 from engines import run_doc_action
                 step = payload if isinstance(payload, dict) else {"prompt": str(payload), "type": "pdf"}
-                cfg = self.cfg if hasattr(self, 'cfg') else {"ai": {"api_key": "AQ.Ab8RN6JW5yXKyy1RDQlzMCS1TTn3ZMupKyzH7KTtXP7QA9Rqvw"}}
+                api_key = os.getenv("GEMINI_API_KEY") or os.getenv("PUTER_API_KEY", "")
+                cfg = self.cfg if hasattr(self, 'cfg') else {"ai": {"api_key": api_key}}
                 return run_doc_action(action_type, step, cfg)
             except Exception as e:
                 return {"success": False, "error": f"Document action failed: {e}"}
@@ -392,7 +435,8 @@ class NexusFastAgent:
             try:
                 from engines import run_media_action
                 step = payload if isinstance(payload, dict) else {"prompt": str(payload)}
-                cfg = self.cfg if hasattr(self, 'cfg') else {"ai": {"api_key": "AQ.Ab8RN6JW5yXKyy1RDQlzMCS1TTn3ZMupKyzH7KTtXP7QA9Rqvw"}}
+                api_key = os.getenv("GEMINI_API_KEY") or os.getenv("PUTER_API_KEY", "")
+                cfg = self.cfg if hasattr(self, 'cfg') else {"ai": {"api_key": api_key}}
                 return run_media_action(action_type, step, cfg)
             except Exception as e:
                 return {"success": False, "error": f"Media action failed: {e}"}
@@ -426,6 +470,9 @@ class NexusFastAgent:
         action_plan_raw = task.get("action_plan")
 
         self.log(f"Processing Task [{task_id}] Type={cmd_type} Prompt='{prompt_raw}'")
+
+        if task_id:
+            self.report_task_result(task_id, "DISPATCHED", "Executing actions on desktop agent")
 
         # Parse action plan if present
         actions = []
