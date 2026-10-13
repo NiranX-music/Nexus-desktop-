@@ -201,7 +201,16 @@ class WorkspaceManager:
     def merge_worktree(self, context: WorktreeContext, target_branch: Optional[str] = None) -> bool:
         """Merges worktree branch back into target base branch."""
         target = target_branch or context.base_branch
-        self._run_git(["checkout", target], cwd=self.repo_root)
+
+        # Guard: Check if repo_root has uncommitted changes that could be clobbered
+        status_res = self._run_git(["status", "--porcelain"], cwd=self.repo_root, check=False)
+        if status_res.returncode == 0 and status_res.stdout.strip():
+            return False
+
+        chk_res = self._run_git(["checkout", target], cwd=self.repo_root, check=False)
+        if chk_res.returncode != 0:
+            return False
+
         res = self._run_git(["merge", "--no-ff", "-m", f"feat(agent): merge {context.branch_name}", context.branch_name], cwd=self.repo_root, check=False)
         return res.returncode == 0
 
@@ -238,10 +247,12 @@ class WorkspaceManager:
                 manager.commit_changes(ctx, "feat: update")
         """
         ctx = self.create_worktree(task_id=task_id)
+        merge_success = False
         try:
             yield ctx
             if auto_merge:
                 self.commit_changes(ctx, f"feat(agent): complete task {ctx.task_id}")
-                self.merge_worktree(ctx)
+                merge_success = self.merge_worktree(ctx)
         finally:
-            self.remove_worktree(ctx, delete_branch=not auto_merge)
+            should_delete = False if (auto_merge and not merge_success) else not auto_merge
+            self.remove_worktree(ctx, delete_branch=should_delete)
