@@ -117,7 +117,7 @@ const NotesView = ({ glassPanel }: { glassPanel?: string }) => {
   }
 
   return (
-    <div className="flex-1 bg-white/5 h-full grid grid-cols-12 gap-6 p-6 animate-in fade-in zoom-in duration-300">
+    <div className="flex-1 bg-white/5 h-full grid grid-cols-12 gap-6 p-6 pb-20 animate-in fade-in zoom-in duration-300">
       <div className="col-span-4 flex flex-col gap-4 h-full overflow-hidden">
         <div className="flex items-center justify-between pb-2 border-b border-white/10">
           <div className="flex items-center gap-2 text-zinc-100">
@@ -137,7 +137,7 @@ const NotesView = ({ glassPanel }: { glassPanel?: string }) => {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto space-y-2 pr-2 scrollbar-small">
+        <div className="flex-1 overflow-y-auto space-y-2 pr-2 pb-16 scrollbar-small">
           {notes.length === 0 ? (
             <div className="text-center text-zinc-400 text-xs mt-10">
               <p>No memories saved.</p>
@@ -242,7 +242,7 @@ const NotesView = ({ glassPanel }: { glassPanel?: string }) => {
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-8 scrollbar-small bg-zinc-950/30">
+            <div className="flex-1 overflow-y-auto p-8 pb-24 scrollbar-small bg-zinc-950/30">
               <div className="prose prose-invert prose-sm max-w-none text-zinc-300">
                 <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>
                   {selectedNote.content}
