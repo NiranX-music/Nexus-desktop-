@@ -23,13 +23,23 @@ import {
   RiDownloadCloud2Line,
   RiRocketLine,
   RiRobot2Line,
-  RiVideoLine,
   RiToolsLine,
   RiShieldCheckLine,
   RiFolderShield2Line,
-  RiExternalLinkLine
+  RiExternalLinkLine,
+  RiEqualizerLine,
+  RiTimeLine,
+  RiFolderOpenLine,
+  RiLayoutBottomLine,
+  RiLayoutTopLine,
+  RiCompass3Line,
+  RiSparklingLine,
+  RiCheckLine,
+  RiMacbookLine
 } from 'react-icons/ri'
 import McpSettingsTab from '@renderer/components/McpSettingsTab'
+import MediaDeviceSettings from '@renderer/components/MediaDeviceSettings'
+import { mediaDeviceManager } from '@renderer/services/media-devices'
 import {
   DEFAULT_LIVE_GEMINI_MODEL,
   GEMINI_MODEL_OPTIONS,
@@ -41,17 +51,12 @@ import {
   DEFAULT_AI_GATEWAY_MODEL,
   DEFAULT_AI_GATEWAY_MODELS
 } from '@renderer/config/ai-provider-models'
-import {
-  DEFAULT_LANCE_MODEL_PATH,
-  DEFAULT_LANCE_REPO_PATH,
-  VIDEO_GENERATION_MODELS
-} from '@renderer/config/video-models'
 
 interface SettingsProps {
   isSystemActive: boolean
 }
 
-type TabType = 'updates' | 'general' | 'keys' | 'mcp' | 'security'
+type TabType = 'updates' | 'general' | 'devices' | 'keys' | 'mcp' | 'security'
 
 const liveGeminiModelOptions = GEMINI_MODEL_OPTIONS.filter((model) => model.live)
 
@@ -71,15 +76,12 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   )
   const [hfKey, setHfKey] = useState(localStorage.getItem('nexus_hf_api_key') || '')
   const [tailvyKey, setTailvyKey] = useState(localStorage.getItem('nexus_tailvy_api_key') || '')
+  const [puterToken, setPuterToken] = useState(
+    localStorage.getItem('nexus_puter_token') || ''
+  )
   const [defaultModel, setDefaultModel] = useState(
     normalizeGeminiLiveModel(localStorage.getItem('nexus_default_ai_model')) ||
       DEFAULT_LIVE_GEMINI_MODEL
-  )
-  const [lanceRepoPath, setLanceRepoPath] = useState(
-    localStorage.getItem('nexus_lance_repo_path') || DEFAULT_LANCE_REPO_PATH
-  )
-  const [lanceModelPath, setLanceModelPath] = useState(
-    localStorage.getItem('nexus_lance_model_path') || DEFAULT_LANCE_MODEL_PATH
   )
 
   const [isSecurityUnlocked, setIsSecurityUnlocked] = useState(false)
@@ -100,14 +102,45 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const [updateVersion, setUpdateVersion] = useState('')
   const [updateNotes, setUpdateNotes] = useState('No new updates detected.')
   const [downloadProgress, setDownloadProgress] = useState(0)
+  const [downloadedFilePath, setDownloadedFilePath] = useState('')
+  const [updateAssetName, setUpdateAssetName] = useState('')
   const [gatewayModels, setGatewayModels] =
     useState<Record<string, AiGatewayModel[]>>(DEFAULT_AI_GATEWAY_MODELS)
   const [sandboxEnabled, setSandboxEnabled] = useState(true)
   const [sandboxWorkspace, setSandboxWorkspace] = useState('')
   const [sandboxBlockedCount, setSandboxBlockedCount] = useState(0)
 
+  const [dockLocation, setDockLocation] = useState<
+    'top-center' | 'taskbar-left' | 'bottom-center' | 'top-left' | 'top-right' | 'custom'
+  >('taskbar-left')
+  const [dockStyle, setDockStyle] = useState<'line' | 'pill'>('line')
+  const [dockSavedNotice, setDockSavedNotice] = useState(false)
+
+  const handleSaveDockConfig = async (loc = dockLocation, sty = dockStyle) => {
+    try {
+      if (window.electron?.ipcRenderer) {
+        await window.electron.ipcRenderer.invoke('set-dock-config', {
+          location: loc,
+          style: sty,
+          setupCompleted: true
+        })
+      }
+      localStorage.setItem('nexus_dock_location', loc)
+      localStorage.setItem('nexus_dock_style', sty)
+      setDockSavedNotice(true)
+      setTimeout(() => setDockSavedNotice(false), 3000)
+    } catch (err) {
+      console.warn('[Settings] Failed to save dock config:', err)
+    }
+  }
+
   useEffect(() => {
     if (window.electron?.ipcRenderer) {
+      window.electron.ipcRenderer.invoke('get-dock-config').then((cfg: any) => {
+        if (cfg?.location) setDockLocation(cfg.location)
+        if (cfg?.style) setDockStyle(cfg.style)
+      }).catch(() => {})
+
       window.electron.ipcRenderer.invoke('get-personality').then((res) => {
         if (res) setPersonality(res)
       })
@@ -116,6 +149,24 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
         .then((res) => setFaceCount(res?.faceCount || 0))
 
       window.electron.ipcRenderer.invoke('get-app-version').then((v) => setAppVersion(v))
+
+      window.electron.ipcRenderer
+        .invoke('get-update-status')
+        .then((res: any) => {
+          if (res?.isDownloaded && res?.status === 'downloaded') {
+            setUpdateStatus('ready')
+            if (res.latestVersion) setUpdateVersion(res.latestVersion)
+            if (res.releaseNotes) setUpdateNotes(res.releaseNotes)
+            if (res.filePath) setDownloadedFilePath(res.filePath)
+            if (res.assetName) setUpdateAssetName(res.assetName)
+          } else if (res?.status === 'available') {
+            setUpdateStatus('available')
+            if (res.latestVersion) setUpdateVersion(res.latestVersion)
+            if (res.releaseNotes) setUpdateNotes(res.releaseNotes)
+            if (res.assetName) setUpdateAssetName(res.assetName)
+          }
+        })
+        .catch(() => {})
 
       window.electron.ipcRenderer
         .invoke('sandbox:get-status')
@@ -138,16 +189,24 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
           setUpdateStatus('available')
           setUpdateVersion(data.version)
           setUpdateNotes(data.releaseNotes || 'Bug fixes and performance improvements.')
+          if (data.assetName) setUpdateAssetName(data.assetName)
         }
         if (status === 'not-available') {
           setUpdateStatus('idle')
-          setUpdateNotes('System is up to date.')
+          setUpdateNotes('System is up to date with latest GitHub release.')
         }
         if (status === 'downloading') {
           setUpdateStatus('downloading')
           setDownloadProgress(Math.round(data.percent))
+          if (data.assetName) setUpdateAssetName(data.assetName)
         }
-        if (status === 'downloaded') setUpdateStatus('ready')
+        if (status === 'downloaded') {
+          setUpdateStatus('ready')
+          if (data.version) setUpdateVersion(data.version)
+          if (data.releaseNotes) setUpdateNotes(data.releaseNotes)
+          if (data.filePath) setDownloadedFilePath(data.filePath)
+          if (data.assetName) setUpdateAssetName(data.assetName)
+        }
         if (status === 'error') {
           setUpdateStatus('error')
           setUpdateNotes(`Error: ${error}`)
@@ -176,9 +235,15 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
     })
   }, [])
 
-  const checkForUpdates = () => window.electron.ipcRenderer.invoke('check-for-updates')
+  const checkForUpdates = (force = false) => window.electron.ipcRenderer.invoke('check-for-updates', force)
   const downloadUpdate = () => window.electron.ipcRenderer.invoke('download-update')
   const installUpdate = () => window.electron.ipcRenderer.invoke('install-update')
+  const deferUpdate = () => {
+    window.electron.ipcRenderer.invoke('defer-update')
+    setUpdateStatus('idle')
+    setUpdateNotes('Update deferred. Downloaded installer is preserved on disk for later.')
+  }
+  const openUpdatesFolder = () => window.electron.ipcRenderer.invoke('open-updates-folder')
 
   const handleVoiceChange = (v: 'MALE' | 'FEMALE') => {
     if (isSystemActive) return
@@ -229,16 +294,16 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
     localStorage.setItem('nexus_fireworks_api_key', fireworksKey)
     localStorage.setItem('nexus_hf_api_key', hfKey)
     localStorage.setItem('nexus_tailvy_api_key', tailvyKey)
+    localStorage.setItem('nexus_puter_token', puterToken)
     localStorage.setItem('nexus_default_ai_model', normalizeGeminiLiveModel(defaultModel))
-    localStorage.setItem('nexus_lance_repo_path', lanceRepoPath)
-    localStorage.setItem('nexus_lance_model_path', lanceModelPath)
 
     if (window.electron?.ipcRenderer) {
       try {
         await window.electron.ipcRenderer.invoke('secure-save-keys', {
           groqKey,
           geminiKey,
-          fireworksKey
+          fireworksKey,
+          puterToken
         })
       } catch (e) {}
     }
@@ -281,7 +346,13 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
         faceapi.nets.faceRecognitionNet.loadFromUri('./models')
       ])
 
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true })
+      const videoConstraints = mediaDeviceManager.getVideoConstraints(true)
+      let stream: MediaStream
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints })
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true })
+      }
       if (videoRef.current) {
         videoRef.current.srcObject = stream
         setEnrollStatus('POSITION FACE IN FRAME')
@@ -322,7 +393,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const titleClass = 'text-sm font-semibold text-white flex items-center gap-2'
 
   return (
-    <div className="flex-1 p-6 md:p-10 lg:p-16 flex flex-col items-center bg-black min-h-screen text-zinc-100 overflow-y-auto scrollbar-small">
+    <div className="h-full w-full p-6 md:p-10 lg:p-16 flex flex-col items-center bg-black text-zinc-100 overflow-y-auto scrollbar-small pb-36">
       <motion.div
         className="w-full max-w-4xl flex flex-col gap-8"
         initial={{ opacity: 0 }}
@@ -359,6 +430,12 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
               <RiSettings4Line size={16} /> GENERAL
             </button>
             <button
+              onClick={() => setActiveTab('devices')}
+              className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-3 text-xs font-bold tracking-widest rounded-lg transition-all duration-300 ${activeTab === 'devices' ? 'bg-white text-black shadow-md' : 'text-zinc-500 hover:text-white hover:bg-white/5'}`}
+            >
+              <RiEqualizerLine size={16} /> DEVICES & AUDIO
+            </button>
+            <button
               onClick={() => setActiveTab('keys')}
               className={`flex-1 md:flex-none flex items-center justify-center gap-2 px-6 py-3 text-xs font-bold tracking-widest rounded-lg transition-all duration-300 ${activeTab === 'keys' ? 'bg-white text-black shadow-md' : 'text-zinc-500 hover:text-white hover:bg-white/5'}`}
             >
@@ -379,7 +456,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
           </div>
         </div>
 
-        <div className="relative min-h-125 pb-12 mt-2">
+        <div className="w-full pb-24 mt-2">
           <AnimatePresence mode="wait">
             {activeTab === 'updates' && (
               <motion.div
@@ -388,7 +465,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
-                className="grid grid-cols-1 md:grid-cols-2 gap-6 absolute w-full"
+                className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full"
               >
                 <div className={`${cardClass} md:col-span-1 border-emerald-500/20`}>
                   <div className="flex justify-between items-center border-b border-white/10 pb-4">
@@ -406,7 +483,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                         <RiTerminalWindowLine size={48} className="text-zinc-700" />
                         <p className="text-xs text-zinc-400 font-mono">Current build is stable.</p>
                         <button
-                          onClick={checkForUpdates}
+                          onClick={() => checkForUpdates()}
                           className="mt-2 w-full py-3 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-white font-bold tracking-widest text-[11px] flex items-center justify-center gap-2 transition-all cursor-pointer"
                         >
                           <RiRefreshLine size={16} /> CHECK FOR UPDATES
@@ -446,16 +523,52 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                         </div>
                       </div>
                     ) : (
-                      <>
-                        <RiRecordCircleLine size={48} className="text-emerald-400 animate-pulse" />
-                        <p className="text-xs text-emerald-400 font-mono">PATCH DOWNLOADED</p>
-                        <button
-                          onClick={installUpdate}
-                          className="mt-2 w-full py-3 rounded-lg bg-emerald-500 text-black font-bold tracking-widest text-[11px] flex items-center justify-center gap-2 transition-all shadow-[0_0_20px_rgba(16,185,129,0.4)] cursor-pointer"
-                        >
-                          <RiRocketLine size={16} /> EXECUTE RESTART
-                        </button>
-                      </>
+                      <div className="w-full flex flex-col gap-2.5 items-center">
+                        <RiRecordCircleLine size={44} className="text-emerald-400 animate-pulse" />
+                        <div className="flex flex-col items-center">
+                          <p className="text-xs text-emerald-400 font-mono font-bold tracking-wide">
+                            PACKAGE DOWNLOADED & PRESERVED
+                          </p>
+                          <span className="text-[10px] text-zinc-400 font-mono">
+                            Ready to apply v{updateVersion}
+                          </span>
+                        </div>
+
+                        {updateAssetName && (
+                          <div className="w-full bg-zinc-950/80 px-3 py-1.5 rounded-lg border border-white/10 text-left font-mono text-[10px] text-zinc-300 truncate">
+                            <span className="text-zinc-500 mr-1.5">File:</span>
+                            {updateAssetName}
+                          </div>
+                        )}
+
+                        <p className="text-[11px] text-zinc-400 text-center leading-relaxed">
+                          The update package is safely kept on your PC. You can apply the update now and restart, or keep working and apply it later.
+                        </p>
+
+                        <div className="flex flex-col gap-2 w-full mt-1">
+                          <button
+                            onClick={installUpdate}
+                            className="w-full py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-black tracking-widest text-[11px] flex items-center justify-center gap-2 transition-all shadow-[0_0_20px_rgba(16,185,129,0.4)] cursor-pointer uppercase"
+                          >
+                            <RiRocketLine size={16} /> Execute Restart Now
+                          </button>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={deferUpdate}
+                              className="flex-1 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-300 font-bold tracking-wider text-[10px] flex items-center justify-center gap-1.5 transition-all border border-white/10 cursor-pointer uppercase"
+                            >
+                              <RiTimeLine size={14} /> Update Later
+                            </button>
+                            <button
+                              onClick={openUpdatesFolder}
+                              className="py-2 px-3 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white font-mono text-[10px] flex items-center justify-center gap-1 transition-all border border-white/10 cursor-pointer"
+                              title="Reveal downloaded installer in Explorer"
+                            >
+                              <RiFolderOpenLine size={14} /> View File
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -483,7 +596,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
-                className="grid grid-cols-1 md:grid-cols-2 gap-6 absolute w-full"
+                className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full"
               >
                 <div className={`${cardClass} md:col-span-2`}>
                   <div className="flex justify-between items-center">
@@ -571,6 +684,299 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                     ></div>
                   )}
                 </div>
+
+                {/* --- HUD & DOCK VARIABLE LOCATION & DENSITY CARD --- */}
+                <div className={`${cardClass} md:col-span-2 border-emerald-500/20`}>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-4">
+                    <div>
+                      <span className={titleClass}>
+                        <RiCompass3Line className="text-emerald-400" size={18} /> HUD & Dock Variable Placement
+                      </span>
+                      <p className="text-xs text-zinc-400 mt-0.5">
+                        Relocate your sovereign Nexus dock anytime. Move it to the taskbar empty slot, webcam notch, or drag it anywhere.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {dockSavedNotice && (
+                        <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded border border-emerald-500/30 flex items-center gap-1 animate-pulse">
+                          <RiCheckLine size={12} /> DOCK RELOCATED
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => window.dispatchEvent(new CustomEvent('nexus-open-dock-setup'))}
+                        className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-[10px] font-mono text-zinc-300 hover:text-white transition-all flex items-center gap-1 cursor-pointer"
+                      >
+                        <RiSparklingLine size={12} className="text-cyan-400" /> Open Wizard
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Section 1: Desktop Location Selector */}
+                  <div className="flex flex-col gap-2.5">
+                    <label className="text-[10px] text-zinc-400 font-mono tracking-widest uppercase flex items-center gap-2">
+                      <RiLayoutBottomLine size={14} className="text-emerald-400" /> Screen Placement Preset
+                    </label>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                      {/* Taskbar Empty Slot (Recommended on Windows 11) */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDockLocation('taskbar-left')
+                          handleSaveDockConfig('taskbar-left', dockStyle)
+                        }}
+                        className={`text-left p-3 rounded-xl border transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
+                          dockLocation === 'taskbar-left'
+                            ? 'border-emerald-400/80 bg-emerald-950/30 shadow-[0_0_15px_rgba(16,185,129,0.2)]'
+                            : 'border-white/10 bg-[#050505] hover:border-white/20'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                            <RiLayoutBottomLine size={14} className="text-emerald-300" /> Taskbar Empty Slot
+                          </span>
+                          <span className="text-[8px] font-mono font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/40">
+                            WIN 11
+                          </span>
+                        </div>
+                        <span className="text-[10.5px] text-zinc-400">
+                          Sits in empty space between Weather and Start icons.
+                        </span>
+                      </button>
+
+                      {/* Top Camera Notch */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDockLocation('top-center')
+                          handleSaveDockConfig('top-center', dockStyle)
+                        }}
+                        className={`text-left p-3 rounded-xl border transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
+                          dockLocation === 'top-center'
+                            ? 'border-emerald-400/80 bg-emerald-950/30 shadow-[0_0_15px_rgba(16,185,129,0.2)]'
+                            : 'border-white/10 bg-[#050505] hover:border-white/20'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                            <RiLayoutTopLine size={14} className="text-teal-300" /> Camera Notch
+                          </span>
+                          <span className="text-[8px] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-zinc-300">
+                            TOP CENTER
+                          </span>
+                        </div>
+                        <span className="text-[10.5px] text-zinc-400">
+                          Floats centered right under your webcam bezel.
+                        </span>
+                      </button>
+
+                      {/* Bottom Center */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDockLocation('bottom-center')
+                          handleSaveDockConfig('bottom-center', dockStyle)
+                        }}
+                        className={`text-left p-3 rounded-xl border transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
+                          dockLocation === 'bottom-center'
+                            ? 'border-emerald-400/80 bg-emerald-950/30 shadow-[0_0_15px_rgba(16,185,129,0.2)]'
+                            : 'border-white/10 bg-[#050505] hover:border-white/20'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                            <RiMacbookLine size={14} className="text-cyan-300" /> Bottom Center
+                          </span>
+                        </div>
+                        <span className="text-[10.5px] text-zinc-400">
+                          Centered above taskbar at screen bottom.
+                        </span>
+                      </button>
+
+                      {/* Top Right Corner */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDockLocation('top-right')
+                          handleSaveDockConfig('top-right', dockStyle)
+                        }}
+                        className={`text-left p-3 rounded-xl border transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
+                          dockLocation === 'top-right'
+                            ? 'border-emerald-400/80 bg-emerald-950/30 shadow-[0_0_15px_rgba(16,185,129,0.2)]'
+                            : 'border-white/10 bg-[#050505] hover:border-white/20'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                            <RiSparklingLine size={14} className="text-cyan-300" /> Top Right Corner
+                          </span>
+                        </div>
+                        <span className="text-[10.5px] text-zinc-400">
+                          Discreet telemetry in upper right display corner.
+                        </span>
+                      </button>
+
+                      {/* Top Left Corner */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDockLocation('top-left')
+                          handleSaveDockConfig('top-left', dockStyle)
+                        }}
+                        className={`text-left p-3 rounded-xl border transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
+                          dockLocation === 'top-left'
+                            ? 'border-emerald-400/80 bg-emerald-950/30 shadow-[0_0_15px_rgba(16,185,129,0.2)]'
+                            : 'border-white/10 bg-[#050505] hover:border-white/20'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                            <RiLayoutTopLine size={14} className="text-zinc-300" /> Top Left Corner
+                          </span>
+                        </div>
+                        <span className="text-[10.5px] text-zinc-400">
+                          Discreet telemetry in upper left display corner.
+                        </span>
+                      </button>
+
+                      {/* Custom Draggable Position */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDockLocation('custom')
+                          handleSaveDockConfig('custom', dockStyle)
+                        }}
+                        className={`text-left p-3 rounded-xl border transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
+                          dockLocation === 'custom'
+                            ? 'border-cyan-400/80 bg-cyan-950/30 shadow-[0_0_15px_rgba(6,182,212,0.2)]'
+                            : 'border-white/10 bg-[#050505] hover:border-white/20'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                            <RiCompass3Line size={14} className="text-cyan-300" /> Custom Dragged
+                          </span>
+                          <span className="text-[8px] font-mono px-1.5 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300">
+                            FREE DRAG
+                          </span>
+                        </div>
+                        <span className="text-[10.5px] text-zinc-400">
+                          Drag the dock anywhere. Nexus remembers custom X/Y.
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Section 2: Style & Density Selection */}
+                  <div className="flex flex-col gap-2.5 pt-2">
+                    <label className="text-[10px] text-zinc-400 font-mono tracking-widest uppercase flex items-center gap-2">
+                      <RiSparklingLine size={14} className="text-cyan-400" /> Visual Density & Profile
+                    </label>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {/* Extra-Compact Cyber Line (2mm) */}
+                      <div
+                        onClick={() => {
+                          setDockStyle('line')
+                          handleSaveDockConfig(dockLocation, 'line')
+                        }}
+                        className={`p-3.5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between gap-2.5 ${
+                          dockStyle === 'line'
+                            ? 'border-emerald-400/80 bg-emerald-950/30 shadow-[0_0_15px_rgba(16,185,129,0.2)]'
+                            : 'border-white/10 bg-[#050505] hover:border-white/20'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-white">2mm Cyber Line (Extra Compact)</span>
+                          <span className="text-[8px] font-mono font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/40">
+                            STEALTH 2MM
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-zinc-400">
+                          Futuristic glowing neon laser strip below camera (~2mm). Whisper-quiet, expands on hover.
+                        </p>
+                        <div className="h-8 rounded-lg bg-black/60 border border-white/5 flex items-center justify-center px-4">
+                          <div className="relative h-[3px] w-28 rounded-full bg-gradient-to-r from-emerald-400 via-teal-200 to-cyan-400 shadow-[0_0_10px_#10b981,0_0_20px_rgba(6,182,212,0.8)]" />
+                        </div>
+                      </div>
+
+                      {/* Dynamic Island Pill (Standard) */}
+                      <div
+                        onClick={() => {
+                          setDockStyle('pill')
+                          handleSaveDockConfig(dockLocation, 'pill')
+                        }}
+                        className={`p-3.5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between gap-2.5 ${
+                          dockStyle === 'pill'
+                            ? 'border-emerald-400/80 bg-emerald-950/30 shadow-[0_0_15px_rgba(16,185,129,0.2)]'
+                            : 'border-white/10 bg-[#050505] hover:border-white/20'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-white">Dynamic Island Pill (Standard 40px)</span>
+                          <span className="text-[8px] font-mono px-1.5 py-0.5 rounded-full bg-white/10 text-zinc-300">
+                            CLASSIC
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-zinc-400">
+                          Curved glass capsule with NX LIVE indicator, audio waveform equalizer, and mic button.
+                        </p>
+                        <div className="h-8 rounded-lg bg-black/60 border border-white/5 flex items-center justify-center px-4">
+                          <div className="h-5 w-28 rounded-full border border-white/20 bg-slate-900/60 px-2 flex items-center justify-between text-[7.5px] font-bold text-emerald-300">
+                            <span>NX LIVE</span>
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Action Bar */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-white/10">
+                    <span className="text-[11px] text-zinc-400 font-mono">
+                      Current: <span className="text-emerald-300 font-bold uppercase">{dockLocation}</span> •{' '}
+                      <span className="text-cyan-300 font-bold uppercase">{dockStyle === 'line' ? '2mm Cyber Line' : 'Dynamic Island'}</span>
+                    </span>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if ((window as any).electron?.ipcRenderer) {
+                            (window as any).electron.ipcRenderer.send('dock-command', 'open-dock')
+                            (window as any).electron.ipcRenderer.send('dock-command', 'reposition-dock')
+                          }
+                        }}
+                        className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-xs font-bold text-zinc-300 hover:text-white transition-all cursor-pointer"
+                      >
+                        Reveal Dock Window
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSaveDockConfig(dockLocation, dockStyle)}
+                        className="px-4 py-1.5 rounded-lg bg-emerald-400 hover:bg-emerald-300 text-black text-xs font-bold tracking-wider uppercase transition-all shadow-[0_0_15px_rgba(16,185,129,0.3)] cursor-pointer"
+                      >
+                        Save Placement
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {/* --- TAB: DEVICES & AUDIO --- */}
+            {activeTab === 'devices' && (
+              <motion.div
+                key="devices"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.2 }}
+                className="w-full"
+              >
+                <MediaDeviceSettings cardClass={cardClass} titleClass={titleClass} />
               </motion.div>
             )}
 
@@ -582,7 +988,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
-                className="grid grid-cols-1 gap-6 absolute w-full"
+                className="grid grid-cols-1 gap-6 w-full"
               >
                 <div className={`${cardClass} gap-6`}>
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-4">
@@ -705,62 +1111,6 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                       </div>
                     </div>
 
-                    <div className="flex flex-col gap-3 md:col-span-2 rounded-xl border border-cyan-400/10 bg-[#050505] p-4">
-                      <div className="flex items-center gap-2 text-[10px] text-zinc-400 font-mono tracking-widest uppercase">
-                        <RiVideoLine size={14} /> Video generation models
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <label className="flex flex-col gap-2">
-                          <span className="text-[9px] text-zinc-500 font-mono uppercase tracking-widest">
-                            Default model
-                          </span>
-                          <select
-                            defaultValue={VIDEO_GENERATION_MODELS[0].id}
-                            className="bg-black border border-white/10 rounded-lg px-3 py-2 text-[10px] font-mono text-zinc-200 outline-none"
-                          >
-                            {VIDEO_GENERATION_MODELS.map((model) => (
-                              <option key={model.id} className="bg-black" value={model.id}>
-                                {model.label}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="flex flex-col gap-2">
-                          <span className="text-[9px] text-zinc-500 font-mono uppercase tracking-widest">
-                            Runtime mode
-                          </span>
-                          <input
-                            value="Local CUDA repo"
-                            readOnly
-                            className="bg-black border border-white/10 rounded-lg px-3 py-2 text-[10px] font-mono text-zinc-200 outline-none"
-                          />
-                        </label>
-                      </div>
-                      <label className="flex flex-col gap-2">
-                        <span className="text-[9px] text-zinc-500 font-mono uppercase tracking-widest">
-                          Lance repo path
-                        </span>
-                        <input
-                          value={lanceRepoPath}
-                          onChange={(e) => setLanceRepoPath(e.target.value)}
-                          className="bg-black border border-white/10 rounded-lg px-3 py-2 text-[10px] font-mono text-zinc-200 outline-none"
-                        />
-                      </label>
-                      <label className="flex flex-col gap-2">
-                        <span className="text-[9px] text-zinc-500 font-mono uppercase tracking-widest">
-                          Lance weights path
-                        </span>
-                        <input
-                          value={lanceModelPath}
-                          onChange={(e) => setLanceModelPath(e.target.value)}
-                          className="bg-black border border-white/10 rounded-lg px-3 py-2 text-[10px] font-mono text-zinc-200 outline-none"
-                        />
-                      </label>
-                      <p className="text-[10px] leading-5 text-zinc-500">
-                        {VIDEO_GENERATION_MODELS[0].requirements}
-                      </p>
-                    </div>
-
                     <div className="flex flex-col gap-2 md:col-span-2">
                       <label className="text-[10px] text-zinc-400 font-mono tracking-widest uppercase flex items-center gap-2">
                         <RiCloudLine size={14} /> Hugging Face Vision
@@ -790,6 +1140,29 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                         />
                       </div>
                     </div>
+
+                    <div className="flex flex-col gap-2 md:col-span-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] text-amber-400 font-mono tracking-widest uppercase flex items-center gap-2 font-bold">
+                          <RiRocketLine size={14} /> Puter.js AI Engine (Primary Sovereign Free LLMs & Art)
+                        </label>
+                        <span className="text-[9px] font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded">
+                          Primary Engine (Active)
+                        </span>
+                      </div>
+                      <div className={inputContainerClass}>
+                        <input
+                          type="password"
+                          value={puterToken}
+                          onChange={(e) => setPuterToken(e.target.value)}
+                          placeholder="Optional Puter auth token (Puter works zero-auth out of the box)..."
+                          className="bg-transparent border-none outline-none text-sm font-mono text-zinc-100 w-full placeholder:text-zinc-700"
+                        />
+                      </div>
+                      <p className="text-[10px] text-zinc-500 font-mono">
+                        Provides zero-barrier primary access to GPT-4o, Claude 3.7 Sonnet, DeepSeek R1, Mistral Large, and Puter txt2img without requiring paid subscriptions.
+                      </p>
+                    </div>
                   </div>
 
                   <div className="bg-[#050505] border border-white/5 p-4 rounded-xl mt-2 flex items-start gap-3">
@@ -812,7 +1185,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
-                className="w-full rounded-3xl overflow-hidden shadow-2xl border border-white/5 absolute"
+                className="w-full rounded-3xl overflow-hidden shadow-2xl border border-white/5 relative"
               >
                 <AnimatePresence>
                   {!isSecurityUnlocked && (
