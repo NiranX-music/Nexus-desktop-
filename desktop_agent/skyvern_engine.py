@@ -155,7 +155,7 @@ def run_skyvern_task(task: str, user_cfg: Dict[str, Any], url: Optional[str] = N
             f"Respond ONLY with a JSON object: {{\"action\": \"CLICK\"|\"TYPE\"|\"PRESS\"|\"DONE\", \"target\": \"element name\", \"normalized_x\": 0-1000, \"normalized_y\": 0-1000, \"text\": \"string if TYPE\", \"key\": \"string if PRESS\", \"reasoning\": \"brief why\"}}"
         )
 
-        gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={gemini_key}"
+        gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
         body = {
             "contents": [
                 {
@@ -165,7 +165,7 @@ def run_skyvern_task(task: str, user_cfg: Dict[str, Any], url: Optional[str] = N
                     ]
                 }
             ],
-            "generationConfig": {"temperature": 0.2, "response_mime_type": "application/json"}
+            "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}
         }
         res_json = _post_json(gemini_url, body, timeout=30.0)
         if not res_json:
