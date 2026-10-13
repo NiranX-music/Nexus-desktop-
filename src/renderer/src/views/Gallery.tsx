@@ -171,7 +171,7 @@ const GalleryView = () => {
             <p className="text-xs tracking-widest opacity-50 font-mono">NO ARTIFACTS FOUND</p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-5 pb-10">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-5 pb-32">
             {visibleImages.map((img, index) => {
               const isLast = index === visibleImages.length - 1
 
