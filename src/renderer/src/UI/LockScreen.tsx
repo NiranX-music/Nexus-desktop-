@@ -14,6 +14,7 @@ import {
 import * as faceapi from 'face-api.js'
 import { motion, AnimatePresence } from 'framer-motion'
 import gsap from 'gsap'
+import { mediaDeviceManager } from '../services/media-devices'
 
 interface LockScreenProps {
   onUnlock: () => void
@@ -84,7 +85,13 @@ export default function LockScreen({ onUnlock }: LockScreenProps) {
 
   const startHardware = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+      const videoConstraints = mediaDeviceManager.getVideoConstraints(true)
+      let stream: MediaStream
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false })
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+      }
       if (videoRef.current) {
         videoRef.current.srcObject = stream
         await videoRef.current.play().catch((e) => console.warn('Autoplay prevented:', e))
