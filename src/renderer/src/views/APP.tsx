@@ -124,7 +124,7 @@ const AppsView = () => {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto pr-4 pb-4 scrollbar-small min-h-0">
+      <div className="flex-1 overflow-y-auto pr-4 pb-32 scrollbar-small min-h-0">
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
           {visibleApps.map((app, index) => {
             const safeKey = `${app.id}-${index}`
