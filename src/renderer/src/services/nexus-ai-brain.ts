@@ -10,29 +10,57 @@ export interface ChatMessage {
   parts: [{ text: string }]
 }
 
+const isMeaningfulText = (text: string): boolean => {
+  if (!text) return false
+  const cleaned = text
+    .replace(/<\|nospeech\|>/gi, '')
+    .replace(/<(?:no[- ]speech|silence|applause|music|laughter)>/gi, '')
+    .replace(/\[(?:no[- ]speech|silence|applause|music|laughter)\]/gi, '')
+    .trim()
+  return cleaned.length > 0
+}
+
 export const saveMessage = async (role: 'user' | 'model' | 'nexus', text: string) => {
   try {
-    if (!text) return
+    if (!text || !isMeaningfulText(text)) return
 
     const safeRole = role === 'nexus' ? 'model' : role
+    const cleanedText = text
+      .replace(/<\|nospeech\|>/gi, '')
+      .replace(/<(?:no[- ]speech|silence|applause|music|laughter)>/gi, '')
+      .replace(/\[(?:no[- ]speech|silence|applause|music|laughter)\]/gi, '')
+      .trim()
 
     await window.electron.ipcRenderer.invoke('add-message', {
       role: safeRole,
-      parts: [{ text: text }]
+      parts: [{ text: cleanedText }]
     })
-    void saveCloudChatMessage(safeRole, text).catch(() => {})
+    void saveCloudChatMessage(safeRole, cleanedText).catch(() => {})
   } catch (err) {}
 }
 
 export const getHistory = async (): Promise<ChatMessage[]> => {
   try {
-    const history = await window.electron.ipcRenderer.invoke('get-history')
-    if (history?.length) return history
-
-    return await listCloudChatHistory(20)
+    let history = await window.electron.ipcRenderer.invoke('get-history')
+    if (!history?.length) {
+      history = await listCloudChatHistory(20)
+    }
+    if (Array.isArray(history)) {
+      return history.filter((msg: any) => {
+        const text = msg.parts && msg.parts[0] ? msg.parts[0].text : msg.content || ''
+        return isMeaningfulText(text)
+      })
+    }
+    return []
   } catch (e) {
     try {
-      return await listCloudChatHistory(20)
+      const cloud = await listCloudChatHistory(20)
+      return Array.isArray(cloud)
+        ? cloud.filter((msg: any) => {
+            const text = msg.parts && msg.parts[0] ? msg.parts[0].text : msg.content || ''
+            return isMeaningfulText(text)
+          })
+        : []
     } catch {
       return []
     }
