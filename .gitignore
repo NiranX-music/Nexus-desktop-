@@ -36,4 +36,5 @@ __pycache__/
 _speech_temp.mp3
 _cache/
 *.db
+*.tsbuildinfo
 
