@@ -251,7 +251,28 @@ class IntentRouter:
             )
 
         # 2. Filesystem / Patch intent
-        if "patch " in p_lower or "replace " in p_lower or "edit file" in p_lower or "write file" in p_lower:
+        if "patch " in p_lower or "replace " in p_lower or "edit file" in p_lower or "write file" in p_lower or prompt.startswith("--- ") or "diff --git" in prompt:
+            fs_args: Dict[str, Any] = {"prompt": prompt}
+            if "diff --git" in prompt or ("--- " in prompt and "+++ " in prompt):
+                fs_args["diff"] = prompt
+            else:
+                replace_match = re.search(r'replace\s+["\'](.*?)["\']\s+with\s+["\'](.*?)["\'](?:\s+in\s+([^\s]+))?', prompt, re.DOTALL | re.IGNORECASE)
+                if replace_match:
+                    fs_args["search"] = replace_match.group(1)
+                    fs_args["replace"] = replace_match.group(2)
+                    if replace_match.group(3):
+                        fs_args["path"] = replace_match.group(3).strip()
+                else:
+                    write_match = re.search(r'write\s+file\s+([^\s]+)\s+(.*)', prompt, re.DOTALL | re.IGNORECASE)
+                    if write_match:
+                        fs_args["path"] = write_match.group(1)
+                        fs_args["content"] = write_match.group(2)
+                    else:
+                        file_match = re.search(r'(?:file|path)\s+([a-zA-Z0-9_\-\.\/\\]+)', prompt, re.IGNORECASE)
+                        if file_match:
+                            fs_args["path"] = file_match.group(1)
+
+            target_name = fs_args.get("path") or "target file"
             return TaskPlan(
                 goal=prompt,
                 intent_type="FS_PATCH",
@@ -260,8 +281,8 @@ class IntentRouter:
                     PlannedStep(
                         step_id="step_1",
                         tool="filesystem",
-                        title="Apply filesystem modification",
-                        args={"prompt": prompt}
+                        title=f"Apply filesystem modification: {target_name}",
+                        args=fs_args
                     )
                 ],
                 raw_thought=thought
