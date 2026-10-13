@@ -27,7 +27,9 @@ import {
   RiWhatsappLine,
   RiFilePpt2Line,
   RiShieldCheckLine,
-  RiVolumeUpLine
+  RiVolumeUpLine,
+  RiFullscreenLine,
+  RiFullscreenExitLine
 } from 'react-icons/ri'
 import { FaMemory } from 'react-icons/fa6'
 import { GiTinker } from 'react-icons/gi'
@@ -150,6 +152,43 @@ export default function DashboardView({
   const [isUserSpeaking, setIsUserSpeaking] = useState(false)
   const [userAudioVolume, setUserAudioVolume] = useState(0)
   const [isScreenAudioActive, setIsScreenAudioActive] = useState(false)
+  const [isFullScreen, setIsFullScreen] = useState(() => {
+    try {
+      return localStorage.getItem('nexus_voice_fullscreen') === 'true'
+    } catch {
+      return false
+    }
+  })
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('nexus_voice_fullscreen', String(isFullScreen))
+    } catch {}
+  }, [isFullScreen])
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeEl = document.activeElement
+      const isInput =
+        activeEl instanceof HTMLInputElement ||
+        activeEl instanceof HTMLTextAreaElement ||
+        (activeEl as HTMLElement)?.isContentEditable
+
+      if (e.key === 'Escape' && isFullScreen) {
+        setIsFullScreen(false)
+      } else if (
+        (e.key === 'f' || e.key === 'F') &&
+        !isInput &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey
+      ) {
+        setIsFullScreen((prev) => !prev)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isFullScreen])
 
   useEffect(() => {
     const handleSpeaking = (e: any) => {
@@ -526,7 +565,18 @@ export default function DashboardView({
 
   return (
     <div className="flex-1 min-h-0 p-4 bg-white/[0.02] grid grid-cols-12 gap-4 h-full overflow-hidden relative animate-in fade-in zoom-in duration-300 w-full">
-      <div className="hidden lg:flex col-span-3 min-h-0 flex-col gap-3 overflow-y-auto pr-1.5 pb-2 z-40 scrollbar-small">
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(event) => setSharedFiles(Array.from(event.target.files || []))}
+      />
+      <div
+        className={`hidden lg:flex ${
+          isFullScreen ? 'col-span-12 lg:col-span-4 xl:col-span-3' : 'col-span-3'
+        } min-h-0 flex-col gap-3 overflow-y-auto pr-1.5 pb-20 z-40 scrollbar-small transition-all duration-300`}
+      >
         <div
           className={`${glassPanel} h-[224px] shrink-0 flex flex-col p-1 overflow-hidden relative group`}
         >
@@ -827,14 +877,51 @@ export default function DashboardView({
         </div>
       </div>
 
-      <div className="col-span-12 lg:col-span-6 relative isolate flex min-h-0 flex-col items-center overflow-y-auto overflow-x-hidden pb-3 scrollbar-small">
+      <div
+        className={`col-span-12 ${
+          isFullScreen ? 'lg:col-span-8 xl:col-span-9' : 'lg:col-span-6'
+        } relative isolate flex min-h-0 flex-col items-center justify-between overflow-y-auto overflow-x-hidden pb-8 scrollbar-small transition-all duration-300`}
+      >
         <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
-          <div className="absolute left-1/2 top-[42%] h-[min(58vh,540px)] w-[min(58vh,540px)] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(circle,#10b98126_0%,#06b6d41a_36%,transparent_70%)] blur-3xl" />
-          <div className="nexus-core-grid absolute left-1/2 top-[42%] h-[min(62vh,580px)] w-[min(62vh,580px)] -translate-x-1/2 -translate-y-1/2 opacity-60" />
+          <div
+            className={`absolute left-1/2 top-[42%] ${
+              isFullScreen ? 'h-[min(68vh,660px)] w-[min(68vh,660px)]' : 'h-[min(58vh,540px)] w-[min(58vh,540px)]'
+            } -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(circle,#10b98126_0%,#06b6d41a_36%,transparent_70%)] blur-3xl transition-all duration-700`}
+          />
+          <div
+            className={`nexus-core-grid absolute left-1/2 top-[42%] ${
+              isFullScreen ? 'h-[min(72vh,700px)] w-[min(72vh,700px)]' : 'h-[min(62vh,580px)] w-[min(62vh,580px)]'
+            } -translate-x-1/2 -translate-y-1/2 opacity-60 transition-all duration-700`}
+          />
+        </div>
+
+        {/* Voice Agent Fullscreen Mode Toggle Button */}
+        <div className="absolute top-3 right-4 z-40 flex items-center gap-2">
+          <button
+            onClick={() => setIsFullScreen((prev) => !prev)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border backdrop-blur-xl text-[9px] font-mono uppercase tracking-wider transition-all cursor-pointer group ${
+              isFullScreen
+                ? 'border-emerald-400/50 bg-emerald-500/20 text-emerald-200 shadow-[0_0_20px_rgba(52,211,153,0.3)] hover:bg-emerald-500/30'
+                : 'border-white/10 bg-black/60 text-zinc-400 hover:border-emerald-400/40 hover:text-emerald-300 hover:bg-black/80'
+            }`}
+            title={isFullScreen ? 'Exit Full Screen Mode (Esc or F)' : 'Enter Full Screen Voice Mode (F)'}
+          >
+            {isFullScreen ? (
+              <>
+                <RiFullscreenExitLine size={13} className="text-emerald-400 group-hover:scale-110 transition-transform" />
+                <span>Exit Fullscreen</span>
+              </>
+            ) : (
+              <>
+                <RiFullscreenLine size={13} className="text-emerald-400 group-hover:scale-110 transition-transform" />
+                <span>Fullscreen</span>
+              </>
+            )}
+          </button>
         </div>
 
         <div
-          className={`lg:hidden absolute top-4 right-4 w-32 h-24 ${glassPanel} z-50 overflow-hidden ${isVideoOn ? 'block' : 'hidden'}`}
+          className={`lg:hidden absolute top-12 right-4 w-32 h-24 ${glassPanel} z-50 overflow-hidden ${isVideoOn ? 'block' : 'hidden'}`}
         >
           <video
             ref={setMobileVideoRef}
@@ -847,7 +934,13 @@ export default function DashboardView({
 
         <div className="relative z-10 flex min-h-0 w-full flex-1 items-center justify-center px-2">
           <div
-            className={`group/core relative flex aspect-square h-[min(56vh,540px)] min-h-[300px] max-h-[540px] w-full max-w-[540px] items-center justify-center transition-all duration-1000 ${isSystemActive || isSystemStarting ? 'opacity-100 scale-100' : 'opacity-80 scale-95 grayscale'}`}
+            className={`group/core relative flex aspect-square ${
+              isFullScreen
+                ? 'h-[min(65vh,640px)] min-h-[340px] max-h-[640px] w-full max-w-[640px]'
+                : 'h-[min(56vh,540px)] min-h-[300px] max-h-[540px] w-full max-w-[540px]'
+            } items-center justify-center transition-all duration-700 ${
+              isSystemActive || isSystemStarting ? 'opacity-100 scale-100' : 'opacity-80 scale-95 grayscale'
+            }`}
           >
             <div className="absolute inset-0 rounded-full border border-emerald-300/10 bg-[radial-gradient(circle,#031915_0%,#020807_48%,transparent_68%)] shadow-[0_0_90px_rgba(16,185,129,0.12)]" />
             {isUserSpeaking && !isMicMuted && (
@@ -939,118 +1032,96 @@ export default function DashboardView({
           </div>
         </div>
 
-        <div className="relative z-50 w-[min(94vw,620px)] shrink-0">
-          <div className="flex flex-col gap-2">
-            <div
-              className={`${glassPanel} grid grid-cols-3 gap-2 border border-emerald-400/15 p-2 shadow-[0_0_38px_rgba(0,0,0,0.52)]`}
-            >
-              <button
-                onClick={onVisionClick}
-                className={`flex h-12 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-lg border px-3 text-[10px] font-black uppercase tracking-widest transition-all ${
-                  isVideoOn
-                    ? visionMode === 'dual'
-                      ? 'border-cyan-400/60 bg-cyan-500/20 text-cyan-200 shadow-[0_0_20px_rgba(6,182,212,0.35)]'
-                      : 'border-red-400/30 bg-red-500/15 text-red-300 shadow-[0_0_18px_rgba(248,113,113,0.12)]'
-                    : 'border-white/10 bg-white/[0.04] text-zinc-400 hover:border-cyan-300/30 hover:text-cyan-200'
-                }`}
-                title="Vision source"
-              >
-                {isVideoOn ? <RiSwapBoxLine size={20} /> : <RiCameraLine size={20} />}
-                <span className="hidden sm:inline">
-                  {isVideoOn ? (visionMode === 'dual' ? 'Dual' : 'Vision') : 'Vision'}
-                </span>
-              </button>
-              <button
-                onClick={toggleSystem}
-                className={`relative flex h-12 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-lg border px-3 text-[10px] font-black uppercase tracking-widest transition-all duration-500 ${isSystemStarting ? 'border-amber-300/50 bg-amber-400/15 text-amber-100 shadow-[0_0_22px_rgba(251,191,36,0.2)]' : isSystemActive ? 'border-emerald-300/40 bg-emerald-400 text-black shadow-[0_0_26px_rgba(52,211,153,0.42)]' : 'border-red-400/40 bg-red-500/10 text-red-300'}`}
-                title="Core"
-              >
-                <RiPhoneFill
-                  size={21}
-                  className={isSystemActive || isSystemStarting ? 'animate-pulse' : ''}
-                />
-                <span>{isSystemStarting ? 'Booting' : isSystemActive ? 'Online' : 'Core'}</span>
-              </button>
-              <button
-                onClick={toggleMic}
-                className={`flex h-12 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-lg border px-3 text-[10px] font-black uppercase tracking-widest transition-all ${
-                  isMicMuted
-                    ? 'border-red-400/30 bg-red-500/15 text-red-300'
-                    : isUserSpeaking
-                      ? 'border-cyan-400 bg-cyan-400/25 text-cyan-200 shadow-[0_0_24px_rgba(6,182,212,0.6)] animate-pulse'
-                      : 'border-emerald-300/25 bg-emerald-400/10 text-emerald-200 hover:border-emerald-300/45'
-                }`}
-                title="Voice"
-              >
-                {isMicMuted ? (
-                  <RiMicOffLine size={20} />
-                ) : (
-                  <RiMicLine
+        {isFullScreen ? (
+          /* FULLSCREEN MODE: Glassmorphic translucent buttons with text box with them */
+          <div className="relative z-50 w-full max-w-2xl xl:max-w-3xl shrink-0 px-2 sm:px-4 mb-2 animate-in fade-in slide-in-from-bottom-3 duration-300">
+            <div className="rounded-2xl border border-white/12 bg-zinc-950/45 p-2.5 shadow-[0_20px_60px_rgba(0,0,0,0.65),0_0_35px_rgba(16,185,129,0.12)] backdrop-blur-2xl flex flex-col gap-2.5">
+              {/* Translucent Buttons Row */}
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  onClick={onVisionClick}
+                  className={`flex h-12 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-xl border px-3 text-[10px] font-black uppercase tracking-widest backdrop-blur-xl transition-all duration-300 ${
+                    isVideoOn
+                      ? visionMode === 'dual'
+                        ? 'border-cyan-400/60 bg-cyan-500/20 text-cyan-200 shadow-[0_0_24px_rgba(6,182,212,0.35)]'
+                        : 'border-red-400/40 bg-red-500/20 text-red-300 shadow-[0_0_20px_rgba(248,113,113,0.25)]'
+                      : 'border-white/10 bg-white/[0.04] text-zinc-300 hover:border-white/25 hover:bg-white/[0.08] hover:text-white'
+                  }`}
+                  title="Vision source"
+                >
+                  {isVideoOn ? <RiSwapBoxLine size={20} /> : <RiCameraLine size={20} />}
+                  <span>
+                    {isVideoOn ? (visionMode === 'dual' ? 'Dual' : 'Vision') : 'Vision'}
+                  </span>
+                </button>
+
+                <button
+                  onClick={toggleSystem}
+                  className={`relative flex h-12 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-xl border px-3 text-[10px] font-black uppercase tracking-widest backdrop-blur-xl transition-all duration-300 ${
+                    isSystemStarting
+                      ? 'border-amber-400/50 bg-amber-400/20 text-amber-200 shadow-[0_0_24px_rgba(251,191,36,0.3)]'
+                      : isSystemActive
+                        ? 'border-emerald-400/60 bg-emerald-500/25 text-emerald-200 shadow-[0_0_30px_rgba(52,211,153,0.35)] hover:bg-emerald-500/35'
+                        : 'border-red-400/35 bg-red-500/15 text-red-300 hover:bg-red-500/25'
+                  }`}
+                  title="Core status"
+                >
+                  <RiPhoneFill
                     size={20}
-                    className={isUserSpeaking ? 'text-cyan-300 animate-bounce' : ''}
+                    className={`${isSystemActive || isSystemStarting ? 'animate-pulse drop-shadow-[0_0_8px_rgba(52,211,153,0.9)]' : ''}`}
                   />
-                )}
-                <span className="hidden sm:inline">
-                  {isMicMuted ? 'Muted' : isUserSpeaking ? 'Speaking' : 'Voice'}
-                </span>
-                {isUserSpeaking && !isMicMuted && (
-                  <span className="hidden sm:flex items-center gap-0.5 ml-0.5">
-                    <span className="h-2 w-0.5 rounded-full bg-cyan-300 animate-pulse" />
-                    <span className="h-3.5 w-0.5 rounded-full bg-cyan-100 animate-pulse delay-75" />
-                    <span className="h-2 w-0.5 rounded-full bg-cyan-300 animate-pulse delay-150" />
-                  </span>
-                )}
-              </button>
-            </div>
+                  <span>{isSystemStarting ? 'Booting' : isSystemActive ? 'Online' : 'Core'}</span>
+                  {isSystemActive && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#10b981] animate-ping" />
+                  )}
+                </button>
 
-            {/* Neural Systems Quick-Launch HUD Bar */}
-            <div className="flex items-center justify-between gap-2 px-1">
-              <button
-                onClick={() => window.dispatchEvent(new CustomEvent('show-wallpaper-forge'))}
-                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-white/5 bg-white/[0.02] hover:border-emerald-500/40 hover:bg-emerald-500/10 text-[9px] font-mono text-zinc-400 hover:text-emerald-300 transition uppercase tracking-wider"
-                title="AI Wallpaper Engine"
-              >
-                <RiPaintBrushLine size={13} className="text-emerald-400" />
-                <span>Wallpaper</span>
-              </button>
-              <button
-                onClick={() => window.dispatchEvent(new CustomEvent('show-whatsapp'))}
-                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-white/5 bg-white/[0.02] hover:border-cyan-500/40 hover:bg-cyan-500/10 text-[9px] font-mono text-zinc-400 hover:text-cyan-300 transition uppercase tracking-wider"
-                title="WhatsApp Automation"
-              >
-                <RiWhatsappLine size={13} className="text-cyan-400" />
-                <span>WhatsApp</span>
-              </button>
-              <button
-                onClick={() => window.dispatchEvent(new CustomEvent('show-doc-forge'))}
-                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-white/5 bg-white/[0.02] hover:border-purple-500/40 hover:bg-purple-500/10 text-[9px] font-mono text-zinc-400 hover:text-purple-300 transition uppercase tracking-wider"
-                title="Document & Slide Forge"
-              >
-                <RiFilePpt2Line size={13} className="text-purple-400" />
-                <span>Doc Forge</span>
-              </button>
-              <button
-                onClick={() => window.dispatchEvent(new CustomEvent('show-focus'))}
-                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-white/5 bg-white/[0.02] hover:border-amber-500/40 hover:bg-amber-500/10 text-[9px] font-mono text-zinc-400 hover:text-amber-300 transition uppercase tracking-wider"
-                title="Deep Work Focus Protocol"
-              >
-                <RiShieldCheckLine size={13} className="text-amber-400" />
-                <span>Focus</span>
-              </button>
-            </div>
-
-            <div className={`${glassPanel} border border-emerald-500/15 p-2`}>
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="flex min-w-0 items-center gap-2 px-1 text-[9px] font-mono uppercase tracking-widest text-zinc-500">
-                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.75)]" />
-                  <span className="truncate">
-                    {sharedFiles.length > 0
-                      ? `${sharedFiles.length} file(s) staged`
-                      : commandQueue.length > 0
-                        ? `${commandQueue.length} queued`
-                        : 'Command uplink ready'}
+                <button
+                  onClick={toggleMic}
+                  className={`flex h-12 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-xl border px-3 text-[10px] font-black uppercase tracking-widest backdrop-blur-xl transition-all duration-300 ${
+                    isMicMuted
+                      ? 'border-red-400/35 bg-red-500/15 text-red-300 hover:bg-red-500/25'
+                      : isUserSpeaking
+                        ? 'border-cyan-400/70 bg-cyan-500/30 text-cyan-100 shadow-[0_0_30px_rgba(6,182,212,0.6)] animate-pulse'
+                        : 'border-emerald-400/40 bg-emerald-500/20 text-emerald-200 shadow-[0_0_22px_rgba(52,211,153,0.25)] hover:bg-emerald-500/30'
+                  }`}
+                  title="Voice status"
+                >
+                  {isMicMuted ? (
+                    <RiMicOffLine size={20} />
+                  ) : (
+                    <RiMicLine
+                      size={20}
+                      className={isUserSpeaking ? 'text-cyan-300 animate-bounce' : ''}
+                    />
+                  )}
+                  <span>
+                    {isMicMuted ? 'Muted' : isUserSpeaking ? 'Speaking' : 'Voice'}
                   </span>
-                </div>
+                  {isUserSpeaking && !isMicMuted && (
+                    <span className="flex items-center gap-0.5 ml-0.5">
+                      <span className="h-2 w-0.5 rounded-full bg-cyan-300 animate-pulse" />
+                      <span className="h-3.5 w-0.5 rounded-full bg-cyan-100 animate-pulse delay-75" />
+                      <span className="h-2 w-0.5 rounded-full bg-cyan-300 animate-pulse delay-150" />
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              {/* Translucent Text Box with controls */}
+              <div className="flex items-center gap-2 w-full">
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className={`h-11 w-11 shrink-0 rounded-xl border backdrop-blur-xl flex items-center justify-center transition-all ${
+                    sharedFiles.length > 0
+                      ? 'border-emerald-400/50 bg-emerald-500/25 text-emerald-200 shadow-[0_0_15px_rgba(52,211,153,0.3)]'
+                      : 'border-white/10 bg-white/[0.04] text-zinc-400 hover:border-emerald-400/40 hover:text-emerald-300 hover:bg-white/[0.08]'
+                  }`}
+                  title="Share files with AI"
+                >
+                  <RiAttachment2 size={18} />
+                </button>
+
                 <select
                   value={selectedModel}
                   onChange={(event) => {
@@ -1058,24 +1129,16 @@ export default function DashboardView({
                     setSelectedModel(nextModel)
                     nexusService.setModel(nextModel)
                   }}
-                  className="h-8 max-w-56 shrink-0 rounded-lg border border-white/10 bg-black/70 px-2 text-[9px] font-mono text-zinc-300 outline-none focus:border-emerald-400/50"
+                  className="h-11 max-w-36 sm:max-w-44 shrink-0 rounded-xl border border-white/10 bg-zinc-950/70 px-2.5 text-[9px] font-mono text-zinc-300 outline-none backdrop-blur-xl focus:border-emerald-400/50"
                   title="AI model"
                 >
                   {liveGeminiModelOptions.map((model) => (
-                    <option key={model.id} className="bg-black" value={model.id}>
+                    <option key={model.id} className="bg-zinc-950 text-zinc-200" value={model.id}>
                       {model.label}
                     </option>
                   ))}
                 </select>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  className="hidden"
-                  onChange={(event) => setSharedFiles(Array.from(event.target.files || []))}
-                />
+
                 <input
                   value={commandText}
                   onChange={(event) => setCommandText(event.target.value)}
@@ -1085,84 +1148,282 @@ export default function DashboardView({
                       submitTextCommand('queue')
                     }
                   }}
-                  className="h-11 min-w-0 flex-1 rounded-lg border border-white/10 bg-black/70 px-4 text-xs font-mono text-emerald-50 shadow-inner outline-none placeholder:text-zinc-600 focus:border-emerald-400/60 focus:bg-black/85"
-                  placeholder="Enter AI text command..."
+                  className="h-11 min-w-0 flex-1 rounded-xl border border-white/10 bg-white/[0.04] px-4 text-xs font-mono text-emerald-50 placeholder:text-zinc-500 backdrop-blur-xl outline-none focus:border-emerald-400/60 focus:bg-white/[0.07] shadow-inner transition-all"
+                  placeholder="Enter AI command or steer..."
                 />
+
                 <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className={`h-11 w-11 shrink-0 rounded-lg border transition ${sharedFiles.length > 0 ? 'border-emerald-500/40 bg-emerald-500/20 text-emerald-200' : 'border-white/10 bg-white/5 text-zinc-400 hover:border-emerald-300/30 hover:text-emerald-300'}`}
-                  title="Share files with AI"
+                  onClick={() => submitTextCommand('steer')}
+                  className="h-11 w-11 shrink-0 rounded-xl border border-cyan-400/30 bg-cyan-500/15 text-cyan-200 hover:bg-cyan-500/30 hover:border-cyan-400/60 backdrop-blur-xl flex items-center justify-center transition-all shadow-[0_0_15px_rgba(6,182,212,0.2)]"
+                  title="Steer live response immediately"
                 >
-                  <RiAttachment2 className="mx-auto" size={18} />
+                  <RiGitBranchLine size={18} />
                 </button>
+
                 <button
                   onClick={() => submitTextCommand('queue')}
-                  className="h-11 w-11 shrink-0 rounded-lg border border-emerald-500/25 bg-emerald-500/10 text-emerald-300 transition hover:bg-emerald-400 hover:text-black"
-                  title="Queue request"
+                  className="h-11 px-4 shrink-0 rounded-xl border border-emerald-400/40 bg-emerald-500/25 hover:bg-emerald-400 hover:text-black text-emerald-200 font-mono text-xs font-bold transition-all backdrop-blur-xl shadow-[0_0_20px_rgba(52,211,153,0.25)] flex items-center gap-1.5 cursor-pointer"
+                  title="Send command"
                 >
-                  <RiListCheck2 className="mx-auto" size={18} />
-                </button>
-                <button
-                  onClick={() => submitTextCommand('steer')}
-                  className="h-11 w-11 shrink-0 rounded-lg border border-cyan-500/25 bg-cyan-500/10 text-cyan-300 transition hover:bg-cyan-300 hover:text-black"
-                  title="Steer live response"
-                >
-                  <RiGitBranchLine className="mx-auto" size={18} />
-                </button>
-                <button
-                  onClick={() => submitTextCommand('steer')}
-                  className="h-11 w-11 shrink-0 rounded-lg border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white hover:text-black"
-                  title="Send now"
-                >
-                  <RiSendPlane2Line className="mx-auto" size={18} />
+                  <RiSendPlane2Line size={16} />
+                  <span className="hidden sm:inline">SEND</span>
                 </button>
               </div>
-              <div className="mt-2 flex items-center justify-between gap-3 px-1 text-[9px] font-mono uppercase tracking-widest text-zinc-500">
-                <span className="truncate">
+
+              {/* Minimalist Status Bar */}
+              <div className="flex items-center justify-between px-1 text-[8px] font-mono uppercase tracking-widest text-zinc-500">
+                <span className="truncate flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#10b981]" />
                   {sharedFiles.length > 0
                     ? `${sharedFiles.length} file(s) ready for AI read`
                     : commandStatus}
                 </span>
-                <span className="shrink-0 text-emerald-400/70">{commandQueue.length} queued</span>
+                <div className="flex items-center gap-3 shrink-0">
+                  {commandQueue.length > 0 && (
+                    <span className="text-emerald-400/80 font-bold">{commandQueue.length} queued</span>
+                  )}
+                  <button
+                    onClick={() => setIsFullScreen(false)}
+                    className="text-zinc-500 hover:text-emerald-300 transition-colors flex items-center gap-1 cursor-pointer"
+                    title="Exit Fullscreen (Esc)"
+                  >
+                    <RiFullscreenExitLine size={11} />
+                    <span>Exit (Esc)</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        ) : (
+          /* NORMAL MODE: Original layout with Quick-Launch bar and Standard Command box */
+          <div className="relative z-50 w-[min(94vw,620px)] shrink-0">
+            <div className="flex flex-col gap-2">
+              <div
+                className={`${glassPanel} grid grid-cols-3 gap-2 border border-emerald-400/15 p-2 shadow-[0_0_38px_rgba(0,0,0,0.52)]`}
+              >
+                <button
+                  onClick={onVisionClick}
+                  className={`flex h-12 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-lg border px-3 text-[10px] font-black uppercase tracking-widest transition-all ${
+                    isVideoOn
+                      ? visionMode === 'dual'
+                        ? 'border-cyan-400/60 bg-cyan-500/20 text-cyan-200 shadow-[0_0_20px_rgba(6,182,212,0.35)]'
+                        : 'border-red-400/30 bg-red-500/15 text-red-300 shadow-[0_0_18px_rgba(248,113,113,0.12)]'
+                      : 'border-white/10 bg-white/[0.04] text-zinc-400 hover:border-cyan-300/30 hover:text-cyan-200'
+                  }`}
+                  title="Vision source"
+                >
+                  {isVideoOn ? <RiSwapBoxLine size={20} /> : <RiCameraLine size={20} />}
+                  <span className="hidden sm:inline">
+                    {isVideoOn ? (visionMode === 'dual' ? 'Dual' : 'Vision') : 'Vision'}
+                  </span>
+                </button>
+                <button
+                  onClick={toggleSystem}
+                  className={`relative flex h-12 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-lg border px-3 text-[10px] font-black uppercase tracking-widest transition-all duration-500 ${isSystemStarting ? 'border-amber-300/50 bg-amber-400/15 text-amber-100 shadow-[0_0_22px_rgba(251,191,36,0.2)]' : isSystemActive ? 'border-emerald-300/40 bg-emerald-400 text-black shadow-[0_0_26px_rgba(52,211,153,0.42)]' : 'border-red-400/40 bg-red-500/10 text-red-300'}`}
+                  title="Core"
+                >
+                  <RiPhoneFill
+                    size={21}
+                    className={isSystemActive || isSystemStarting ? 'animate-pulse' : ''}
+                  />
+                  <span>{isSystemStarting ? 'Booting' : isSystemActive ? 'Online' : 'Core'}</span>
+                </button>
+                <button
+                  onClick={toggleMic}
+                  className={`flex h-12 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-lg border px-3 text-[10px] font-black uppercase tracking-widest transition-all ${
+                    isMicMuted
+                      ? 'border-red-400/30 bg-red-500/15 text-red-300'
+                      : isUserSpeaking
+                        ? 'border-cyan-400 bg-cyan-400/25 text-cyan-200 shadow-[0_0_24px_rgba(6,182,212,0.6)] animate-pulse'
+                        : 'border-emerald-300/25 bg-emerald-400/10 text-emerald-200 hover:border-emerald-300/45'
+                  }`}
+                  title="Voice"
+                >
+                  {isMicMuted ? (
+                    <RiMicOffLine size={20} />
+                  ) : (
+                    <RiMicLine
+                      size={20}
+                      className={isUserSpeaking ? 'text-cyan-300 animate-bounce' : ''}
+                    />
+                  )}
+                  <span className="hidden sm:inline">
+                    {isMicMuted ? 'Muted' : isUserSpeaking ? 'Speaking' : 'Voice'}
+                  </span>
+                  {isUserSpeaking && !isMicMuted && (
+                    <span className="hidden sm:flex items-center gap-0.5 ml-0.5">
+                      <span className="h-2 w-0.5 rounded-full bg-cyan-300 animate-pulse" />
+                      <span className="h-3.5 w-0.5 rounded-full bg-cyan-100 animate-pulse delay-75" />
+                      <span className="h-2 w-0.5 rounded-full bg-cyan-300 animate-pulse delay-150" />
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              {/* Neural Systems Quick-Launch HUD Bar */}
+              <div className="flex items-center justify-between gap-2 px-1">
+                <button
+                  onClick={() => window.dispatchEvent(new CustomEvent('show-wallpaper-forge'))}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-white/5 bg-white/[0.02] hover:border-emerald-500/40 hover:bg-emerald-500/10 text-[9px] font-mono text-zinc-400 hover:text-emerald-300 transition uppercase tracking-wider"
+                  title="AI Wallpaper Engine"
+                >
+                  <RiPaintBrushLine size={13} className="text-emerald-400" />
+                  <span>Wallpaper</span>
+                </button>
+                <button
+                  onClick={() => window.dispatchEvent(new CustomEvent('show-whatsapp'))}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-white/5 bg-white/[0.02] hover:border-cyan-500/40 hover:bg-cyan-500/10 text-[9px] font-mono text-zinc-400 hover:text-cyan-300 transition uppercase tracking-wider"
+                  title="WhatsApp Automation"
+                >
+                  <RiWhatsappLine size={13} className="text-cyan-400" />
+                  <span>WhatsApp</span>
+                </button>
+                <button
+                  onClick={() => window.dispatchEvent(new CustomEvent('show-doc-forge'))}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-white/5 bg-white/[0.02] hover:border-purple-500/40 hover:bg-purple-500/10 text-[9px] font-mono text-zinc-400 hover:text-purple-300 transition uppercase tracking-wider"
+                  title="Document & Slide Forge"
+                >
+                  <RiFilePpt2Line size={13} className="text-purple-400" />
+                  <span>Doc Forge</span>
+                </button>
+                <button
+                  onClick={() => window.dispatchEvent(new CustomEvent('show-focus'))}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-white/5 bg-white/[0.02] hover:border-amber-500/40 hover:bg-amber-500/10 text-[9px] font-mono text-zinc-400 hover:text-amber-300 transition uppercase tracking-wider"
+                  title="Deep Work Focus Protocol"
+                >
+                  <RiShieldCheckLine size={13} className="text-amber-400" />
+                  <span>Focus</span>
+                </button>
+              </div>
+
+              <div className={`${glassPanel} border border-emerald-500/15 p-2`}>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2 px-1 text-[9px] font-mono uppercase tracking-widest text-zinc-500">
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.75)]" />
+                    <span className="truncate">
+                      {sharedFiles.length > 0
+                        ? `${sharedFiles.length} file(s) staged`
+                        : commandQueue.length > 0
+                          ? `${commandQueue.length} queued`
+                          : 'Command uplink ready'}
+                    </span>
+                  </div>
+                  <select
+                    value={selectedModel}
+                    onChange={(event) => {
+                      const nextModel = normalizeGeminiLiveModel(event.target.value)
+                      setSelectedModel(nextModel)
+                      nexusService.setModel(nextModel)
+                    }}
+                    className="h-8 max-w-56 shrink-0 rounded-lg border border-white/10 bg-black/70 px-2 text-[9px] font-mono text-zinc-300 outline-none focus:border-emerald-400/50"
+                    title="AI model"
+                  >
+                    {liveGeminiModelOptions.map((model) => (
+                      <option key={model.id} className="bg-black" value={model.id}>
+                        {model.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    value={commandText}
+                    onChange={(event) => setCommandText(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && !event.shiftKey) {
+                        event.preventDefault()
+                        submitTextCommand('queue')
+                      }
+                    }}
+                    className="h-11 min-w-0 flex-1 rounded-lg border border-white/10 bg-black/70 px-4 text-xs font-mono text-emerald-50 shadow-inner outline-none placeholder:text-zinc-600 focus:border-emerald-400/60 focus:bg-black/85"
+                    placeholder="Enter AI text command..."
+                  />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className={`h-11 w-11 shrink-0 rounded-lg border transition ${sharedFiles.length > 0 ? 'border-emerald-500/40 bg-emerald-500/20 text-emerald-200' : 'border-white/10 bg-white/5 text-zinc-400 hover:border-emerald-300/30 hover:text-emerald-300'}`}
+                    title="Share files with AI"
+                  >
+                    <RiAttachment2 className="mx-auto" size={18} />
+                  </button>
+                  <button
+                    onClick={() => submitTextCommand('queue')}
+                    className="h-11 w-11 shrink-0 rounded-lg border border-emerald-500/25 bg-emerald-500/10 text-emerald-300 transition hover:bg-emerald-400 hover:text-black"
+                    title="Queue request"
+                  >
+                    <RiListCheck2 className="mx-auto" size={18} />
+                  </button>
+                  <button
+                    onClick={() => submitTextCommand('steer')}
+                    className="h-11 w-11 shrink-0 rounded-lg border border-cyan-500/25 bg-cyan-500/10 text-cyan-300 transition hover:bg-cyan-300 hover:text-black"
+                    title="Steer live response"
+                  >
+                    <RiGitBranchLine className="mx-auto" size={18} />
+                  </button>
+                  <button
+                    onClick={() => submitTextCommand('steer')}
+                    className="h-11 w-11 shrink-0 rounded-lg border border-white/10 bg-white/5 text-zinc-300 transition hover:bg-white hover:text-black"
+                    title="Send now"
+                  >
+                    <RiSendPlane2Line className="mx-auto" size={18} />
+                  </button>
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-3 px-1 text-[9px] font-mono uppercase tracking-widest text-zinc-500">
+                  <span className="truncate">
+                    {sharedFiles.length > 0
+                      ? `${sharedFiles.length} file(s) ready for AI read`
+                      : commandStatus}
+                  </span>
+                  <span className="shrink-0 text-emerald-400/70">{commandQueue.length} queued</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className="hidden lg:flex col-span-3 min-h-0 flex-col overflow-hidden h-full z-40">
-        <div className={`${glassPanel} h-full p-4 flex flex-col`}>
-          <div className="flex items-center justify-between border-b border-white/10 pb-3 mb-2">
-            <span className="text-[10px] font-bold tracking-widest text-zinc-400">
-              <RiTerminalBoxLine className="inline mr-1" /> TRANSCRIPT
-            </span>
-            <span className="text-[8px] font-mono text-emerald-500/50">LIVE-LOG</span>
-          </div>
-          <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-3 pr-2 scrollbar-small">
-            {chatHistory.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-zinc-700 gap-2 opacity-50">
-                <RiHistoryLine size={24} />
-                <span className="text-[9px] tracking-widest uppercase font-mono">
-                  No Data Stream
-                </span>
-              </div>
-            ) : (
-              chatHistory.map((msg, idx) => (
-                <div
-                  key={idx}
-                  className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
-                >
-                  <div
-                    className={`max-w-[95%] py-2 px-3 rounded-lg text-[11px] leading-relaxed border font-mono font-semibold ${msg.role === 'user' ? 'bg-emerald-900/20 border-emerald-500/20 text-emerald-100/90 rounded-br-none' : 'bg-zinc-900/50 border-white/5 text-zinc-400 rounded-bl-none'}`}
-                  >
-                    {msg.parts && msg.parts[0] ? msg.parts[0].text : msg.content}
-                  </div>
+      {!isFullScreen && (
+        <div className="hidden lg:flex col-span-3 min-h-0 flex-col overflow-hidden h-full z-40">
+          <div className={`${glassPanel} h-full p-4 flex flex-col`}>
+            <div className="flex items-center justify-between border-b border-white/10 pb-3 mb-2">
+              <span className="text-[10px] font-bold tracking-widest text-zinc-400">
+                <RiTerminalBoxLine className="inline mr-1" /> TRANSCRIPT
+              </span>
+              <span className="text-[8px] font-mono text-emerald-500/50">LIVE-LOG</span>
+            </div>
+            <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-3 pr-2 pb-10 scrollbar-small">
+              {chatHistory.filter((msg) => {
+                const text = msg.parts && msg.parts[0] ? msg.parts[0].text : msg.content || ''
+                return text && !/<(?:no[- ]speech|silence|applause|music|laughter|\|nospeech\|)>/i.test(text) && text.trim().length > 0
+              }).length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-zinc-700 gap-2 opacity-50">
+                  <RiHistoryLine size={24} />
+                  <span className="text-[9px] tracking-widest uppercase font-mono">
+                    No Data Stream
+                  </span>
                 </div>
-              ))
-            )}
+              ) : (
+                chatHistory
+                  .filter((msg) => {
+                    const text = msg.parts && msg.parts[0] ? msg.parts[0].text : msg.content || ''
+                    return text && !/<(?:no[- ]speech|silence|applause|music|laughter|\|nospeech\|)>/i.test(text) && text.trim().length > 0
+                  })
+                  .map((msg, idx) => (
+                    <div
+                      key={idx}
+                      className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
+                    >
+                      <div
+                        className={`max-w-[95%] py-2 px-3 rounded-lg text-[11px] leading-relaxed border font-mono font-semibold ${msg.role === 'user' ? 'bg-emerald-900/20 border-emerald-500/20 text-emerald-100/90 rounded-br-none' : 'bg-zinc-900/50 border-white/5 text-zinc-400 rounded-bl-none'}`}
+                      >
+                        {msg.parts && msg.parts[0] ? msg.parts[0].text : msg.content}
+                      </div>
+                    </div>
+                  ))
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }
