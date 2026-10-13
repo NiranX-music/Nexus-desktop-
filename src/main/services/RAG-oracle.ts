@@ -169,8 +169,11 @@ export default function registerOracle({ ipcMain }: { ipcMain: IpcMain }) {
             contents: validChunks.map((chunk) => `File: ${fileName}\n\n${chunk}`),
             config: { taskType: 'RETRIEVAL_DOCUMENT' }
           })
-          response.embeddings.forEach((emb: any, idx: number) => {
-            vectorDB.push({ filePath: fullPath, chunk: validChunks[idx], embedding: emb.values })
+          const embs = response.embeddings || (response.embedding ? [response.embedding] : [])
+          embs.forEach((emb: any, idx: number) => {
+            if (emb?.values && validChunks[idx]) {
+              vectorDB.push({ filePath: fullPath, chunk: validChunks[idx], embedding: emb.values })
+            }
           })
 
           processedFiles.add(fullPath)
@@ -216,7 +219,14 @@ export default function registerOracle({ ipcMain }: { ipcMain: IpcMain }) {
         contents: query,
         config: { taskType: 'RETRIEVAL_QUERY' }
       })
-      const queryEmbedding = queryResponse.embeddings[0].values
+      const queryEmbedding =
+        queryResponse.embedding?.values ||
+        queryResponse.embeddings?.[0]?.values ||
+        []
+
+      if (!queryEmbedding || queryEmbedding.length === 0) {
+        throw new Error('Failed to generate query embedding from Gemini API.')
+      }
 
       const rankedChunks = vectorDB
         .map((item) => ({ ...item, score: cosineSimilarity(queryEmbedding, item.embedding) }))
